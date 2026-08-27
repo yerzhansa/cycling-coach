@@ -60,6 +60,9 @@ interface AuthBridge {
   listArchivedConversations(): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
   getPlanningReadModel(): Promise<unknown>;
+  getPlanState(): Promise<unknown>;
+  executePlanTransition(input: unknown): Promise<unknown>;
+  onPlanProgress(listener: (progress: unknown) => void): () => void;
   credentialStatuses(): Promise<unknown>;
   credentialRecoveryStatus(): Promise<unknown>;
   retryCredentialRecovery(): Promise<unknown>;
@@ -94,6 +97,7 @@ interface AuthBridge {
   chooseChatAttachments(): Promise<readonly unknown[]>;
   pasteChatAttachment(): Promise<readonly unknown[]>;
   onDroppedChatAttachments(listener: (results: readonly unknown[]) => void): () => void;
+  choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
@@ -336,6 +340,7 @@ describe("desktop preload ChatGPT auth", () => {
         "chatgptStatus",
         "chooseChatAttachments",
         "chooseImportFiles",
+        "choosePlanRaceCourseFile",
         "claudeCliRecheck",
         "claudeCliStatus",
         "credentialStatuses",
@@ -343,9 +348,11 @@ describe("desktop preload ChatGPT auth", () => {
         "deleteCredential",
         "disableTelegram",
         "enableTelegram",
+        "executePlanTransition",
         "exportTrainingFile",
         "getUpdateState",
         "getDaemonConnection",
+        "getPlanState",
         "getTranscriptPage",
         "getPlanningReadModel",
         "initialSetupStatusSettled",
@@ -357,6 +364,7 @@ describe("desktop preload ChatGPT auth", () => {
         "onChatgptLoginProgress",
         "onDroppedChatAttachments",
         "onDroppedImportFiles",
+        "onPlanProgress",
         "onUpdateState",
         "pasteChatAttachment",
         "pasteIntervalsApiKeyFromClipboard",
@@ -405,6 +413,84 @@ describe("desktop preload ChatGPT auth", () => {
     expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
   });
 
+  it("validates and copies strict Planning state, commands, and progress", async () => {
+    const state = {
+      schemaVersion: 1,
+      scenarioId: "PL-S001",
+      lifecycle: "none",
+      planId: null,
+      revision: 0,
+      title: "Plan",
+      summary: "No active Plan",
+      projection: "no-plan",
+      transitions: [{ transitionId: "PL-T01", status: "available", reason: null }],
+      reconciliation: {
+        status: "not-applicable",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+      attention: { count: 0, destination: "none", items: [] },
+      activeOperation: null,
+      data: {},
+    };
+    const command = {
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    };
+    mocks.invoke
+      .mockResolvedValueOnce({ status: "ready", state })
+      .mockResolvedValueOnce({ status: "completed", state });
+
+    await expect(bridge.getPlanState()).resolves.toEqual({ status: "ready", state });
+    await expect(bridge.executePlanTransition(command)).resolves.toEqual({
+      status: "completed",
+      state,
+    });
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:plan:get-state"],
+      ["desktop:plan:execute-transition", command],
+    ]);
+
+    const received: unknown[] = [];
+    const dispose = bridge.onPlanProgress((value) => received.push(value));
+    const listener = mocks.on.mock.calls.find(
+      ([channel]) => channel === "desktop:plan:progress",
+    )?.[1] as (_event: unknown, value: unknown) => void;
+    const progress = {
+      commandId: "command-1",
+      transitionId: "PL-T01",
+      operationId: "operation-1",
+      phase: "completed",
+      completed: 1,
+      total: 1,
+    };
+    listener(undefined, progress);
+    listener(undefined, { ...progress, total: 0 });
+    expect(received).toEqual([progress]);
+    expect(received[0]).not.toBe(progress);
+    dispose();
+    listener(undefined, progress);
+    expect(received).toHaveLength(1);
+  });
+
+  it("rejects malformed Planning commands and daemon results", async () => {
+    await expect(
+      bridge.executePlanTransition({ transitionId: "PL-T01", commandId: "command-1" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValueOnce({
+      status: "ready",
+      state: { schemaVersion: 1, scenarioId: "PL-S999" },
+    });
+    await expect(bridge.getPlanState()).rejects.toBeInstanceOf(TypeError);
+  });
+
   it("exports only a closed training request and validates the minimized result", async () => {
     const request = {
       kind: "activity",
@@ -447,6 +533,16 @@ describe("desktop preload ChatGPT auth", () => {
 
     await expect(bridge.chooseImportFiles()).resolves.toEqual(paths);
     expect(mocks.invoke).toHaveBeenCalledWith("enduragent:onboarding:choose-import-files");
+  });
+
+  it("accepts one platform-absolute Race Course path or cancellation", async () => {
+    mocks.invoke.mockResolvedValue("C:\\x\\course.GPX");
+    await expect(bridge.choosePlanRaceCourseFile()).resolves.toBe("C:\\x\\course.GPX");
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:plan:choose-course-file");
+    mocks.invoke.mockResolvedValue(null);
+    await expect(bridge.choosePlanRaceCourseFile()).resolves.toBeNull();
+    mocks.invoke.mockResolvedValue("relative/course.gpx");
+    await expect(bridge.choosePlanRaceCourseFile()).rejects.toBeInstanceOf(TypeError);
   });
 
   it.each([

@@ -95,7 +95,11 @@ export interface MemoryStorePort {
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }>;
   readEventsRaw(): string;
   appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void;
-  savePlan(plan: unknown, source?: MemoryWriteSource, provenance?: SourceProvenance): void;
+  savePlan(
+    plan: unknown,
+    source?: MemoryWriteSource,
+    provenance?: SourceProvenance,
+  ): void | Promise<void>;
   loadPlan(): unknown | null;
   /** Source labels bound to the exact visible result of a synchronous tool read. */
   provenanceForToolRead?(
@@ -343,9 +347,19 @@ export interface CalendarEventForDelete {
   readonly externalId?: string | null;
 }
 
+export interface CalendarEventUpdate {
+  readonly startDateLocal?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly movingTime?: number;
+  readonly icuTrainingLoad?: number;
+  readonly workoutDoc?: unknown;
+}
+
 export interface PlatformCalendarMutationsPort {
   createEvent(input: EventInput): Promise<unknown>;
   readEventForDelete(input: { eventId: number }): Promise<CalendarEventForDelete>;
+  updateEvent(input: { eventId: number; patch: CalendarEventUpdate }): Promise<unknown>;
   deleteEvent(input: { eventId: number }): Promise<unknown>;
 }
 
@@ -378,11 +392,6 @@ export interface LoggerPort {
   info(event: string, fields?: LoggerFields): void;
   warn(event: string, error?: unknown, fields?: LoggerFields): void;
   error(event: string, error?: unknown, fields?: LoggerFields): void;
-}
-
-/** Host-owned durable projection written after the legacy Plan file succeeds. */
-export interface PlanPersistencePort {
-  save(plan: Readonly<Record<string, unknown>>): Promise<void>;
 }
 
 export type CallerRole = "chat" | "flush" | "compact" | "sync-triage" | "dream";
@@ -464,13 +473,13 @@ export interface ReferenceStateSnapshot {
   } | null;
   readonly latest: {
     readonly metadata?: { readonly last_updated?: string };
+    readonly derived_metrics?: { readonly eftp?: number | null };
   } | null;
 }
 
 export interface EngineHostPorts {
   readonly config: EngineConfig;
   readonly memory: MemoryStorePort;
-  readonly planPersistence?: PlanPersistencePort;
   readonly chatStore: ChatStorePort;
   readonly chatAttachments?: ChatAttachmentTurnPort;
   readonly attachmentCapabilities?: AttachmentCapabilitiesPort;

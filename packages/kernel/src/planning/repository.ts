@@ -1,19 +1,123 @@
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
-import { derivePlanKind, minimumWeeksToCover, weekdayForDateKey } from "./date-key.js";
 import {
-  PlanningInvariantError,
-  type PlanAggregateRepository,
-  type PlanRepository,
-  type PlanRow,
-  type PlanWorkoutRepository,
-  type PlanWorkoutRow,
-} from "./types.js";
+  MIN_FULL_PLAN_DAYS,
+  MIN_FULL_PLAN_WEEKS,
+  inclusiveCivilDays,
+  planWeekIndex,
+  validateNewPlanStartDate,
+  weekdayForDateKey,
+} from "./date-keys.js";
+
+export type PlanStatus = "draft" | "active" | "ended";
+export type PlanKind = "full_plan" | "short_race_preparation";
+export type PlanWorkoutOrigin = "coach" | "athlete";
+
+export interface PlanRecord {
+  readonly id: string;
+  readonly originId: string | null;
+  readonly name: string;
+  readonly primaryGoal: string;
+  readonly startDateKey: number;
+  readonly targetDateKey: number | null;
+  readonly status: PlanStatus;
+  readonly kind: PlanKind;
+  readonly totalWeeks: number;
+  readonly weekStartDay: number;
+  readonly structureJson: string;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+  readonly deviceId: string;
+  readonly hlcPhysicalMs: number;
+  readonly hlcCounter: number;
+}
+
+export interface PlanWorkoutRecord {
+  readonly id: string;
+  readonly planId: string;
+  readonly dateKey: number;
+  readonly sport: string;
+  readonly name: string;
+  readonly durationS: number | null;
+  readonly structureJson: string;
+  readonly origin: PlanWorkoutOrigin;
+  readonly deviceId: string;
+  readonly hlcPhysicalMs: number;
+  readonly hlcCounter: number;
+}
+
+export type PlanValidationErrorCode =
+  | "invalid-id"
+  | "invalid-origin-id"
+  | "invalid-name"
+  | "invalid-primary-goal"
+  | "invalid-status"
+  | "invalid-kind"
+  | "inconsistent-kind"
+  | "invalid-total-weeks"
+  | "invalid-week-start-day"
+  | "inconsistent-week-start-day"
+  | "invalid-target-date"
+  | "target-outside-plan"
+  | "invalid-json"
+  | "invalid-timestamp"
+  | "invalid-device-id"
+  | "invalid-hlc"
+  | "invalid-workout"
+  | "workout-outside-plan";
+
+export class PlanValidationError extends Error {
+  readonly code: PlanValidationErrorCode;
+
+  constructor(code: PlanValidationErrorCode) {
+    super(`plan rejected: ${code}`);
+    this.name = "PlanValidationError";
+    this.code = code;
+  }
+}
+
+export interface PlanRepository {
+  replace(plan: PlanRecord, workouts: readonly PlanWorkoutRecord[]): Promise<void>;
+  replaceNew(
+    plan: PlanRecord,
+    workouts: readonly PlanWorkoutRecord[],
+    todayDateKey: number,
+  ): Promise<void>;
+  read(id: string): Promise<PlanRecord | undefined>;
+  readByOriginId(originId: string): Promise<PlanRecord | undefined>;
+  readLatest(): Promise<PlanRecord | undefined>;
+  readWorkouts(planId: string): Promise<readonly PlanWorkoutRecord[]>;
+  endActive(input: EndActivePlanInput): Promise<EndActivePlanResult>;
+  count(): Promise<number>;
+  delete(id: string): Promise<void>;
+}
+
+export interface EndActivePlanInput {
+  readonly planId: string;
+  readonly cleanupJobId: string;
+  readonly windowStartDateKey: number;
+  readonly windowEndDateKey: number;
+  readonly updatedAtMs: number;
+  readonly deviceId: string;
+  readonly hlcPhysicalMs: number;
+  readonly hlcCounter: number;
+}
+
+export interface EndActivePlanResult {
+  readonly plan: PlanRecord;
+  readonly cleanupJobId: string;
+}
+
+type PlanningStore = SqlStore & Pick<MigratorStore, "transaction">;
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const STATUS = new Set<unknown>(["draft", "active", "ended"]);
+const KIND = new Set<unknown>(["full_plan", "short_race_preparation"]);
+const ORIGIN = new Set<unknown>(["coach", "athlete"]);
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-function validJson(value: string): boolean {
+function validJson(value: unknown): value is string {
+  if (typeof value !== "string") return false;
   try {
     JSON.parse(value);
     return true;
@@ -22,153 +126,344 @@ function validJson(value: string): boolean {
   }
 }
 
-export function validatePlanRow(row: PlanRow): void {
-  if (!ULID.test(row.id)) throw new PlanningInvariantError("invalid_id", "plan id is invalid");
-  if (row.origin_id !== null && row.origin_id.length === 0) {
-    throw new PlanningInvariantError("invalid_origin_id", "plan origin id is invalid");
+function expectedKind(
+  plan: Pick<PlanRecord, "startDateKey" | "targetDateKey" | "totalWeeks">,
+): PlanKind {
+  if (plan.targetDateKey !== null) {
+    const days = inclusiveCivilDays(plan.startDateKey, plan.targetDateKey);
+    if (days <= 0) throw new PlanValidationError("invalid-target-date");
+    return days >= MIN_FULL_PLAN_DAYS ? "full_plan" : "short_race_preparation";
   }
-  if (row.name.trim().length === 0) throw new PlanningInvariantError("invalid_name", "plan name is invalid");
-  if (row.status !== "draft" && row.status !== "active" && row.status !== "ended") {
-    throw new PlanningInvariantError("invalid_status", "plan status is invalid");
+  return plan.totalWeeks >= MIN_FULL_PLAN_WEEKS ? "full_plan" : "short_race_preparation";
+}
+
+function validatePlan(plan: PlanRecord): void {
+  if (!ULID.test(plan.id)) throw new PlanValidationError("invalid-id");
+  if (plan.originId !== null && (typeof plan.originId !== "string" || plan.originId.length === 0)) {
+    throw new PlanValidationError("invalid-origin-id");
   }
-  if (row.kind !== "full_plan" && row.kind !== "short_race_preparation") {
-    throw new PlanningInvariantError("invalid_kind", "plan kind is invalid");
+  if (typeof plan.name !== "string") throw new PlanValidationError("invalid-name");
+  if (typeof plan.primaryGoal !== "string") throw new PlanValidationError("invalid-primary-goal");
+  if (!STATUS.has(plan.status)) throw new PlanValidationError("invalid-status");
+  if (!KIND.has(plan.kind)) throw new PlanValidationError("invalid-kind");
+  if (!Number.isSafeInteger(plan.totalWeeks) || plan.totalWeeks <= 0) {
+    throw new PlanValidationError("invalid-total-weeks");
   }
-  if (!Number.isSafeInteger(row.total_weeks) || row.total_weeks < 1) {
-    throw new PlanningInvariantError("invalid_total_weeks", "plan total weeks is invalid");
+  if (!Number.isSafeInteger(plan.weekStartDay) || plan.weekStartDay < 0 || plan.weekStartDay > 6) {
+    throw new PlanValidationError("invalid-week-start-day");
   }
-  const weekday = weekdayForDateKey(row.start_date_key);
-  if (!Number.isSafeInteger(row.week_start_day) || row.week_start_day < 0 || row.week_start_day > 6) {
-    throw new PlanningInvariantError("invalid_week_start_day", "plan week start day is invalid");
+  const actualWeekStartDay = weekdayForDateKey(plan.startDateKey);
+  if (plan.weekStartDay !== actualWeekStartDay) {
+    throw new PlanValidationError("inconsistent-week-start-day");
   }
-  if (row.week_start_day !== weekday) {
-    throw new PlanningInvariantError("inconsistent_week_start_day", "plan week start day disagrees with start date");
+  if (plan.targetDateKey !== null) {
+    const targetWeek = planWeekIndex(plan, plan.targetDateKey);
+    if (targetWeek.kind !== "inside") throw new PlanValidationError("target-outside-plan");
   }
-  if (row.target_date_key !== null) {
-    const requiredWeeks = minimumWeeksToCover(row.start_date_key, row.target_date_key);
-    if (row.total_weeks < requiredWeeks) {
-      throw new PlanningInvariantError("target_not_covered", "plan total weeks do not cover the target");
-    }
-  }
-  if (row.kind !== derivePlanKind(row.start_date_key, row.target_date_key, row.total_weeks)) {
-    throw new PlanningInvariantError("inconsistent_kind", "plan kind disagrees with its duration");
-  }
-  if (!validJson(row.structure_json)) throw new PlanningInvariantError("invalid_json", "plan structure is invalid JSON");
+  if (plan.kind !== expectedKind(plan)) throw new PlanValidationError("inconsistent-kind");
+  if (!validJson(plan.structureJson)) throw new PlanValidationError("invalid-json");
   if (
-    !Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0 ||
-    !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < row.created_at_ms
+    !Number.isSafeInteger(plan.createdAtMs) ||
+    plan.createdAtMs < 0 ||
+    !Number.isSafeInteger(plan.updatedAtMs) ||
+    plan.updatedAtMs < plan.createdAtMs
   ) {
-    throw new PlanningInvariantError("invalid_timestamp", "plan timestamps are invalid");
+    throw new PlanValidationError("invalid-timestamp");
   }
+  if (!DEVICE_ID.test(plan.deviceId)) throw new PlanValidationError("invalid-device-id");
   if (
-    !DEVICE_ID.test(row.device_id) ||
-    !Number.isSafeInteger(row.hlc_physical_ms) || row.hlc_physical_ms < 0 ||
-    !Number.isSafeInteger(row.hlc_counter) || row.hlc_counter < 0
+    !Number.isSafeInteger(plan.hlcPhysicalMs) ||
+    plan.hlcPhysicalMs < 0 ||
+    !Number.isSafeInteger(plan.hlcCounter) ||
+    plan.hlcCounter < 0
   ) {
-    throw new PlanningInvariantError("invalid_authored_stamp", "plan authored stamp is invalid");
+    throw new PlanValidationError("invalid-hlc");
   }
 }
 
-export function validatePlanWorkoutRow(row: PlanWorkoutRow): void {
-  if (!ULID.test(row.id)) throw new PlanningInvariantError("invalid_id", "plan workout id is invalid");
-  if (!ULID.test(row.plan_id)) throw new PlanningInvariantError("invalid_plan_id", "plan workout plan id is invalid");
-  weekdayForDateKey(row.date_key);
-  if (row.sport.trim().length === 0) throw new PlanningInvariantError("invalid_sport", "plan workout sport is invalid");
-  if (row.name.trim().length === 0) throw new PlanningInvariantError("invalid_name", "plan workout name is invalid");
-  if (row.duration_s !== null && (!Number.isSafeInteger(row.duration_s) || row.duration_s < 0)) {
-    throw new PlanningInvariantError("invalid_duration", "plan workout duration is invalid");
-  }
-  if (!validJson(row.structure_json)) throw new PlanningInvariantError("invalid_json", "plan workout structure is invalid JSON");
-  if (row.origin !== "coach" && row.origin !== "athlete") {
-    throw new PlanningInvariantError("invalid_origin", "plan workout origin is invalid");
-  }
+function validateWorkout(plan: PlanRecord, workout: PlanWorkoutRecord): void {
   if (
-    !DEVICE_ID.test(row.device_id) ||
-    !Number.isSafeInteger(row.hlc_physical_ms) || row.hlc_physical_ms < 0 ||
-    !Number.isSafeInteger(row.hlc_counter) || row.hlc_counter < 0
+    !ULID.test(workout.id) ||
+    workout.planId !== plan.id ||
+    typeof workout.sport !== "string" ||
+    workout.sport.length === 0 ||
+    typeof workout.name !== "string" ||
+    workout.name.length === 0 ||
+    (workout.durationS !== null &&
+      (!Number.isSafeInteger(workout.durationS) || workout.durationS <= 0)) ||
+    !validJson(workout.structureJson) ||
+    !ORIGIN.has(workout.origin) ||
+    !DEVICE_ID.test(workout.deviceId) ||
+    !Number.isSafeInteger(workout.hlcPhysicalMs) ||
+    workout.hlcPhysicalMs < 0 ||
+    !Number.isSafeInteger(workout.hlcCounter) ||
+    workout.hlcCounter < 0
   ) {
-    throw new PlanningInvariantError("invalid_authored_stamp", "plan workout authored stamp is invalid");
+    throw new PlanValidationError("invalid-workout");
+  }
+  if (planWeekIndex(plan, workout.dateKey).kind !== "inside") {
+    throw new PlanValidationError("workout-outside-plan");
   }
 }
 
-function mapPlan(row: Row): PlanRow {
-  const value: PlanRow = {
-    id: String(row.id), origin_id: row.origin_id === null ? null : String(row.origin_id),
-    name: String(row.name), primary_goal: String(row.primary_goal),
-    start_date_key: Number(row.start_date_key), target_date_key: row.target_date_key === null ? null : Number(row.target_date_key),
-    status: String(row.status) as PlanRow["status"], kind: String(row.kind) as PlanRow["kind"],
-    total_weeks: Number(row.total_weeks), week_start_day: Number(row.week_start_day),
-    structure_json: String(row.structure_json), created_at_ms: Number(row.created_at_ms), updated_at_ms: Number(row.updated_at_ms),
-    device_id: String(row.device_id), hlc_physical_ms: Number(row.hlc_physical_ms), hlc_counter: Number(row.hlc_counter),
-  };
-  validatePlanRow(value);
+function text(row: Row, key: string): string {
+  const value = row[key];
+  if (typeof value !== "string") throw new PlanValidationError("invalid-json");
   return value;
 }
 
-function mapWorkout(row: Row): PlanWorkoutRow {
-  const value: PlanWorkoutRow = {
-    id: String(row.id), plan_id: String(row.plan_id), date_key: Number(row.date_key), sport: String(row.sport),
-    name: String(row.name), duration_s: row.duration_s === null ? null : Number(row.duration_s),
-    structure_json: String(row.structure_json), origin: String(row.origin) as PlanWorkoutRow["origin"],
-    device_id: String(row.device_id), hlc_physical_ms: Number(row.hlc_physical_ms), hlc_counter: Number(row.hlc_counter),
-  };
-  validatePlanWorkoutRow(value);
+function integer(row: Row, key: string): number {
+  const value = row[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new PlanValidationError("invalid-json");
+  }
   return value;
 }
 
-const PLAN_COLUMNS = "id,origin_id,name,primary_goal,start_date_key,target_date_key,status,kind,total_weeks,week_start_day,structure_json,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter";
-const WORKOUT_COLUMNS = "id,plan_id,date_key,sport,name,duration_s,structure_json,origin,device_id,hlc_physical_ms,hlc_counter";
-
-async function writePlan(store: SqlStore, row: PlanRow): Promise<void> {
-  validatePlanRow(row);
-  await store.run(`INSERT INTO plan (${PLAN_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET origin_id=excluded.origin_id,name=excluded.name,primary_goal=excluded.primary_goal,start_date_key=excluded.start_date_key,target_date_key=excluded.target_date_key,status=excluded.status,kind=excluded.kind,total_weeks=excluded.total_weeks,week_start_day=excluded.week_start_day,structure_json=excluded.structure_json,updated_at_ms=excluded.updated_at_ms,device_id=excluded.device_id,hlc_physical_ms=excluded.hlc_physical_ms,hlc_counter=excluded.hlc_counter`,
-  [row.id,row.origin_id,row.name,row.primary_goal,row.start_date_key,row.target_date_key,row.status,row.kind,row.total_weeks,row.week_start_day,row.structure_json,row.created_at_ms,row.updated_at_ms,row.device_id,row.hlc_physical_ms,row.hlc_counter]);
+function nullableText(row: Row, key: string): string | null {
+  const value = row[key];
+  if (value !== null && typeof value !== "string") throw new PlanValidationError("invalid-json");
+  return value;
 }
 
-async function writeWorkout(store: SqlStore, row: PlanWorkoutRow): Promise<void> {
-  validatePlanWorkoutRow(row);
-  await store.run(`INSERT INTO plan_workout (${WORKOUT_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET plan_id=excluded.plan_id,date_key=excluded.date_key,sport=excluded.sport,name=excluded.name,duration_s=excluded.duration_s,structure_json=excluded.structure_json,origin=excluded.origin,device_id=excluded.device_id,hlc_physical_ms=excluded.hlc_physical_ms,hlc_counter=excluded.hlc_counter`,
-  [row.id,row.plan_id,row.date_key,row.sport,row.name,row.duration_s,row.structure_json,row.origin,row.device_id,row.hlc_physical_ms,row.hlc_counter]);
+function nullableInteger(row: Row, key: string): number | null {
+  const value = row[key];
+  if (value !== null && (typeof value !== "number" || !Number.isSafeInteger(value))) {
+    throw new PlanValidationError("invalid-json");
+  }
+  return value;
 }
 
-export function createPlanRepository(store: SqlStore): PlanRepository {
-  return {
-    upsert: (row) => writePlan(store, row),
-    async read(id) { const row = await store.get(`SELECT ${PLAN_COLUMNS} FROM plan WHERE id=?`, [id]); return row === undefined ? undefined : mapPlan(row); },
-    async readByOriginId(originId) { const row = await store.get(`SELECT ${PLAN_COLUMNS} FROM plan WHERE origin_id=?`, [originId]); return row === undefined ? undefined : mapPlan(row); },
-    async readCurrent() { const row = await store.get(`SELECT ${PLAN_COLUMNS} FROM plan WHERE status!='ended' ORDER BY updated_at_ms DESC, id DESC LIMIT 1`); return row === undefined ? undefined : mapPlan(row); },
-    async list() { return (await store.all(`SELECT ${PLAN_COLUMNS} FROM plan ORDER BY created_at_ms ASC,id ASC`)).map(mapPlan); },
-    async delete(id) { await store.run("DELETE FROM plan WHERE id=?", [id]); },
+function planFromRow(row: Row): PlanRecord {
+  const plan: PlanRecord = Object.freeze({
+    id: text(row, "id"),
+    originId: nullableText(row, "origin_id"),
+    name: text(row, "name"),
+    primaryGoal: text(row, "primary_goal"),
+    startDateKey: integer(row, "start_date_key"),
+    targetDateKey: nullableInteger(row, "target_date_key"),
+    status: text(row, "status") as PlanStatus,
+    kind: text(row, "kind") as PlanKind,
+    totalWeeks: integer(row, "total_weeks"),
+    weekStartDay: integer(row, "week_start_day"),
+    structureJson: text(row, "structure_json"),
+    createdAtMs: integer(row, "created_at_ms"),
+    updatedAtMs: integer(row, "updated_at_ms"),
+    deviceId: text(row, "device_id"),
+    hlcPhysicalMs: integer(row, "hlc_physical_ms"),
+    hlcCounter: integer(row, "hlc_counter"),
+  });
+  validatePlan(plan);
+  return plan;
+}
+
+function workoutFromRow(row: Row): PlanWorkoutRecord {
+  return Object.freeze({
+    id: text(row, "id"),
+    planId: text(row, "plan_id"),
+    dateKey: integer(row, "date_key"),
+    sport: text(row, "sport"),
+    name: text(row, "name"),
+    durationS: nullableInteger(row, "duration_s"),
+    structureJson: text(row, "structure_json"),
+    origin: text(row, "origin") as PlanWorkoutOrigin,
+    deviceId: text(row, "device_id"),
+    hlcPhysicalMs: integer(row, "hlc_physical_ms"),
+    hlcCounter: integer(row, "hlc_counter"),
+  });
+}
+
+export function createPlanRepository(store: PlanningStore): PlanRepository {
+  const replace = async (
+    plan: PlanRecord,
+    workouts: readonly PlanWorkoutRecord[],
+  ): Promise<void> => {
+    validatePlan(plan);
+    for (const workout of workouts) validateWorkout(plan, workout);
+    await store.transaction(async () => {
+      await store.run(
+        `INSERT INTO plan (
+  id, origin_id, name, primary_goal, start_date_key, target_date_key, status, kind,
+  total_weeks, week_start_day, structure_json, created_at_ms, updated_at_ms,
+  device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+  origin_id = excluded.origin_id,
+  name = excluded.name,
+  primary_goal = excluded.primary_goal,
+  start_date_key = excluded.start_date_key,
+  target_date_key = excluded.target_date_key,
+  status = excluded.status,
+  kind = excluded.kind,
+  total_weeks = excluded.total_weeks,
+  week_start_day = excluded.week_start_day,
+  structure_json = excluded.structure_json,
+  updated_at_ms = excluded.updated_at_ms,
+  device_id = excluded.device_id,
+  hlc_physical_ms = excluded.hlc_physical_ms,
+  hlc_counter = excluded.hlc_counter`,
+        [
+          plan.id,
+          plan.originId,
+          plan.name,
+          plan.primaryGoal,
+          plan.startDateKey,
+          plan.targetDateKey,
+          plan.status,
+          plan.kind,
+          plan.totalWeeks,
+          plan.weekStartDay,
+          plan.structureJson,
+          plan.createdAtMs,
+          plan.updatedAtMs,
+          plan.deviceId,
+          plan.hlcPhysicalMs,
+          plan.hlcCounter,
+        ],
+      );
+      await store.run("DELETE FROM plan_workout WHERE plan_id = ?", [plan.id]);
+      for (const workout of workouts) {
+        await store.run(
+          `INSERT INTO plan_workout (
+  id, plan_id, date_key, sport, name, duration_s, structure_json, origin,
+  device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            workout.id,
+            workout.planId,
+            workout.dateKey,
+            workout.sport,
+            workout.name,
+            workout.durationS,
+            workout.structureJson,
+            workout.origin,
+            workout.deviceId,
+            workout.hlcPhysicalMs,
+            workout.hlcCounter,
+          ],
+        );
+      }
+    });
   };
-}
 
-export function createPlanWorkoutRepository(store: SqlStore): PlanWorkoutRepository {
-  return {
-    upsert: (row) => writeWorkout(store, row),
-    async replaceForPlan(planId, rows) {
-      if (!ULID.test(planId)) throw new PlanningInvariantError("invalid_plan_id", "plan id is invalid");
-      for (const row of rows) { if (row.plan_id !== planId) throw new PlanningInvariantError("invalid_plan_id", "workout belongs to another plan"); validatePlanWorkoutRow(row); }
-      await store.run("DELETE FROM plan_workout WHERE plan_id=?", [planId]);
-      for (const row of rows) await writeWorkout(store, row);
+  return Object.freeze({
+    replace,
+    async replaceNew(
+      plan: PlanRecord,
+      workouts: readonly PlanWorkoutRecord[],
+      todayDateKey: number,
+    ) {
+      validateNewPlanStartDate(plan, todayDateKey);
+      await replace(plan, workouts);
     },
-    async listForPlan(planId) { return (await store.all(`SELECT ${WORKOUT_COLUMNS} FROM plan_workout WHERE plan_id=? ORDER BY date_key ASC,id ASC`, [planId])).map(mapWorkout); },
-  };
-}
-
-export function createPlanAggregateRepository(
-  store: SqlStore & Pick<MigratorStore, "transaction">,
-): PlanAggregateRepository {
-  return {
-    async save(plan, workouts) {
-      validatePlanRow(plan);
-      for (const workout of workouts) { if (workout.plan_id !== plan.id) throw new PlanningInvariantError("invalid_plan_id", "workout belongs to another plan"); validatePlanWorkoutRow(workout); }
-      await store.transaction(async () => {
-        await writePlan(store, plan);
-        await store.run("DELETE FROM plan_workout WHERE plan_id=?", [plan.id]);
-        for (const workout of workouts) await writeWorkout(store, workout);
+    async read(id: string) {
+      if (!ULID.test(id)) throw new PlanValidationError("invalid-id");
+      const row = await store.get("SELECT * FROM plan WHERE id = ?", [id]);
+      return row === undefined ? undefined : planFromRow(row);
+    },
+    async readByOriginId(originId: string) {
+      if (typeof originId !== "string" || originId.length === 0) {
+        throw new PlanValidationError("invalid-origin-id");
+      }
+      const row = await store.get("SELECT * FROM plan WHERE origin_id = ?", [originId]);
+      return row === undefined ? undefined : planFromRow(row);
+    },
+    async readLatest() {
+      const row = await store.get(
+        "SELECT * FROM plan ORDER BY updated_at_ms DESC, hlc_physical_ms DESC, hlc_counter DESC, id DESC LIMIT 1",
+      );
+      return row === undefined ? undefined : planFromRow(row);
+    },
+    async readWorkouts(planId: string) {
+      if (!ULID.test(planId)) throw new PlanValidationError("invalid-id");
+      return (
+        await store.all("SELECT * FROM plan_workout WHERE plan_id = ? ORDER BY date_key, id", [
+          planId,
+        ])
+      ).map(workoutFromRow);
+    },
+    async endActive(input: EndActivePlanInput) {
+      if (!ULID.test(input.planId) || !ULID.test(input.cleanupJobId)) {
+        throw new PlanValidationError("invalid-id");
+      }
+      if (
+        !Number.isSafeInteger(input.updatedAtMs) ||
+        input.updatedAtMs < 0 ||
+        !Number.isSafeInteger(input.hlcPhysicalMs) ||
+        input.hlcPhysicalMs < 0 ||
+        !Number.isSafeInteger(input.hlcCounter) ||
+        input.hlcCounter < 0
+      ) {
+        throw new PlanValidationError("invalid-timestamp");
+      }
+      if (!DEVICE_ID.test(input.deviceId)) throw new PlanValidationError("invalid-device-id");
+      if (inclusiveCivilDays(input.windowStartDateKey, input.windowEndDateKey) <= 0) {
+        throw new PlanValidationError("invalid-target-date");
+      }
+      return store.transaction(async () => {
+        const row = await store.get("SELECT * FROM plan WHERE id = ?", [input.planId]);
+        if (row === undefined) throw new PlanValidationError("invalid-id");
+        const current = planFromRow(row);
+        if (current.status !== "active" && current.status !== "ended") {
+          throw new PlanValidationError("invalid-status");
+        }
+        if (current.status === "active") {
+          if (input.updatedAtMs < current.updatedAtMs) {
+            throw new PlanValidationError("invalid-timestamp");
+          }
+          await store.run(
+            `UPDATE plan SET
+               status='ended',updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=?
+             WHERE id=? AND status='active'`,
+            [
+              input.updatedAtMs,
+              input.deviceId,
+              input.hlcPhysicalMs,
+              input.hlcCounter,
+              input.planId,
+            ],
+          );
+        }
+        await store.run(
+          `INSERT INTO plan_reconciliation_job (
+             id,plan_id,kind,status,window_start_date_key,window_end_date_key,
+             attempt_count,failure_count,resumed_count,last_resumed_attempt,last_error_code,
+             created_at_ms,updated_at_ms,completed_at_ms
+           ) VALUES (?,?,'cleanup','pending',?,?,0,0,0,NULL,NULL,?,?,NULL)
+           ON CONFLICT(plan_id,kind,window_start_date_key,window_end_date_key) DO NOTHING`,
+          [
+            input.cleanupJobId,
+            input.planId,
+            input.windowStartDateKey,
+            input.windowEndDateKey,
+            input.updatedAtMs,
+            input.updatedAtMs,
+          ],
+        );
+        const [endedRow, jobRow] = await Promise.all([
+          store.get("SELECT * FROM plan WHERE id = ?", [input.planId]),
+          store.get(
+            `SELECT id FROM plan_reconciliation_job
+             WHERE plan_id=? AND kind='cleanup' AND window_start_date_key=? AND window_end_date_key=?`,
+            [input.planId, input.windowStartDateKey, input.windowEndDateKey],
+          ),
+        ]);
+        if (endedRow === undefined || jobRow === undefined) {
+          throw new PlanValidationError("invalid-id");
+        }
+        return Object.freeze({
+          plan: planFromRow(endedRow),
+          cleanupJobId: text(jobRow, "id"),
+        });
       });
     },
-  };
+    async count() {
+      const row = await store.get("SELECT count(*) AS count FROM plan");
+      return row === undefined ? 0 : integer(row, "count");
+    },
+    async delete(id: string) {
+      if (!ULID.test(id)) throw new PlanValidationError("invalid-id");
+      await store.run("DELETE FROM plan WHERE id = ?", [id]);
+    },
+  });
 }

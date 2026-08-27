@@ -5,6 +5,7 @@ import { cn } from "../../lib/utils.js";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
+import { planAttentionCount } from "../../state/plan-slice.js";
 import { setupReady } from "../../state/onboarding-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { SyncChip } from "./SyncChip.js";
@@ -18,6 +19,8 @@ export function Sidebar(): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const canChat = useEnduragentStore(setupReady);
   const settingsBusy = useEnduragentStore((state) => settingsMutationActive(state.settings));
+  const planActions = useEnduragentStore((state) => state.planActions);
+  const attentionCount = useEnduragentStore((state) => planAttentionCount(state.plan));
   const opener = useRef<HTMLButtonElement>(null);
   const navigationLocked = activeView === "settings" && settingsBusy;
 
@@ -57,6 +60,10 @@ export function Sidebar(): ReactElement {
       <nav className="flex flex-col gap-0.5 px-inset pt-3" aria-label="Main navigation">
         {VIEWS.map((view) => {
           const active = view.id === activeView;
+          const planAttentionLabel =
+            view.id === "plan" && attentionCount > 0
+              ? `Plan, ${attentionCount} ${attentionCount === 1 ? "item needs" : "items need"} attention`
+              : undefined;
           return (
             <Button
               key={view.id}
@@ -68,9 +75,11 @@ export function Sidebar(): ReactElement {
                 active && "bg-surface font-medium text-ink hover:bg-surface",
               )}
               aria-current={active ? "page" : undefined}
+              aria-label={planAttentionLabel}
               disabled={navigationLocked && view.id !== activeView}
               onClick={() => {
                 setActiveView(view.id);
+                if (view.id === "plan") planActions?.open();
               }}
             >
               <view.icon
@@ -79,6 +88,14 @@ export function Sidebar(): ReactElement {
                 aria-hidden="true"
               />
               {view.label}
+              {view.id === "plan" && attentionCount > 0 ? (
+                <span
+                  className="ml-auto grid size-[18px] place-items-center rounded-full bg-warn text-xs leading-none font-semibold text-surface"
+                  aria-hidden="true"
+                >
+                  {attentionCount}
+                </span>
+              ) : null}
             </Button>
           );
         })}

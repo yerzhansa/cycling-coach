@@ -45,7 +45,7 @@ export type SanitizedQueryOptions = Options & {
   model: string;
 };
 
-const WINDOWS_COMMAND_UNSAFE_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f"&|<>^%!()]/u;
+const WINDOWS_COMMAND_UNSAFE_CHARACTER_PATTERN = /["&|<>^%!()]/u;
 const WINDOWS_MCP_CONFIG_FLAG = "--mcp-config";
 const WINDOWS_MCP_CONFIG_ROOT = ".enduragent";
 const WINDOWS_MCP_CONFIG_PREFIX = "claude-cli-mcp-";
@@ -105,6 +105,10 @@ function windowsMcpConfigFileSystem(
 }
 
 function safeWindowsCommandText(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return false;
+  }
   return !WINDOWS_COMMAND_UNSAFE_CHARACTER_PATTERN.test(value);
 }
 

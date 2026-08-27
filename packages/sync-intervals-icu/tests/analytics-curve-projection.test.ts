@@ -118,6 +118,8 @@ describe("analytics curve evidence projection", () => {
       id: CURRENT,
       secs: [5, 60, 300, 1_200, 3_600],
       watts: [1_100, 500, 350, 280, 240],
+      activity_ids: [null, null, null, null, null],
+      start_indexes: [null, null, null, null, null],
     });
     expect(projected.hrCurves.list[0]).toEqual({
       id: CURRENT,
@@ -165,8 +167,68 @@ describe("analytics curve evidence projection", () => {
     const projected = await projectAnalyticsCurveEvidence(currentState(), reader(values));
 
     expect(projected.powerCurves.list).toHaveLength(3);
-    expect(projected.sustainabilityCurves.cycling?.power.VirtualRide).toEqual({ list: [] });
+    expect(projected.sustainabilityCurves.cycling?.power.VirtualRide).toEqual({
+      list: [],
+      activities: {},
+    });
     expect(projected.sustainabilityCurves.cycling?.hr.VirtualRide).toEqual({ list: [] });
+  });
+
+  it("preserves only selected activity and device evidence for the 42-day power curve", async () => {
+    const values = [...payloads()];
+    values[0] = {
+      activities: {
+        short: {
+          id: "short",
+          start_date_local: "2026-08-18T06:00:00",
+          name: "Tuesday Hill Repeats",
+          device_watts: true,
+          icu_ignore_power: false,
+          power_meter: "Favero Assioma Duo",
+          provider_private_field: "not-projected",
+        },
+        long: {
+          id: "long",
+          start_date_local: "2026-08-09T07:00:00",
+          name: "Sunday Tempo Climb",
+          device_watts: true,
+          icu_ignore_power: false,
+          device_name: "Garmin Rally RS200",
+        },
+        unused: {
+          id: "unused",
+          start_date_local: "2026-08-01T07:00:00",
+          device_watts: true,
+        },
+      },
+      list: [
+        {
+          ...powerCurve(SUSTAINABILITY, [180, 900], [407, 311]),
+          activity_id: ["short", "long"],
+          start_index: [120, 240],
+        },
+      ],
+    };
+    values[1] = { activities: {}, list: [] };
+    const projected = await projectAnalyticsCurveEvidence(currentState(), reader(values));
+    const power = projected.sustainabilityCurves.cycling?.power.Ride;
+    expect(power?.list[0]).toMatchObject({
+      activity_ids: ["short", "long"],
+      start_indexes: [120, 240],
+    });
+    expect(power?.activities).toEqual({
+      short: expect.objectContaining({
+        id: "short",
+        device_watts: true,
+        power_meter: "Favero Assioma Duo",
+      }),
+      long: expect.objectContaining({
+        id: "long",
+        device_watts: true,
+        device_name: "Garmin Rally RS200",
+      }),
+    });
+    expect(JSON.stringify(power)).not.toMatch(/unused|provider_private_field/);
   });
 
   it("fails closed with a path-neutral error on malformed axes or unreadable evidence", async () => {

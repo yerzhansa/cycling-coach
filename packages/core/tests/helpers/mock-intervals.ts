@@ -295,6 +295,7 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
   const activities = defaultActivities(options.activities);
   const wellness = defaultWellness(options.wellness);
   const createdWorkouts: CreatedWorkout[] = [];
+  const updatedEventIds: number[] = [];
   const deletedEventIds: number[] = [];
   let nextEventId = 5000;
 
@@ -385,6 +386,21 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
       },
     ),
 
+    http.put(
+      "https://intervals.icu/api/v1/athlete/:id/events/:eventId",
+      async ({ params, request }) => {
+        const eventId = Number(params.eventId);
+        const workout = createdWorkouts.find((candidate) => candidate.id === eventId);
+        if (!workout) {
+          return HttpResponse.json({ error: "not_found" }, { status: 404 });
+        }
+        const patch = (await request.json()) as Record<string, unknown>;
+        Object.assign(workout, patch);
+        updatedEventIds.push(eventId);
+        return HttpResponse.json(workout);
+      },
+    ),
+
     // DELETE /api/v1/athlete/:id/events/:eventId — delete scheduled event
     // (no notBefore enforcement — the real API's notBefore only caps the `others`
     // cascade, not the target event, so protection lives client-side in the tool)
@@ -405,5 +421,5 @@ export function createMockIntervalsServer(options: MockIntervalsOptions = {}) {
 
   const server = setupServer(...handlers);
 
-  return { server, createdWorkouts, deletedEventIds };
+  return { server, createdWorkouts, updatedEventIds, deletedEventIds };
 }

@@ -9,6 +9,7 @@ export {
 export * from "./pool-size-rescale.js";
 export * from "./repair/index.js";
 export * from "./xml-types.js";
+export * from "./course-route.js";
 export * from "./tcx.js";
 export * from "./gpx.js";
 export * from "./xml-candidate.js";

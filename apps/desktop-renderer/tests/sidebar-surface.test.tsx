@@ -9,6 +9,7 @@ import {
   setManualSyncFocusTarget,
 } from "../src/state/manual-sync-focus.js";
 import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
 import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
@@ -16,6 +17,7 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
 import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
 import { Sidebar } from "../src/ui/sidebar/Sidebar.js";
 import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restriction-focus.js";
+import { planReadModel } from "./plan-fixtures.js";
 
 function stubActions(): ChatActions {
   return {
@@ -41,6 +43,78 @@ function stubActions(): ChatActions {
     answerDecision: vi.fn(),
     skipDecision: vi.fn(),
     retryDecision: vi.fn(),
+  };
+}
+
+function stubPlanActions(): PlanActions {
+  return {
+    open: vi.fn(),
+    startPlan: vi.fn(),
+    submitCoach: vi.fn(async () => true),
+    stopCoach: vi.fn(),
+    removeQueuedCoachMessage: vi.fn(),
+    retryQueuedCoachTurn: vi.fn(),
+    answerCoachDecision: vi.fn(),
+    skipCoachDecision: vi.fn(),
+    saveFtp: vi.fn(),
+    refreshFtp: vi.fn(),
+    createDraft: vi.fn(),
+    updateDraft: vi.fn(),
+    openDiscardConfirmation: vi.fn(),
+    closeDiscardConfirmation: vi.fn(),
+    discardDraft: vi.fn(),
+    openRevisionComposer: vi.fn(),
+    closeRevisionComposer: vi.fn(),
+    openCoursePicker: vi.fn(),
+    closeCoursePicker: vi.fn(),
+    chooseCourseFile: vi.fn(),
+    continueWithoutCourse: vi.fn(),
+    useCourseWithoutElevation: vi.fn(),
+    removeCourse: vi.fn(),
+    openDatePicker: vi.fn(),
+    closeDatePicker: vi.fn(),
+    recalculateStartDate: vi.fn(),
+    approveDraft: vi.fn(),
+    openReplacement: vi.fn(),
+    closeReplacementConfirmation: vi.fn(),
+    confirmReplacement: vi.fn(),
+    retryReplacementCleanup: vi.fn(),
+    verifyReplacementCleanup: vi.fn(),
+    writeReplacementMirror: vi.fn(),
+    openReplacementActivePlan: vi.fn(),
+    reconcilePlan: vi.fn(),
+    verifyReconciliation: vi.fn(),
+    openSeason: vi.fn(),
+    openReadiness: vi.fn(),
+    closeReadiness: vi.fn(),
+    refreshReadiness: vi.fn(),
+    closeSeason: vi.fn(),
+    openRaceWeek: vi.fn(),
+    closeRaceWeek: vi.fn(),
+    openWorkout: vi.fn(),
+    closeWorkout: vi.fn(),
+    resolveWorkoutMatch: vi.fn(),
+    resolveWorkoutDrift: vi.fn(),
+    openProposal: vi.fn(),
+    reviseProposal: vi.fn(),
+    approveProposal: vi.fn(),
+    rejectProposal: vi.fn(),
+    openHistory: vi.fn(),
+    closeHistory: vi.fn(),
+    undoPlanChange: vi.fn(),
+    openPlanSettings: vi.fn(),
+    closePlanSettings: vi.fn(),
+    setPlanSetting: vi.fn(),
+    openEndConfirmation: vi.fn(),
+    closeEndConfirmation: vi.fn(),
+    confirmEndPlan: vi.fn(),
+    retryPlanCleanup: vi.fn(),
+    verifyPlanCleanup: vi.fn(),
+    openRaceOutcome: vi.fn(),
+    recordRaceOutcome: vi.fn(),
+    openAttention: vi.fn(),
+    returnToCoach: vi.fn(),
+    retry: vi.fn(),
   };
 }
 
@@ -91,6 +165,8 @@ beforeEach(() => {
     onboardingActions: null,
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
+    plan: EMPTY_PLAN_SURFACE,
+    planActions: stubPlanActions(),
   });
 });
 
@@ -107,6 +183,53 @@ afterEach(() => {
     onboardingActions: null,
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
+    plan: EMPTY_PLAN_SURFACE,
+    planActions: null,
+  });
+});
+
+describe("Plan navigation attention", () => {
+  it("shows no badge when Plan has no athlete action", () => {
+    render(<Sidebar />);
+
+    expect(screen.getByRole("button", { name: "Plan" })).toBeInTheDocument();
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { count: 1, name: "Plan, 1 item needs attention" },
+    { count: 3, name: "Plan, 3 items need attention" },
+  ])("shows the exact count for $count unresolved item(s)", ({ count, name }) => {
+    const readModel = planReadModel({
+      attentionCount: count,
+      lifecycle: "active",
+      planId: "plan-1",
+    });
+    update({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: readModel },
+        lastReady: readModel,
+      },
+    });
+    render(<Sidebar />);
+
+    expect(screen.getByRole("button", { name })).toHaveTextContent(String(count));
+  });
+
+  it("keeps Plan selected and asks the adapter to resolve its destination", async () => {
+    const user = userEvent.setup();
+    const planActions = stubPlanActions();
+    update({ planActions });
+    render(<Sidebar />);
+
+    const plan = screen.getByRole("button", { name: "Plan" });
+    plan.focus();
+    await user.keyboard("{Enter}");
+
+    expect(useEnduragentStore.getState().activeView).toBe("plan");
+    expect(planActions.open).toHaveBeenCalledOnce();
+    expect(plan).toHaveFocus();
   });
 });
 

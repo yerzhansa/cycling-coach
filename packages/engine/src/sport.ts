@@ -15,6 +15,7 @@ import type {
   AthleteReadResult,
   CallerRole,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   EnvSecretRef,
   ExecSecretRef,
   MemorySnapshot,
@@ -33,6 +34,7 @@ export type {
   AthleteReadResult,
   CallerRole,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   EnvSecretRef,
   ExecSecretRef,
   MemorySnapshot,
@@ -142,7 +144,6 @@ export interface SportRuntimePorts {
   athleteData?: AthleteDataReaderPort;
   calendarMutations?: PlatformCalendarMutationsPort;
   memory: MemoryStorePort;
-  planPersistence?: import("./host-ports.js").PlanPersistencePort;
   secrets: SecretsPort;
   /** Enables host-private provenance binding on memory read results. */
   bindMemoryToolProvenance?: boolean;
@@ -179,9 +180,7 @@ export interface Sport {
   readonly skills: Readonly<Record<string, string>>;
   readonly sessionClusterGapMinutes: number;
   readonly memorySections: readonly MemorySectionSpec[];
-  readonly mustPreserveTokens:
-    | readonly string[]
-    | ((memory: MemorySnapshot) => PreserveTokens);
+  readonly mustPreserveTokens: readonly string[] | ((memory: MemorySnapshot) => PreserveTokens);
   readonly intervalsActivityTypes: readonly IntervalsActivityType[];
   readonly athleteProfileSchema: z.ZodTypeAny;
   tools(ports: SportRuntimePorts): readonly ToolRegistration[];
@@ -216,11 +215,7 @@ export {
   isRealDateKey,
   parseDateKeyMs,
 } from "./sport/date-keys.js";
-export {
-  DATE_KEY_RE,
-  dateKeySchema,
-  validateWorkoutCreationDate,
-} from "./sport/date-schema.js";
+export { DATE_KEY_RE, dateKeySchema, validateWorkoutCreationDate } from "./sport/date-schema.js";
 export { getEffectiveSections } from "./sport/effective-sections.js";
 export { createMemorySnapshot } from "./sport/memory-snapshot.js";
 export { messageText } from "./sport/model-message.js";
@@ -239,7 +234,7 @@ export {
   buildCoachExternalId,
   isCoachOwnedEvent,
 } from "./sport/event-provenance.js";
-export { guardDeletableEvent, toTypedError } from "./sport/event-guards.js";
+export { guardDeletableEvent, guardUpdatableEvent, toTypedError } from "./sport/event-guards.js";
 export type { IntervalsEventRuntime } from "./sport/event-guards.js";
 export type { SourceProvenance } from "./provenance.js";
 export {
@@ -247,3 +242,9 @@ export {
   createPureCoreIntervalsTools,
 } from "./sport/platform-tools.js";
 export { resolveUserTimezone, todayInTZ } from "./sport/user-time.js";
+export type {
+  PlanFtpAdapter,
+  PlanFtpSnapshot,
+  PlanFtpSource,
+  PlanFtpSourceValue,
+} from "./planning/ftp.js";

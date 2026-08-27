@@ -2,6 +2,7 @@ export type {
   AthleteDataReaderPort as AthleteDataReader,
   AthleteReadResult,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   CoreDeps,
   DerivedPreserveTokens,
   IntervalsActivityType,

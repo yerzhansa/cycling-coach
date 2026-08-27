@@ -45,7 +45,7 @@ export function isUntrustedEnvelope(
 // U+000A) + format (Cf) plus the explicit line/paragraph separators
 // (U+2028/U+2029, which are Zl/Zp and escape the Cc/Cf classes). Tabs are Cc
 // and are lossily stripped. Matches the reference sanitizer's semantics.
-const STRIP_INVISIBLE_RE = /[\x00-\x09\x0B-\x1F\x7F-\x9F\p{Cf}\u2028\u2029]/gu;
+const STRIP_INVISIBLE_RE = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
 
 /**
  * Neutralize an untrusted string before it is embedded in a prompt: normalize
@@ -56,7 +56,9 @@ const STRIP_INVISIBLE_RE = /[\x00-\x09\x0B-\x1F\x7F-\x9F\p{Cf}\u2028\u2029]/gu;
  * still collapses to the exact token and gets neutralized.
  */
 export function sanitizeUntrustedText(value: string): string {
-  const stripped = value.replace(/\r\n?/g, "\n").replace(STRIP_INVISIBLE_RE, "");
+  const stripped = value
+    .replace(/\r\n?/g, "\n")
+    .replace(STRIP_INVISIBLE_RE, (character) => character === "\n" ? character : "");
   let out = stripped;
   if (out.includes(ATHLETE_CONTEXT_FENCE_OPEN)) {
     out = out.split(ATHLETE_CONTEXT_FENCE_OPEN).join(FENCE_TOKEN_REPLACEMENT);

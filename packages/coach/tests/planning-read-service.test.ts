@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createPlanRepository,
-  createPlanWorkoutRepository,
-  runMigrations,
-  type MigratorStore,
-  type SqlStore,
-} from "@enduragent/kernel/store";
+import { createPlanRepository } from "@enduragent/kernel/planning";
+import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { createPlanningReadService } from "../src/planning-read-service.js";
@@ -33,46 +28,50 @@ describe("Planning read service", () => {
   });
 
   it("projects the current week, Planning-owned phase, and today Workout", async () => {
-    await createPlanRepository(store).upsert({
-      id: PLAN_ID,
-      origin_id: null,
-      name: "Twelve-week base",
-      primary_goal: "Build consistency",
-      start_date_key: 20260824,
-      target_date_key: null,
-      status: "active",
-      kind: "full_plan",
-      total_weeks: 12,
-      week_start_day: 1,
-      structure_json: JSON.stringify({
-        phases: [
-          { name: "Base", durationWeeks: 4 },
-          { name: "Build", durationWeeks: 8 },
-        ],
-      }),
-      created_at_ms: NOW - 1_000,
-      updated_at_ms: NOW,
-      device_id: "desktop",
-      hlc_physical_ms: NOW,
-      hlc_counter: 0,
-    });
-    await createPlanWorkoutRepository(store).upsert({
-      id: WORKOUT_ID,
-      plan_id: PLAN_ID,
-      date_key: 20260826,
-      sport: "cycling",
-      name: "Tempo builder",
-      duration_s: 3_600,
-      structure_json: JSON.stringify({
-        targets: "3 × 8 min · 85–90% FTP",
-        purpose: "Sustainable power",
-        safetyGuardrail: "Stop if the warm-up feels wrong",
-      }),
-      origin: "coach",
-      device_id: "desktop",
-      hlc_physical_ms: NOW,
-      hlc_counter: 1,
-    });
+    await createPlanRepository(store).replace(
+      {
+        id: PLAN_ID,
+        originId: null,
+        name: "Twelve-week base",
+        primaryGoal: "Build consistency",
+        startDateKey: 20260824,
+        targetDateKey: null,
+        status: "active",
+        kind: "full_plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        structureJson: JSON.stringify({
+          phases: [
+            { name: "Base", durationWeeks: 4 },
+            { name: "Build", durationWeeks: 8 },
+          ],
+        }),
+        createdAtMs: NOW - 1_000,
+        updatedAtMs: NOW,
+        deviceId: "desktop",
+        hlcPhysicalMs: NOW,
+        hlcCounter: 0,
+      },
+      [
+        {
+          id: WORKOUT_ID,
+          planId: PLAN_ID,
+          dateKey: 20260826,
+          sport: "cycling",
+          name: "Tempo builder",
+          durationS: 3_600,
+          structureJson: JSON.stringify({
+            targets: "3 × 8 min · 85–90% FTP",
+            purpose: "Sustainable power",
+            safetyGuardrail: "Stop if the warm-up feels wrong",
+          }),
+          origin: "coach",
+          deviceId: "desktop",
+          hlcPhysicalMs: NOW,
+          hlcCounter: 1,
+        },
+      ],
+    );
 
     const result = await createPlanningReadService({
       store,

@@ -118,6 +118,12 @@ const removedMainManifestKeys = new Set([
   "devDependencies",
 ]);
 
+function trimTrailingNullCharacters(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0) end -= 1;
+  return value.slice(0, end);
+}
+
 export class PackageLayoutError extends Error {
   constructor(message) {
     super(message);
@@ -279,7 +285,9 @@ function machoIdentity(bytes, label, expectedFileType, kind) {
     if (
       command === MACH_O_SEGMENT_64_COMMAND &&
       size === MACH_O_SEGMENT_64_COMMAND_BYTES &&
-      bytes.subarray(offset + 8, offset + 24).toString("latin1").replace(/\0+$/u, "") ===
+      trimTrailingNullCharacters(
+        bytes.subarray(offset + 8, offset + 24).toString("latin1"),
+      ) ===
         MACH_O_LINK_EDIT_SEGMENT
     ) {
       if (linkEditCommand !== undefined) fail("invalid Mach-O link edit segment", label);

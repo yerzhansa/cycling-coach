@@ -30,10 +30,12 @@ describe("openSqliteStorage adapter", () => {
     await store.exec("CREATE TABLE t(a TEXT, n REAL, b BLOB)");
     await store.run("INSERT INTO t(a, n, b) VALUES (?,?,?)", ["x", 1.5, new Uint8Array([9])]);
     const got = await store.get("SELECT a, n, b FROM t");
-    expect(got?.a).toBe("x");
-    expect(got?.n).toBe(1.5);
-    expect(got?.b).toBeInstanceOf(Uint8Array);
-    expect([...(got?.b as Uint8Array)]).toEqual([9]);
+    expect(got).toBeDefined();
+    if (got === undefined) throw new Error("expected SQLite row");
+    expect(got.a).toBe("x");
+    expect(got.n).toBe(1.5);
+    expect(got.b).toBeInstanceOf(Uint8Array);
+    expect([...(got.b as Uint8Array)]).toEqual([9]);
     const all = await store.all("SELECT a FROM t");
     expect(all).toHaveLength(1);
     const none = await store.get("SELECT a FROM t WHERE a = ?", ["nope"]);

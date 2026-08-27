@@ -21,6 +21,7 @@ import {
 } from "./activity-analysis-slice.js";
 import { createChatSlice, type ChatSlice } from "./chat-slice.js";
 import { createOnboardingSlice, type OnboardingSlice } from "./onboarding-slice.js";
+import { createPlanSlice, type PlanSlice } from "./plan-slice.js";
 import { createRideImportSlice, type RideImportSlice } from "./ride-import-slice.js";
 import {
   createSettingsSlice,
@@ -30,7 +31,6 @@ import {
 import { createSyncSlice, type SyncSlice } from "./sync-slice.js";
 import { createTrainingSlice, type TrainingSlice } from "./training-slice.js";
 import { createTrainingExportSlice, type TrainingExportSlice } from "./training-export-slice.js";
-import { createPlanSlice, type PlanSlice } from "./plan-slice.js";
 
 export interface EnduragentState
   extends

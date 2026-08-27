@@ -19,9 +19,7 @@ import { cyclingReferenceAdapter } from "./reference/index.js";
 import { athleteProfileSchema } from "./schemas.js";
 
 function loadSkills(): Record<string, string> {
-  return Object.fromEntries(
-    skillEntries.map(({ name, content }) => [`cycling-${name}`, content]),
-  );
+  return Object.fromEntries(skillEntries.map(({ name, content }) => [`cycling-${name}`, content]));
 }
 
 const cyclingSkills = loadSkills();
@@ -97,10 +95,18 @@ export const cyclingSport = {
     const toolset = {
       ...createMemoryTools(deps.memory, sections, {
         bindProvenance: deps.bindMemoryToolProvenance,
-        planPersistence: deps.planPersistence,
       }),
-      ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
-      ...createCoreToolsWithSportConfig(deps.intervals, cyclingSport.intervalsActivityTypes, deps.athleteData),
+      ...createPureCoreIntervalsTools(
+        deps.intervals,
+        deps.tz,
+        deps.athleteData,
+        deps.calendarMutations,
+      ),
+      ...createCoreToolsWithSportConfig(
+        deps.intervals,
+        cyclingSport.intervalsActivityTypes,
+        deps.athleteData,
+      ),
       ...createCyclingTools(deps.memory, deps.intervals, deps.tz, deps.calendarMutations),
     };
     return Object.entries(toolset).map(([name, t]) => ({

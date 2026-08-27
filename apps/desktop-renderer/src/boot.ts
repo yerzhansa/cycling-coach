@@ -14,6 +14,7 @@ import { createArchiveViewAdapter } from "./state/adapters/archive.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding.js";
+import { createPlanViewAdapter } from "./state/adapters/plan.js";
 import { createRideImportAdapter } from "./state/adapters/ride-import.js";
 import {
   createAthleteSettingsAdapter,
@@ -134,11 +135,6 @@ export function bootRenderer(): Disposer {
     navigate: (view) => store.getState().setActiveView(view),
     focus: (target, returnToChat) => store.getState().setPlanFocus(target, returnToChat),
   });
-  store.getState().bindPlanActions({
-    refresh: () => void planController.refresh(),
-    openFromChat: (target) => planController.openFromChat(target),
-    backToChat: () => planController.backToChat(),
-  });
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
     refreshTrainingContext: async () => {
@@ -190,6 +186,105 @@ export function bootRenderer(): Disposer {
   const disposeSetupReadiness = store.subscribe((state, previousState) => {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
   });
+
+  const planAdapter = createPlanViewAdapter({
+    bridge: window.enduragentAuth,
+    clients,
+    read: () => store.getState().plan,
+    publishHydration: (next) => store.getState().setPlanHydration(next),
+    publishTransition: (next) => store.getState().setPlanTransition(next),
+    publishCoach: (next) => store.getState().setPlanCoach(next),
+    publishDiscardConfirmation: (open) => store.getState().setPlanDiscardConfirmation(open),
+    publishRevisionComposer: (open) => store.getState().setPlanRevisionComposer(open),
+    publishCoursePicker: (open) => store.getState().setPlanCoursePicker(open),
+    publishDatePicker: (open) => store.getState().setPlanDatePicker(open),
+    publishSettingPending: (next) => store.getState().setPlanSettingPending(next),
+  });
+  store.getState().bindPlanningReadActions({
+    refresh: () => void planController.refresh(),
+    openFromChat: (target) => {
+      planController.openFromChat(target);
+      planAdapter.open();
+      if (target.focus === "workout" && target.entityId !== null) {
+        planAdapter.openWorkout(target.entityId);
+      }
+    },
+    backToChat: () => planController.backToChat(),
+  });
+  store.getState().bindPlanActions({
+    open: () => planAdapter.open(),
+    startPlan: () => planAdapter.startPlan(),
+    submitCoach: (message) => planAdapter.submitCoach(message),
+    stopCoach: () => planAdapter.stopCoach(),
+    removeQueuedCoachMessage: (id) => planAdapter.removeQueuedCoachMessage(id),
+    retryQueuedCoachTurn: (claimId) => planAdapter.retryQueuedCoachTurn(claimId),
+    answerCoachDecision: (decisionId, answer) =>
+      planAdapter.answerCoachDecision(decisionId, answer),
+    skipCoachDecision: (decisionId) => planAdapter.skipCoachDecision(decisionId),
+    saveFtp: (watts) => planAdapter.saveFtp(watts),
+    refreshFtp: () => planAdapter.refreshFtp(),
+    createDraft: () => planAdapter.createDraft(),
+    updateDraft: (message) => planAdapter.updateDraft(message),
+    openDiscardConfirmation: () => planAdapter.openDiscardConfirmation(),
+    closeDiscardConfirmation: () => planAdapter.closeDiscardConfirmation(),
+    discardDraft: () => planAdapter.discardDraft(),
+    openRevisionComposer: () => planAdapter.openRevisionComposer(),
+    closeRevisionComposer: () => planAdapter.closeRevisionComposer(),
+    openCoursePicker: () => planAdapter.openCoursePicker(),
+    closeCoursePicker: () => planAdapter.closeCoursePicker(),
+    chooseCourseFile: () => planAdapter.chooseCourseFile(),
+    continueWithoutCourse: () => planAdapter.continueWithoutCourse(),
+    useCourseWithoutElevation: () => planAdapter.useCourseWithoutElevation(),
+    removeCourse: () => planAdapter.removeCourse(),
+    openDatePicker: () => planAdapter.openDatePicker(),
+    closeDatePicker: () => planAdapter.closeDatePicker(),
+    recalculateStartDate: (startDate) => planAdapter.recalculateStartDate(startDate),
+    approveDraft: () => planAdapter.approveDraft(),
+    openReplacement: () => planAdapter.openReplacement(),
+    closeReplacementConfirmation: () => planAdapter.closeReplacementConfirmation(),
+    confirmReplacement: () => planAdapter.confirmReplacement(),
+    retryReplacementCleanup: () => planAdapter.retryReplacementCleanup(),
+    verifyReplacementCleanup: () => planAdapter.verifyReplacementCleanup(),
+    writeReplacementMirror: () => planAdapter.writeReplacementMirror(),
+    openReplacementActivePlan: () => planAdapter.openReplacementActivePlan(),
+    reconcilePlan: () => planAdapter.reconcilePlan(),
+    verifyReconciliation: () => planAdapter.verifyReconciliation(),
+    openSeason: () => planAdapter.openSeason(),
+    closeSeason: () => planAdapter.closeSeason(),
+    openRaceWeek: () => planAdapter.openRaceWeek(),
+    closeRaceWeek: () => planAdapter.closeRaceWeek(),
+    openReadiness: () => planAdapter.openReadiness(),
+    closeReadiness: () => planAdapter.closeReadiness(),
+    refreshReadiness: () => planAdapter.refreshReadiness(),
+    openWorkout: (workoutId) => planAdapter.openWorkout(workoutId),
+    closeWorkout: () => planAdapter.closeWorkout(),
+    resolveWorkoutMatch: (workoutId, activityId, decision) =>
+      planAdapter.resolveWorkoutMatch(workoutId, activityId, decision),
+    resolveWorkoutDrift: (workoutId, eventId, decision) =>
+      planAdapter.resolveWorkoutDrift(workoutId, eventId, decision),
+    openProposal: (proposalId) => planAdapter.openProposal(proposalId),
+    reviseProposal: (proposalId, text) => planAdapter.reviseProposal(proposalId, text),
+    approveProposal: (proposalId, expectedRevision) =>
+      planAdapter.approveProposal(proposalId, expectedRevision),
+    rejectProposal: (proposalId) => planAdapter.rejectProposal(proposalId),
+    openHistory: () => planAdapter.openHistory(),
+    closeHistory: () => planAdapter.closeHistory(),
+    undoPlanChange: (ledgerId) => planAdapter.undoPlanChange(ledgerId),
+    openPlanSettings: () => planAdapter.openPlanSettings(),
+    closePlanSettings: () => planAdapter.closePlanSettings(),
+    setPlanSetting: (setting, value) => planAdapter.setPlanSetting(setting, value),
+    openEndConfirmation: () => planAdapter.openEndConfirmation(),
+    closeEndConfirmation: () => planAdapter.closeEndConfirmation(),
+    confirmEndPlan: () => planAdapter.confirmEndPlan(),
+    retryPlanCleanup: () => planAdapter.retryPlanCleanup(),
+    verifyPlanCleanup: () => planAdapter.verifyPlanCleanup(),
+    openRaceOutcome: () => planAdapter.openRaceOutcome(),
+    recordRaceOutcome: (outcome) => planAdapter.recordRaceOutcome(outcome),
+    openAttention: (attentionId) => planAdapter.openAttention(attentionId),
+    returnToCoach: () => planAdapter.returnToCoach(),
+    retry: () => planAdapter.retry(),
+  });
+  planAdapter.start();
 
   const archiveAdapter = createArchiveViewAdapter({
     publish: (next) => store.getState().setArchive(next),
@@ -480,6 +575,7 @@ export function bootRenderer(): Disposer {
     disposed = true;
     store.getState().bindChatActions(null);
     store.getState().bindArchiveActions(null);
+    store.getState().bindPlanningReadActions(null);
     store.getState().bindPlanActions(null);
     store.getState().bindSettingsPorts(null);
     store.getState().bindSyncActions(null);
@@ -507,6 +603,7 @@ export function bootRenderer(): Disposer {
     trainingSyncCoordinator.dispose();
     chatController.dispose();
     archiveController.dispose();
+    planAdapter.dispose();
     spendController.dispose();
     trainingContextController.dispose();
     planController.dispose();

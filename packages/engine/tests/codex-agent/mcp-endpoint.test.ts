@@ -274,7 +274,7 @@ describe("codex-agent MCP endpoint", () => {
           headers: {
             "content-type": "application/json",
             accept: "application/json, text/event-stream",
-            ...(variant ?? {}),
+            ...variant,
           },
           body,
         });

@@ -12,6 +12,7 @@
     "./ports": "./dist/ports.js",
     "./store/migrations": "./dist/store/migrations.js",
     "./store": "./dist/store.js",
+    "./planning": "./dist/planning.js",
     "./archive": "./dist/archive/index.js",
     "./store/export": "./dist/store/export/index.js",
     "./ingest": "./dist/ingest/index.js",
@@ -32,7 +33,7 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "pnpm --dir ../.. exec vitest run --project workspace packages/kernel/tests"
   },
   "dependencies": {
     "@xmldom/xmldom": "0.9.10",

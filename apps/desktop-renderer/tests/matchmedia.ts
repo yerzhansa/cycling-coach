@@ -28,5 +28,5 @@ export function matchMediaListenerCount(): number {
 
 export function setPrefersDark(value: boolean): void {
   prefersDark = value;
-  for (const listener of [...listeners]) listener();
+  for (const listener of Array.from(listeners)) listener();
 }

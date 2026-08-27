@@ -1,0 +1,378 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createPlanAdaptationLedgerRepository,
+  createPlanProposalRepository,
+  createPlanReconciliationRepository,
+  createPlanRepository,
+  encodePlanAdaptationWorkoutSnapshot,
+  planAdaptationWorkoutSnapshot,
+  type PlanAdaptationLedgerRecord,
+  PlanProposalValidationError,
+  type PlanProposalPremiseRecord,
+  type PlanProposalRecord,
+  type PlanRecord,
+  type PlanWorkoutRecord,
+} from "@enduragent/kernel/planning";
+import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
+import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { openSqliteStorage } from "../src/sqlite/index.js";
+
+const id = (suffix: number): string => String(suffix).padStart(26, "0");
+const PLAN_ID = id(1);
+const WORKOUT_ID = id(2);
+
+const plan: PlanRecord = {
+  id: PLAN_ID,
+  originId: null,
+  name: "Gran Fondo Plan",
+  primaryGoal: "Finish",
+  startDateKey: 20260824,
+  targetDateKey: null,
+  status: "active",
+  kind: "short_race_preparation",
+  totalWeeks: 4,
+  weekStartDay: 1,
+  structureJson: "{}",
+  createdAtMs: 1,
+  updatedAtMs: 10,
+  deviceId: "device-1",
+  hlcPhysicalMs: 10,
+  hlcCounter: 0,
+};
+
+const workout: PlanWorkoutRecord = {
+  id: WORKOUT_ID,
+  planId: PLAN_ID,
+  dateKey: 20260830,
+  sport: "cycling",
+  name: "Endurance",
+  durationS: 5_400,
+  structureJson: "{}",
+  origin: "coach",
+  deviceId: "device-1",
+  hlcPhysicalMs: 10,
+  hlcCounter: 0,
+};
+
+function proposal(
+  proposalId: string,
+  overrides: Partial<PlanProposalRecord> = {},
+): PlanProposalRecord {
+  return {
+    id: proposalId,
+    planId: PLAN_ID,
+    parentProposalId: null,
+    revision: 1,
+    status: "proposed",
+    title: "Sunday recovery",
+    rationale: "Saturday fatigue is above normal.",
+    confidence: "High",
+    mutationJson: '{"changes":[],"schemaVersion":1,"weekLoad":null}',
+    baseSnapshotJson: '{"planUpdatedAtMs":10,"schemaVersion":1,"workouts":[]}',
+    refusalReason: null,
+    createdAtMs: 20,
+    updatedAtMs: 20,
+    resolvedAtMs: null,
+    deviceId: "device-1",
+    hlcPhysicalMs: 20,
+    hlcCounter: 0,
+    ...overrides,
+  };
+}
+
+function premise(proposalId: string, premiseId: string): PlanProposalPremiseRecord {
+  return {
+    id: premiseId,
+    proposalId,
+    sourceType: "activity",
+    sourceId: "ride-21-aug",
+    sourceLabel: "Saturday ride · 21 Aug",
+    sourceDateKey: 20260821,
+    confidence: "High",
+    snapshotJson: '{"loadAboveNormal":12}',
+    createdAtMs: 20,
+    deviceId: "device-1",
+    hlcPhysicalMs: 20,
+    hlcCounter: 0,
+  };
+}
+
+function ledger(
+  ledgerId: string,
+  proposalId: string,
+  before: PlanWorkoutRecord,
+  after: PlanWorkoutRecord,
+  occurredAtMs: number,
+): PlanAdaptationLedgerRecord {
+  return {
+    id: ledgerId,
+    planId: PLAN_ID,
+    targetWorkoutId: WORKOUT_ID,
+    kind: "proposal-applied",
+    sourceId: proposalId,
+    reversalOfId: null,
+    label: "Sunday recovery applied",
+    beforeJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(before)),
+    afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(after)),
+    weekLoadBefore: 420,
+    weekLoadAfter: 360,
+    occurredAtMs,
+    deviceId: "device-1",
+    hlcPhysicalMs: occurredAtMs,
+    hlcCounter: 0,
+  };
+}
+
+describe("Plan proposal repository", () => {
+  let store: SqlStore & MigratorStore;
+
+  beforeEach(async () => {
+    store = openSqliteStorage(":memory:");
+    await runMigrations(store, MIGRATIONS);
+    await createPlanRepository(store).replace(plan, [workout]);
+  });
+
+  afterEach(async () => {
+    await store.close();
+  });
+
+  it("stores several independent proposals and premise snapshots by value", async () => {
+    const repository = createPlanProposalRepository(store);
+    await repository.save(proposal(id(3)), [premise(id(3), id(4))]);
+    await repository.save(proposal(id(5), { createdAtMs: 21, updatedAtMs: 21 }), [
+      { ...premise(id(5), id(6)), createdAtMs: 21, hlcPhysicalMs: 21 },
+    ]);
+    await expect(repository.readOpenForPlan(PLAN_ID)).resolves.toHaveLength(2);
+    await expect(repository.readPremises(id(3))).resolves.toEqual([
+      expect.objectContaining({ snapshotJson: '{"loadAboveNormal":12}' }),
+    ]);
+  });
+
+  it("rejects impossible premise dates in validation and at the schema boundary", async () => {
+    const repository = createPlanProposalRepository(store);
+    await expect(
+      repository.save(proposal(id(3)), [{ ...premise(id(3), id(4)), sourceDateKey: 20260230 }]),
+    ).rejects.toEqual(new PlanProposalValidationError("invalid-premise"));
+
+    await repository.save(proposal(id(3)), [premise(id(3), id(4))]);
+    await expect(
+      store.run(
+        `INSERT INTO plan_proposal_premise (
+          id,proposal_id,source_type,source_id,source_label,source_date_key,
+          confidence,snapshot_json,created_at_ms,device_id,hlc_physical_ms,hlc_counter
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          id(5),
+          id(3),
+          "activity",
+          "invalid-date",
+          "Impossible date",
+          20260230,
+          "High",
+          "{}",
+          21,
+          "device-1",
+          21,
+          0,
+        ],
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("supersedes only the revised proposal and preserves the original premises", async () => {
+    const repository = createPlanProposalRepository(store);
+    await repository.save(proposal(id(3)), [premise(id(3), id(4))]);
+    await repository.save(
+      proposal(id(5), {
+        parentProposalId: id(3),
+        revision: 2,
+        title: "Sunday recovery · revised",
+        createdAtMs: 30,
+        updatedAtMs: 30,
+        hlcPhysicalMs: 30,
+      }),
+      [{ ...premise(id(5), id(6)), createdAtMs: 30, hlcPhysicalMs: 30 }],
+    );
+    await expect(repository.read(id(3))).resolves.toMatchObject({ status: "superseded" });
+    await expect(repository.readOpenForPlan(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ id: id(5), revision: 2 }),
+    ]);
+    await expect(repository.readPremises(id(3))).resolves.toHaveLength(1);
+    await store.run("DELETE FROM plan WHERE id=?", [PLAN_ID]);
+    await expect(repository.read(id(3))).resolves.toBeUndefined();
+    await expect(repository.read(id(5))).resolves.toBeUndefined();
+  });
+
+  it("applies the reviewed workout and proposal in one stale-base-guarded transaction", async () => {
+    const proposals = createPlanProposalRepository(store);
+    const plans = createPlanRepository(store);
+    const reconciliations = createPlanReconciliationRepository(store);
+    const history = createPlanAdaptationLedgerRepository(store);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
+    await proposals.save(proposal(id(3)), [premise(id(3), id(4))]);
+    await reconciliations.createOrGetJob({
+      id: id(7),
+      planId: PLAN_ID,
+      kind: "mirror",
+      windowStartDateKey: 20260826,
+      windowEndDateKey: 20260901,
+      createdAtMs: 20,
+    });
+    await reconciliations.prepareItem({
+      id: id(8),
+      jobId: id(7),
+      planWorkoutId: WORKOUT_ID,
+      operation: "create",
+      dateKey: workout.dateKey,
+      externalId: `cycling-coach:plan:${PLAN_ID}:${WORKOUT_ID}`,
+      expectedJson: "{}",
+      createdAtMs: 20,
+    });
+    await reconciliations.beginAttempt(id(7), 21);
+    await reconciliations.verifyItem(id(8), 42, 22);
+    await reconciliations.verifyJob(id(7), 23);
+    await expect(
+      proposals.apply({
+        id: id(3),
+        expectedPlanUpdatedAtMs: 10,
+        expectedPlanHlcPhysicalMs: 10,
+        expectedPlanHlcCounter: 0,
+        expectedWorkouts: [workout],
+        mirrorJob: {
+          id: id(9),
+          windowStartDateKey: 20260826,
+          windowEndDateKey: 20260901,
+          createdAtMs: 40,
+        },
+        plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
+        workouts: [nextWorkout],
+        ledger: ledger(id(10), id(3), workout, nextWorkout, 40),
+        resolvedAtMs: 40,
+        deviceId: "device-1",
+        hlcPhysicalMs: 40,
+        hlcCounter: 0,
+      }),
+    ).resolves.toMatchObject({ status: "applied" });
+    await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ name: "Recovery", durationS: 1_800 }),
+    ]);
+    await expect(history.readForPlan(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ id: id(10), sourceId: id(3), kind: "proposal-applied" }),
+    ]);
+    await expect(reconciliations.readLatestJob(PLAN_ID, "mirror")).resolves.toMatchObject({
+      id: id(7),
+      status: "pending",
+      attemptCount: 0,
+      failureCount: 0,
+    });
+    await expect(reconciliations.readItems(id(7))).resolves.toEqual([]);
+    await expect(
+      proposals.apply({
+        id: id(3),
+        expectedPlanUpdatedAtMs: 10,
+        expectedPlanHlcPhysicalMs: 10,
+        expectedPlanHlcCounter: 0,
+        expectedWorkouts: [workout],
+        mirrorJob: {
+          id: id(9),
+          windowStartDateKey: 20260826,
+          windowEndDateKey: 20260901,
+          createdAtMs: 50,
+        },
+        plan: { ...plan, updatedAtMs: 50, hlcPhysicalMs: 50 },
+        workouts: [{ ...nextWorkout, hlcPhysicalMs: 50 }],
+        ledger: ledger(id(11), id(3), workout, { ...nextWorkout, hlcPhysicalMs: 50 }, 50),
+        resolvedAtMs: 50,
+        deviceId: "device-1",
+        hlcPhysicalMs: 50,
+        hlcCounter: 0,
+      }),
+    ).rejects.toBeInstanceOf(PlanProposalValidationError);
+  });
+
+  it("rejects apply when a workout changed without advancing the Plan timestamp", async () => {
+    const proposals = createPlanProposalRepository(store);
+    const plans = createPlanRepository(store);
+    await proposals.save(proposal(id(3)), [premise(id(3), id(4))]);
+    await store.run(`UPDATE plan_workout SET name=?, hlc_physical_ms=? WHERE id=? AND plan_id=?`, [
+      "Athlete edit",
+      30,
+      WORKOUT_ID,
+      PLAN_ID,
+    ]);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
+
+    await expect(
+      proposals.apply({
+        id: id(3),
+        expectedPlanUpdatedAtMs: 10,
+        expectedPlanHlcPhysicalMs: 10,
+        expectedPlanHlcCounter: 0,
+        expectedWorkouts: [workout],
+        mirrorJob: {
+          id: id(9),
+          windowStartDateKey: 20260826,
+          windowEndDateKey: 20260901,
+          createdAtMs: 40,
+        },
+        plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
+        workouts: [nextWorkout],
+        ledger: ledger(id(10), id(3), workout, nextWorkout, 40),
+        resolvedAtMs: 40,
+        deviceId: "device-1",
+        hlcPhysicalMs: 40,
+        hlcCounter: 0,
+      }),
+    ).rejects.toMatchObject({ code: "stale-base" });
+    await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ name: "Athlete edit", hlcPhysicalMs: 30 }),
+    ]);
+    await expect(proposals.read(id(3))).resolves.toMatchObject({ status: "proposed" });
+  });
+
+  it("rejects apply when the Plan HLC advances within the same millisecond", async () => {
+    const proposals = createPlanProposalRepository(store);
+    await proposals.save(proposal(id(3)), [premise(id(3), id(4))]);
+    await store.run("UPDATE plan SET hlc_counter=? WHERE id=?", [1, PLAN_ID]);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
+
+    await expect(
+      proposals.apply({
+        id: id(3),
+        expectedPlanUpdatedAtMs: 10,
+        expectedPlanHlcPhysicalMs: 10,
+        expectedPlanHlcCounter: 0,
+        expectedWorkouts: [workout],
+        mirrorJob: {
+          id: id(9),
+          windowStartDateKey: 20260826,
+          windowEndDateKey: 20260901,
+          createdAtMs: 40,
+        },
+        plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
+        workouts: [nextWorkout],
+        ledger: ledger(id(10), id(3), workout, nextWorkout, 40),
+        resolvedAtMs: 40,
+        deviceId: "device-1",
+        hlcPhysicalMs: 40,
+        hlcCounter: 0,
+      }),
+    ).rejects.toMatchObject({ code: "stale-base" });
+    await expect(proposals.read(id(3))).resolves.toMatchObject({ status: "proposed" });
+  });
+});

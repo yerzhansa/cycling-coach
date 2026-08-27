@@ -25,6 +25,16 @@ export interface ComposerHandle {
 export function Composer(props: {
   readonly handle: RefObject<ComposerHandle | null>;
   readonly hidden?: boolean;
+  readonly surface?: {
+    readonly status: "idle" | "streaming" | "interrupted";
+    readonly sendDisabled: boolean;
+    readonly inputDisabled: boolean;
+    readonly placeholder: string;
+    readonly label: string;
+    readonly allowSlashCommands?: boolean;
+    submit(message: string): Promise<boolean>;
+    stop(): void;
+  };
 }): ReactElement {
   const form = useRef<HTMLFormElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -35,20 +45,28 @@ export function Composer(props: {
   const restoredRevision = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listboxId = useId();
-  const sendDisabled = useEnduragentStore((state) => state.chat.sendDisabled);
-  const inputDisabled = useEnduragentStore((state) => state.chat.inputDisabled);
-  const status = useEnduragentStore((state) => state.chat.status);
+  const chatSendDisabled = useEnduragentStore((state) => state.chat.sendDisabled);
+  const chatInputDisabled = useEnduragentStore((state) => state.chat.inputDisabled);
+  const chatStatus = useEnduragentStore((state) => state.chat.status);
   const actions = useEnduragentStore((state) => state.chatActions);
-  const canChat = useEnduragentStore(setupReady);
+  const chatReady = useEnduragentStore(setupReady);
   const attachmentSurface = useEnduragentStore((state) => state.chat.attachments);
   const attachmentIds =
     attachmentSurface?.draft?.attachments.map((attachment) => attachment.attachmentId) ?? [];
+  const sendDisabled = props.surface?.sendDisabled ?? chatSendDisabled;
+  const inputDisabled = props.surface?.inputDisabled ?? chatInputDisabled;
+  const status = props.surface?.status ?? chatStatus;
+  const canChat = props.surface === undefined ? chatReady : true;
 
-  const matches = useMemo(() => filterSlashCommands(draft), [draft]);
+  const matches = useMemo(
+    () => (props.surface?.allowSlashCommands === false ? [] : filterSlashCommands(draft)),
+    [draft, props.surface?.allowSlashCommands],
+  );
   const open = matches.length > 0 && !dismissed;
   const active = selected < matches.length ? selected : 0;
 
   useEffect(() => {
+    if (props.surface !== undefined) return;
     const restored = attachmentSurface?.draft;
     if (restored === undefined || restored === null) return;
     const revision = `${restored.updatedAt}:${restored.text}`;
@@ -59,7 +77,7 @@ export function Composer(props: {
     if (input.value.length > 0 && restored.state !== "restored") return;
     input.value = restored.text;
     setDraft(restored.text);
-  }, [attachmentSurface]);
+  }, [attachmentSurface, props.surface]);
 
   useEffect(
     () => () => {
@@ -90,20 +108,30 @@ export function Composer(props: {
 
   const submit = async (): Promise<void> => {
     const input = textarea.current;
-    if (input === null || sendDisabled || submitting || !canChat || actions === null) return;
+    if (
+      input === null ||
+      sendDisabled ||
+      submitting ||
+      !canChat ||
+      (props.surface === undefined && actions === null)
+    ) {
+      return;
+    }
     const value = input.value;
-    if (!/\S/u.test(value) && attachmentIds.length === 0) return;
+    if (!/\S/u.test(value) && (props.surface !== undefined || attachmentIds.length === 0)) return;
     if (saveTimer.current !== null) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
-    actions.saveAttachmentDraftText(value);
+    if (props.surface === undefined) actions!.saveAttachmentDraftText(value);
     setSubmitting(true);
     try {
       const acknowledged =
-        attachmentIds.length === 0
-          ? await actions.submit(value)
-          : await actions.submit(value, attachmentIds);
+        props.surface !== undefined
+          ? await props.surface.submit(value)
+          : attachmentIds.length === 0
+            ? await actions!.submit(value)
+            : await actions!.submit(value, attachmentIds);
       if (!acknowledged) return;
       if (input.value === value) {
         input.value = "";
@@ -169,7 +197,7 @@ export function Composer(props: {
     <form
       ref={form}
       className="composer relative"
-      data-chat-attachment-dropzone="true"
+      data-chat-attachment-dropzone={props.surface === undefined ? "true" : undefined}
       hidden={props.hidden}
       onSubmit={(event) => {
         event.preventDefault();
@@ -189,7 +217,7 @@ export function Composer(props: {
         }}
       />
       <label className="sr-only" htmlFor="message">
-        Message your coach
+        {props.surface?.label ?? "Message your coach"}
       </label>
       <div className="chat-composer__controls grid grid-rows-[minmax(var(--ctl-h-lg),auto)_var(--ctl-h-lg)] gap-[calc(var(--inset)/2)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2 transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
         <textarea
@@ -197,7 +225,11 @@ export function Composer(props: {
           ref={textarea}
           className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[3px] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
           rows={2}
-          placeholder={status === "streaming" ? "Coach is responding…" : "Message your coach"}
+          placeholder={
+            status === "streaming"
+              ? "Coach is responding…"
+              : (props.surface?.placeholder ?? "Message your coach")
+          }
           disabled={inputDisabled || !canChat}
           role="combobox"
           aria-autocomplete="list"
@@ -211,35 +243,40 @@ export function Composer(props: {
             setDismissed(false);
             if (saveTimer.current !== null) clearTimeout(saveTimer.current);
             saveTimer.current = setTimeout(() => {
-              actions?.saveAttachmentDraftText(value);
+              if (props.surface === undefined) actions?.saveAttachmentDraftText(value);
             }, 300);
           }}
           onKeyDown={onKeyDown}
-          onPaste={onPaste}
+          onPaste={props.surface === undefined ? onPaste : undefined}
           onBlur={() => {
             setDismissed(true);
           }}
         />
-        <div className="chat-composer__toolbar flex items-center justify-between">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Attach files"
-            disabled={actions === null || inputDisabled || !canChat || attachmentSurface === null}
-            onClick={() => void actions?.chooseAttachments()}
-          >
-            <Paperclip aria-hidden="true" />
-          </Button>
+        <div
+          className={`chat-composer__toolbar flex items-center ${props.surface === undefined ? "justify-between" : "justify-end"}`}
+        >
+          {props.surface === undefined ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Attach files"
+              disabled={actions === null || inputDisabled || !canChat || attachmentSurface === null}
+              onClick={() => void actions?.chooseAttachments()}
+            >
+              <Paperclip aria-hidden="true" />
+            </Button>
+          ) : null}
           {status === "streaming" ? (
             <Button
               type="button"
               variant="default"
               size="icon-lg"
               aria-label="Stop responding"
-              disabled={actions === null}
+              disabled={props.surface === undefined && actions === null}
               onClick={() => {
-                actions?.stop();
+                if (props.surface === undefined) actions?.stop();
+                else props.surface.stop();
               }}
             >
               <Square className="size-2.5 fill-current stroke-none" aria-hidden="true" />

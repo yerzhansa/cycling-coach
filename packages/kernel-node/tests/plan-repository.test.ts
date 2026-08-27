@@ -1,61 +1,61 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  createPlanAggregateRepository,
+  PlanValidationError,
+  PlanningDateError,
   createPlanRepository,
-  createPlanWorkoutRepository,
-  runMigrations,
-  type MigratorStore,
-  type PlanRow,
-  type PlanWorkoutRow,
-  type SqlStore,
-} from "@enduragent/kernel/store";
+  createPlanReconciliationRepository,
+  type PlanRecord,
+  type PlanWorkoutRecord,
+} from "@enduragent/kernel/planning";
+import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { openSqliteStorage } from "../src/sqlite/index.js";
 
-const PLAN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const WORKOUT_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
-const DEVICE_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
+const PLAN_ID = `${"0".repeat(25)}1`;
+const OTHER_PLAN_ID = `${"0".repeat(25)}2`;
+const WORKOUT_ID = `${"0".repeat(25)}3`;
+const CLEANUP_JOB_ID = `${"0".repeat(25)}4`;
 
-function plan(overrides: Partial<PlanRow> = {}): PlanRow {
+function plan(overrides: Partial<PlanRecord> = {}): PlanRecord {
   return {
     id: PLAN_ID,
-    origin_id: null,
-    name: "Eight-week base",
-    primary_goal: "Consistency",
-    start_date_key: 20260709,
-    target_date_key: null,
+    originId: "32cc7944-facd-4b56-b1a1-7dfe43e4bfe7",
+    name: "Gran Fondo Plan",
+    primaryGoal: "Finish in the front half",
+    startDateKey: 20260709,
+    targetDateKey: 20260930,
     status: "draft",
-    kind: "short_race_preparation",
-    total_weeks: 8,
-    week_start_day: 4,
-    structure_json: "{}",
-    created_at_ms: 1,
-    updated_at_ms: 1,
-    device_id: DEVICE_ID,
-    hlc_physical_ms: 1,
-    hlc_counter: 0,
+    kind: "full_plan",
+    totalWeeks: 12,
+    weekStartDay: 4,
+    structureJson: '{"phases":[]}',
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    deviceId: "device-1",
+    hlcPhysicalMs: 2,
+    hlcCounter: 0,
     ...overrides,
   };
 }
 
-function workout(overrides: Partial<PlanWorkoutRow> = {}): PlanWorkoutRow {
+function workout(overrides: Partial<PlanWorkoutRecord> = {}): PlanWorkoutRecord {
   return {
     id: WORKOUT_ID,
-    plan_id: PLAN_ID,
-    date_key: 20260710,
+    planId: PLAN_ID,
+    dateKey: 20260710,
     sport: "cycling",
-    name: "Easy endurance",
-    duration_s: 3600,
-    structure_json: "{}",
+    name: "Endurance",
+    durationS: 5_400,
+    structureJson: '{"sport":"cycling"}',
     origin: "coach",
-    device_id: DEVICE_ID,
-    hlc_physical_ms: 2,
-    hlc_counter: 0,
+    deviceId: "device-1",
+    hlcPhysicalMs: 3,
+    hlcCounter: 0,
     ...overrides,
   };
 }
 
-describe("Plan repositories over node:sqlite", () => {
+describe("Plan repository", () => {
   let store: SqlStore & MigratorStore;
 
   beforeEach(async () => {
@@ -67,50 +67,136 @@ describe("Plan repositories over node:sqlite", () => {
     await store.close();
   });
 
-  it("atomically stores and reads a Plan aggregate", async () => {
-    await createPlanAggregateRepository(store).save(plan(), [workout()]);
-    await expect(createPlanRepository(store).read(PLAN_ID)).resolves.toEqual(plan());
-    await expect(createPlanWorkoutRepository(store).listForPlan(PLAN_ID)).resolves.toEqual([
+  it("replaces and reads a Plan with ordered Plan Workouts", async () => {
+    const repository = createPlanRepository(store);
+    await repository.replace(plan(), [
+      workout({ id: `${"0".repeat(25)}4`, dateKey: 20260711, name: "Tempo" }),
       workout(),
     ]);
-  });
-
-  it("enforces the Workout foreign key and delete cascade", async () => {
-    await expect(createPlanWorkoutRepository(store).upsert(workout())).rejects.toThrow();
-    const plans = createPlanRepository(store);
-    await plans.upsert(plan());
-    await createPlanWorkoutRepository(store).upsert(workout());
-    await plans.delete(PLAN_ID);
-    await expect(createPlanWorkoutRepository(store).listForPlan(PLAN_ID)).resolves.toEqual([]);
-  });
-
-  it.each([
-    ["invalid_id", { id: "not-ulid" }],
-    ["invalid_status", { status: "paused" }],
-    ["invalid_kind", { kind: "block" }],
-    ["invalid_total_weeks", { total_weeks: 0 }],
-    ["invalid_week_start_day", { week_start_day: 7 }],
-    ["inconsistent_week_start_day", { week_start_day: 1 }],
-    ["inconsistent_kind", { kind: "full_plan" }],
-    ["target_not_covered", { target_date_key: 20261231 }],
-  ])("rejects %s with a typed invariant error", async (code, overrides) => {
+    await expect(repository.read(PLAN_ID)).resolves.toEqual(plan());
     await expect(
-      createPlanRepository(store).upsert(plan(overrides as Partial<PlanRow>)),
-    ).rejects.toMatchObject({ code });
+      repository.readByOriginId("32cc7944-facd-4b56-b1a1-7dfe43e4bfe7"),
+    ).resolves.toEqual(plan());
+    await expect(repository.readWorkouts(PLAN_ID)).resolves.toEqual([
+      workout(),
+      workout({ id: `${"0".repeat(25)}4`, dateKey: 20260711, name: "Tempo" }),
+    ]);
+    await expect(repository.count()).resolves.toBe(1);
   });
 
-  it("migrates a version-11 store without changing existing rows", async () => {
-    const prior = openSqliteStorage(":memory:");
-    try {
-      await runMigrations(prior, MIGRATIONS.slice(0, 11));
-      await prior.run("INSERT INTO raw_file(sha256) VALUES(?)", ["a".repeat(64)]);
-      await runMigrations(prior, MIGRATIONS);
-      await expect(prior.get("PRAGMA user_version")).resolves.toEqual({ user_version: 13 });
-      await expect(prior.get("SELECT sha256 FROM raw_file")).resolves.toEqual({
-        sha256: "a".repeat(64),
-      });
-    } finally {
-      await prior.close();
+  it("rejects every persisted Plan invariant with a typed error", async () => {
+    const repository = createPlanRepository(store);
+    const cases: Array<[PlanRecord, PlanValidationError | PlanningDateError]> = [
+      [plan({ id: "uuid" }), new PlanValidationError("invalid-id")],
+      [
+        plan({ status: "paused" as PlanRecord["status"] }),
+        new PlanValidationError("invalid-status"),
+      ],
+      [plan({ kind: "other" as PlanRecord["kind"] }), new PlanValidationError("invalid-kind")],
+      [plan({ kind: "short_race_preparation" }), new PlanValidationError("inconsistent-kind")],
+      [plan({ totalWeeks: 0 }), new PlanValidationError("invalid-total-weeks")],
+      [plan({ weekStartDay: 7 }), new PlanValidationError("invalid-week-start-day")],
+      [plan({ weekStartDay: 1 }), new PlanValidationError("inconsistent-week-start-day")],
+      [plan({ totalWeeks: 11 }), new PlanValidationError("target-outside-plan")],
+    ];
+    for (const [candidate, error] of cases) {
+      await expect(repository.replace(candidate, [])).rejects.toEqual(error);
     }
+    await expect(
+      repository.replaceNew(plan({ startDateKey: 20260708, weekStartDay: 3 }), [], 20260709),
+    ).rejects.toEqual(new PlanningDateError("start-before-today"));
+    await expect(
+      repository.replaceNew(
+        plan({
+          startDateKey: 20261005,
+          targetDateKey: 20261004,
+          weekStartDay: 1,
+          kind: "short_race_preparation",
+        }),
+        [],
+        20260709,
+      ),
+    ).rejects.toEqual(new PlanningDateError("start-after-target"));
+  });
+
+  it("accepts a valid short block even when race day lands in display week 12", async () => {
+    const repository = createPlanRepository(store);
+    const short = plan({
+      targetDateKey: 20260929,
+      kind: "short_race_preparation",
+    });
+    await expect(repository.replaceNew(short, [], 20260709)).resolves.toBeUndefined();
+    await expect(repository.read(PLAN_ID)).resolves.toEqual(short);
+  });
+
+  it("enforces Plan Workout ownership and cascades deletion", async () => {
+    const repository = createPlanRepository(store);
+    await expect(
+      store.run(
+        `INSERT INTO plan_workout (
+  id, plan_id, date_key, sport, name, duration_s, structure_json, origin,
+  device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          WORKOUT_ID,
+          OTHER_PLAN_ID,
+          20260710,
+          "cycling",
+          "Endurance",
+          5_400,
+          "{}",
+          "coach",
+          "device-1",
+          1,
+          0,
+        ],
+      ),
+    ).rejects.toThrow();
+    await repository.replace(plan(), [workout()]);
+    await repository.delete(PLAN_ID);
+    await expect(repository.readWorkouts(PLAN_ID)).resolves.toEqual([]);
+  });
+
+  it("rejects invalid Plan Workout values before SQL", async () => {
+    const repository = createPlanRepository(store);
+    await expect(repository.replace(plan(), [workout({ durationS: 0 })])).rejects.toEqual(
+      new PlanValidationError("invalid-workout"),
+    );
+    await expect(repository.replace(plan(), [workout({ dateKey: 20260708 })])).rejects.toEqual(
+      new PlanValidationError("workout-outside-plan"),
+    );
+  });
+
+  it("ends locally and creates one durable cleanup job atomically", async () => {
+    const repository = createPlanRepository(store);
+    await repository.replace(plan({ status: "active" }), [workout()]);
+
+    const first = await repository.endActive({
+      planId: PLAN_ID,
+      cleanupJobId: CLEANUP_JOB_ID,
+      windowStartDateKey: 20260710,
+      windowEndDateKey: 20260930,
+      updatedAtMs: 10,
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    });
+    const repeated = await repository.endActive({
+      planId: PLAN_ID,
+      cleanupJobId: `${"0".repeat(25)}5`,
+      windowStartDateKey: 20260710,
+      windowEndDateKey: 20260930,
+      updatedAtMs: 11,
+      deviceId: "device-1",
+      hlcPhysicalMs: 11,
+      hlcCounter: 0,
+    });
+
+    expect(first).toMatchObject({ plan: { status: "ended" }, cleanupJobId: CLEANUP_JOB_ID });
+    expect(repeated.cleanupJobId).toBe(CLEANUP_JOB_ID);
+    await expect(repository.readWorkouts(PLAN_ID)).resolves.toEqual([workout()]);
+    await expect(
+      createPlanReconciliationRepository(store).readLatestJob(PLAN_ID, "cleanup"),
+    ).resolves.toMatchObject({ id: CLEANUP_JOB_ID, status: "pending" });
   });
 });

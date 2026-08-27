@@ -3,6 +3,7 @@ export * from "../metrics/capability.js";
 export * from "../metrics/compliance-and-body.js";
 export * from "../metrics/date-helpers.js";
 export * from "../metrics/distribution.js";
+export * from "../metrics/estimated-cp.js";
 export * from "../metrics/index.js";
 export * from "../metrics/load-management.js";
 export * from "../metrics/metric-input.js";

@@ -1,6 +1,10 @@
 import { Activity, CalendarDays, Check, FileText, Image as ImageIcon, X } from "lucide-react";
 import type { ReactElement } from "react";
-import type { ChatChoiceView, ChatMessageView } from "../../state/chat-slice.js";
+import type {
+  ChatChoiceView,
+  ChatMessageView,
+  ChatTranscriptItemView,
+} from "../../state/chat-slice.js";
 import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
@@ -9,7 +13,10 @@ import { HistoryControls } from "./HistoryControls.js";
 import { PlanReferenceCard } from "./PlanReferenceCard.js";
 import { StreamingMessage } from "./StreamingMessage.js";
 
-function MessageRow(props: { readonly message: ChatMessageView }): ReactElement {
+function MessageRow(props: {
+  readonly message: ChatMessageView;
+  readonly bufferedStreaming: boolean;
+}): ReactElement {
   const message = props.message;
   const streaming = message.role === "coach" && message.delivery === "streaming";
   const silent = message.historical || message.role === "athlete";
@@ -64,7 +71,7 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
           })}
           {message.text.length === 0 ? null : <AthleteMessage text={message.text} />}
         </div>
-      ) : streaming ? (
+      ) : streaming && props.bufferedStreaming ? (
         <StreamingMessage messageId={message.id} />
       ) : (
         <div className="min-w-0">
@@ -109,9 +116,14 @@ function ChoiceRow(props: { readonly choice: ChatChoiceView }): ReactElement {
   );
 }
 
-export function Transcript(): ReactElement {
-  const timeline = useEnduragentStore((state) => state.chat.timeline);
-  const messages = useEnduragentStore((state) => state.chat.messages);
+export function ConversationTranscript(props: {
+  readonly messages: readonly ChatMessageView[];
+  readonly timeline?: readonly ChatTranscriptItemView[];
+  readonly historyControls?: boolean;
+  readonly bufferedStreaming?: boolean;
+}): ReactElement {
+  const timeline = props.timeline ?? [];
+  const messages = props.messages;
   const items =
     timeline.length > 0
       ? timeline
@@ -126,13 +138,17 @@ export function Transcript(): ReactElement {
       aria-atomic="false"
       aria-label="Coach conversation"
     >
-      <HistoryControls />
+      {props.historyControls === false ? null : <HistoryControls />}
       <div className="chat-messages grid gap-7">
         {items.length === 0 ? null : (
           <div className="contents">
             {items.map((item) =>
               item.kind === "message" ? (
-                <MessageRow key={`message:${item.message.id}`} message={item.message} />
+                <MessageRow
+                  key={`message:${item.message.id}`}
+                  message={item.message}
+                  bufferedStreaming={props.bufferedStreaming ?? false}
+                />
               ) : (
                 <ChoiceRow key={`choice:${item.choice.id}`} choice={item.choice} />
               ),
@@ -142,4 +158,10 @@ export function Transcript(): ReactElement {
       </div>
     </section>
   );
+}
+
+export function Transcript(): ReactElement {
+  const timeline = useEnduragentStore((state) => state.chat.timeline);
+  const messages = useEnduragentStore((state) => state.chat.messages);
+  return <ConversationTranscript messages={messages} timeline={timeline} bufferedStreaming />;
 }

@@ -97,6 +97,7 @@ type RenameOutcome = "renamed" | "noop" | "merged";
 
 export interface MemoryOptions {
   readonly platform?: NodeJS.Platform;
+  readonly persistPlan?: (plan: unknown) => Promise<void>;
 }
 
 /**
@@ -129,6 +130,7 @@ export class Memory implements MemoryStore {
   private tz: string;
   private provenance: ProvenanceMetadata;
   private readonly platform: NodeJS.Platform;
+  private readonly persistPlan: ((plan: unknown) => Promise<void>) | undefined;
   private readonly writeProvenance = new AsyncLocalStorage<SourceProvenance>();
 
   constructor(dataDir: string, tz: string = "UTC", options: MemoryOptions = {}) {
@@ -136,6 +138,7 @@ export class Memory implements MemoryStore {
     this.plansDir = join(dataDir, "plans");
     this.tz = tz;
     this.platform = options.platform ?? process.platform;
+    this.persistPlan = options.persistPlan;
     mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.plansDir, { recursive: true, mode: 0o700 });
     this.provenance = new ProvenanceMetadata(this.memoryDir, { platform: this.platform });
@@ -456,7 +459,7 @@ export class Memory implements MemoryStore {
     plan: unknown,
     source: MemoryWriteSource = "unattributed",
     provenance?: SourceProvenance,
-  ): void {
+  ): void | Promise<void> {
     const path = join(this.plansDir, "current-plan.json");
     const newBody = JSON.stringify(plan, null, 2);
     this.provenance.write("plan", newBody, this.resolvedWriteProvenance(provenance));
@@ -469,6 +472,7 @@ export class Memory implements MemoryStore {
       source,
     });
     atomicWriteFileSync(path, newBody, { platform: this.platform });
+    return this.persistPlan?.(plan);
   }
 
   loadPlan(): unknown | null {

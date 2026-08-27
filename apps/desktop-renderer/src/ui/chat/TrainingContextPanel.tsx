@@ -34,7 +34,7 @@ export function TrainingContextPanel(props: {
 }): ReactElement {
   const training = useEnduragentStore((state) => state.training);
   const planning = useEnduragentStore((state) => state.planSurface);
-  const planActions = useEnduragentStore((state) => state.planActions);
+  const planActions = useEnduragentStore((state) => state.planningReadActions);
   const context = training.trainingContext;
   const currentPlan = planning.value?.status === "ready" ? planning.value.plan : null;
   const todayWorkout = currentPlan?.todayWorkout ?? null;

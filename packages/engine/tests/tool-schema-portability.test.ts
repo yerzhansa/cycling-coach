@@ -22,6 +22,7 @@ const reader: AthleteDataReaderPort = {
 const mutations: PlatformCalendarMutationsPort = {
   createEvent: async () => ({}),
   readEventForDelete: async ({ eventId }) => ({ id: eventId, startDateLocal: "2999-01-01" }),
+  updateEvent: async () => ({}),
   deleteEvent: async () => ({}),
 };
 
