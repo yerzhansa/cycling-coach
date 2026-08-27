@@ -189,7 +189,16 @@ import { createDocumentMediaAttachmentOperations } from "./document-media-attach
 import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
 import { createPlanningReadService } from "./planning-read-service.js";
 import { createPlanningRequestDeliveryService } from "./planning-request-delivery.js";
-import { createPlanningRequestRepository, createPlanRepository } from "@enduragent/kernel/planning";
+import {
+  createPlanConversationRepository,
+  createPlanningRequestIntakeRepository,
+  createPlanningRequestRepository,
+  createPlanRepository,
+} from "@enduragent/kernel/planning";
+import {
+  createPlanningRequestIntakeService,
+  createPlanningRequestPremiseReader,
+} from "./planning-request-intake.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1975,6 +1984,16 @@ export async function createLocalCoachComposition(
       input.context.store,
       analysisCrypto,
     );
+    const planConversationRepository = createPlanConversationRepository(input.context.store);
+    const planningRequestIntake = createPlanningRequestIntakeService({
+      requests: planningRequestRepository,
+      intake: createPlanningRequestIntakeRepository(input.context.store),
+      plans: planRepository,
+      conversations: planConversationRepository,
+      identity: planningIdentity,
+      workoutLimits,
+      todayDateKey: planningDateKey,
+    });
     const planningOperations = createPlanningOperations(
       {
         context: input.context,
@@ -1989,19 +2008,27 @@ export async function createLocalCoachComposition(
         workoutDriftCalendar: planCalendar,
         readiness,
         requests: planningRequestRepository,
+        proposalPremiseReader: createPlanningRequestPremiseReader(planningRequestRepository),
       },
     );
-    const planningRequestOperations = createPlanningRequestDeliveryService({
-      outbox: createChatPlanOutboxRepository(input.context.store, analysisCrypto),
-      requests: planningRequestRepository,
-      identity: planningIdentity,
-      async resolveTarget() {
-        const latest = await planRepository.readLatest();
-        if (latest?.status === "active") return "active_plan";
-        if (latest?.status === "draft") return "draft";
-        return "plan_creation";
+    const planningRequestOperations = createPlanningRequestDeliveryService(
+      {
+        outbox: createChatPlanOutboxRepository(input.context.store, analysisCrypto),
+        requests: planningRequestRepository,
+        identity: planningIdentity,
+        async resolveTarget() {
+          const latest = await planRepository.readLatest();
+          if (latest?.status === "active") return "active_plan";
+          if (latest?.status === "draft") return "draft";
+          return "plan_creation";
+        },
       },
-    });
+      {
+        afterPlanningAccepted: async (request) => {
+          await planningRequestIntake(request);
+        },
+      },
+    );
     const operations = {
       ...coachOperations,
       admitChatAttachment: async (request) => {

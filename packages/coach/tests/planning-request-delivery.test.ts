@@ -137,26 +137,37 @@ describe("Planning request delivery", () => {
   });
 
   it("retries the same request after Planning accepted before Chat acknowledged", async () => {
-    await expect(
-      service(() => {
-        throw new Error("synthetic process interruption");
-      }).createPlanningRequest!({ payload: requestPayload() }),
-    ).rejects.toThrow("synthetic process interruption");
+    const interrupted = await service(() => {
+      throw new Error("synthetic process interruption");
+    }).createPlanningRequest!({ payload: requestPayload() });
+    expect(interrupted).toMatchObject({
+      status: "accepted",
+      delivery: {
+        state: "failed",
+        attemptCount: 1,
+        failureCode: "planning_unavailable",
+        retryable: true,
+      },
+    });
 
     const before = await service().getPlanningRequest!({ requestId: "request-1" });
     expect(before).toMatchObject({
       status: "found",
-      delivery: { state: "pending", attemptCount: 1, planningRequest: { requestId: "request-1" } },
+      delivery: { state: "failed", attemptCount: 1, planningRequest: { requestId: "request-1" } },
     });
 
     const retried = await service().retryPlanningRequest!({ requestId: "request-1" });
     expect(retried).toMatchObject({
       status: "found",
-      delivery: { state: "delivered", attemptCount: 2, planningRequest: { requestId: "request-1" } },
+      delivery: {
+        state: "delivered",
+        attemptCount: 2,
+        planningRequest: { requestId: "request-1" },
+      },
     });
-    expect(await createPlanningRequestRepository(store, createNodeCrypto()).readOpen()).toHaveLength(
-      1,
-    );
+    expect(
+      await createPlanningRequestRepository(store, createNodeCrypto()).readOpen(),
+    ).toHaveLength(1);
   });
 
   it("resumes persisted pending delivery and rejects conflicting reuse", async () => {

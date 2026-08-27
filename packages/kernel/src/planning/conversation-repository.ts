@@ -162,7 +162,7 @@ function validHlc(record: {
   );
 }
 
-function validateConversation(record: PlanConversationRecord): void {
+export function validatePlanConversationRecord(record: PlanConversationRecord): void {
   const endedAtMs = record.endedAtMs;
   if (!ULID.test(record.id)) throw new PlanConversationValidationError("invalid-id");
   if (record.planId !== null && !ULID.test(record.planId)) {
@@ -261,7 +261,7 @@ function validRaceCourseJson(value: string | null): boolean {
   }
 }
 
-function validateSourceRequest(record: PlanSourceRequestRecord): void {
+export function validatePlanSourceRequestRecord(record: PlanSourceRequestRecord): void {
   if (
     !ULID.test(record.id) ||
     !ULID.test(record.conversationId) ||
@@ -326,7 +326,7 @@ function conversationFromRow(row: Row): PlanConversationRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validateConversation(record);
+  validatePlanConversationRecord(record);
   return record;
 }
 
@@ -381,7 +381,7 @@ function sourceRequestFromRow(row: Row): PlanSourceRequestRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validateSourceRequest(record);
+  validatePlanSourceRequestRecord(record);
   return record;
 }
 
@@ -417,7 +417,7 @@ export function createPlanConversationRepository(store: PlanningStore): PlanConv
 
   return {
     async saveConversation(record) {
-      validateConversation(record);
+      validatePlanConversationRecord(record);
       await store.transaction(async () => {
         const existing = await readConversation(record.id);
         if (existing !== undefined) {
@@ -715,7 +715,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
 
     async createOrGetSourceRequest(record) {
-      validateSourceRequest(record);
+      validatePlanSourceRequestRecord(record);
       return store.transaction(async () => {
         await requireOpenConversation(record.conversationId);
         const existing = await readSourceRequest(record.id);
@@ -749,7 +749,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
 
     async bindSourceBoundary(record) {
-      validateSourceRequest(record);
+      validatePlanSourceRequestRecord(record);
       if (record.sourceBoundaryRef === null) {
         throw new PlanConversationValidationError("invalid-source-request");
       }
