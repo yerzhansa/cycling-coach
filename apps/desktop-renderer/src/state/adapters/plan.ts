@@ -36,6 +36,7 @@ export interface PlanBridge {
 export interface PlanViewAdapter {
   start(): void;
   open(): void;
+  openChatRequest(sourceConversationId: string, requestId: string): void;
   startPlan(): void;
   submitCoach(message: string): Promise<boolean>;
   stopCoach(): void;
@@ -619,6 +620,15 @@ export function createPlanViewAdapter(input: {
       void refresh(true);
     },
     open,
+    openChatRequest(sourceConversationId, requestId) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T36",
+        commandId: createCommandId(),
+        sourceConversationId,
+        requestId,
+      });
+    },
     startPlan,
     async submitCoach(message) {
       if (coachState.status === "streaming") {

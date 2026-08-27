@@ -16,6 +16,8 @@ import type {
   CoachDecisionReadModel,
   ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
+  CreateWorkoutPlanningRequestRpcParams,
+  PlanningRequestDelivery,
   TranscriptPageEntry,
   TurnEvent,
 } from "@enduragent/coach-contract";
@@ -56,6 +58,10 @@ export const CHAT_QUEUE_LOAD_FAILURE_COPY =
 export const CHAT_QUEUE_REMOVE_FAILURE_COPY = "We couldn’t remove that saved message. Try again.";
 export const CHAT_ATTACHMENT_FAILURE_COPY =
   "We couldn’t update that attachment. Your message draft is preserved.";
+export const CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY =
+  "We couldn’t check saved Plan requests. Reconnect and try again.";
+export const CHAT_PLANNING_REQUEST_FAILURE_COPY =
+  "Plan couldn’t receive this request. The parsed workout is still here.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -81,6 +87,13 @@ export interface ChatViewControls {
     readonly admissions: readonly AttachmentAdmissionReadModel[];
     readonly busy: boolean;
     readonly error: string | null;
+  };
+  readonly planningRequests?: {
+    readonly value: readonly PlanningRequestDelivery[];
+    readonly loaded: boolean;
+    readonly busyId: string | null;
+    readonly error: string | null;
+    readonly focusId: string | null;
   };
   readonly appendDelta?: ChatAppendDelta;
   readonly hydration?: {
@@ -113,6 +126,13 @@ export interface ChatController {
   removeAttachment(attachmentId: string): void;
   retryAttachment(attachmentId: string): void;
   selectAttachmentWorkout(attachmentId: string, workoutId: string): void;
+  reviewAttachmentInPlan(attachmentId: string): void;
+  openPlanningRequest(requestId: string): void;
+  retryPlanningRequest(requestId: string): void;
+  retryPlanningRequestLoad(): void;
+  refreshPlanningRequests(): void;
+  focusPlanningRequest(requestId: string): void;
+  clearPlanningRequestFocus(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): Promise<void>;
@@ -160,6 +180,7 @@ export function createChatController(input: {
     readonly choose: () => Promise<readonly AttachmentAdmissionReadModel[]>;
     readonly paste: () => Promise<readonly AttachmentAdmissionReadModel[]>;
   };
+  readonly openPlanningRequest?: (chatId: string, requestId: string) => void;
 }): ChatController {
   let state =
     input.initialQueueSnapshot === undefined
@@ -197,6 +218,12 @@ export function createChatController(input: {
   let attachmentTextRevision = 0;
   let attachmentTextSaveTask: Promise<void> = Promise.resolve();
   const attachmentSummaries = new Map<string, ChatSentAttachment>();
+  let planningRequests: readonly PlanningRequestDelivery[] = [];
+  let planningRequestsLoaded = false;
+  let planningRequestBusyId: string | null = null;
+  let planningRequestError: string | null = null;
+  let planningRequestFocusId: string | null = null;
+  let pendingPlanningRequestCreate: CreateWorkoutPlanningRequestRpcParams | null = null;
   let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
@@ -246,6 +273,13 @@ export function createChatController(input: {
             admissions: attachmentAdmissions,
             busy: attachmentBusy,
             error: attachmentError,
+          },
+          planningRequests: {
+            value: planningRequests,
+            loaded: planningRequestsLoaded,
+            busyId: planningRequestBusyId,
+            error: planningRequestError,
+            focusId: planningRequestFocusId,
           },
           ...(appendDelta === undefined ? {} : { appendDelta }),
           hydration: {
@@ -714,6 +748,103 @@ export function createChatController(input: {
     render();
   };
 
+  const replacePlanningRequest = (delivery: PlanningRequestDelivery): void => {
+    planningRequests = [
+      ...planningRequests.filter((item) => item.requestId !== delivery.requestId),
+      delivery,
+    ].sort(
+      (left, right) =>
+        left.createdAtMs - right.createdAtMs || left.requestId.localeCompare(right.requestId),
+    );
+  };
+
+  const loadPlanningRequests = async (client?: CoachClient): Promise<void> => {
+    const activeClient = client ?? (await input.clients.getClient());
+    const result = await activeClient.call("listPlanningRequests", { chatId: DESKTOP_CHAT_ID });
+    if (disposed) return;
+    planningRequests = result.deliveries;
+    planningRequestsLoaded = true;
+    planningRequestError = null;
+    render();
+  };
+
+  const routeToPlanningRequest = (requestId: string): void => {
+    const delivery = planningRequests.find((item) => item.requestId === requestId);
+    if (delivery?.state !== "delivered") return;
+    input.openPlanningRequest?.(DESKTOP_CHAT_ID, requestId);
+  };
+
+  const retrySavedPlanningRequest = (requestId: string): void => {
+    const delivery = planningRequests.find((item) => item.requestId === requestId);
+    if (
+      disposed ||
+      planningRequestBusyId !== null ||
+      delivery?.state !== "failed" ||
+      !delivery.retryable
+    ) {
+      return;
+    }
+    planningRequestBusyId = requestId;
+    planningRequestError = null;
+    render();
+    void input.clients
+      .getClient()
+      .then((client) => client.call("retryPlanningRequest", { requestId }))
+      .then((result) => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        if (result.status === "missing") {
+          planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+          render();
+          return;
+        }
+        replacePlanningRequest(result.delivery);
+        planningRequestError = null;
+        render();
+        routeToPlanningRequest(requestId);
+      })
+      .catch(() => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+        render();
+      });
+  };
+
+  const deliverWorkoutPlanningRequest = (
+    request: CreateWorkoutPlanningRequestRpcParams,
+  ): void => {
+    if (disposed || planningRequestBusyId !== null) return;
+    pendingPlanningRequestCreate = request;
+    planningRequestBusyId = request.requestId;
+    planningRequestError = null;
+    render();
+    void input.clients
+      .getClient()
+      .then((client) => client.call("createWorkoutPlanningRequest", request))
+      .then((result) => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        if (result.status === "rejected") {
+          pendingPlanningRequestCreate = null;
+          planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+          render();
+          return;
+        }
+        pendingPlanningRequestCreate = null;
+        replacePlanningRequest(result.delivery);
+        planningRequestError = null;
+        render();
+        routeToPlanningRequest(request.requestId);
+      })
+      .catch(() => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+        render();
+      });
+  };
+
   const receiveAdmissions = (results: readonly AttachmentAdmissionReadModel[]): void => {
     if (disposed) return;
     attachmentAdmissions = results.filter((result) => result.status !== "accepted");
@@ -1128,12 +1259,20 @@ export function createChatController(input: {
         render();
       }
     });
+    const planningRequestLoadTask = loadPlanningRequests().catch(() => {
+      if (!disposed) {
+        planningRequestsLoaded = false;
+        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+        render();
+      }
+    });
     const task = Promise.all([
       transcriptLoadTask,
       sessionProbeTask,
       loadTask,
       queueLoadTask,
       attachmentLoadTask,
+      planningRequestLoadTask,
     ]).then(async () => {
       if (!decisionBlocksWork()) await drain();
     });
@@ -1240,6 +1379,95 @@ export function createChatController(input: {
           workoutId,
         }),
       );
+    },
+    reviewAttachmentInPlan(attachmentId) {
+      if (
+        disposed ||
+        resetBlocksWork() ||
+        !planningRequestsLoaded ||
+        planningRequestBusyId !== null
+      ) {
+        return;
+      }
+      const attachment = attachmentSurface?.draft?.attachments.find(
+        (item) => item.attachmentId === attachmentId,
+      );
+      if (
+        attachment?.status !== "ready" ||
+        attachment.preview.kind !== "workout" ||
+        attachment.preview.selectedWorkoutId === null
+      ) {
+        return;
+      }
+      const existing = planningRequests.find(
+        (delivery) =>
+          delivery.source?.attachmentId === attachmentId &&
+          (delivery.state !== "delivered" || delivery.planningRequest?.lifecycle === "open"),
+      );
+      if (existing !== undefined) {
+        if (existing.state === "failed" && existing.retryable) {
+          retrySavedPlanningRequest(existing.requestId);
+        } else {
+          routeToPlanningRequest(existing.requestId);
+        }
+        return;
+      }
+      const preview = attachment.preview;
+      const selected = preview.workouts.find(
+        (workout) => workout.workoutId === preview.selectedWorkoutId,
+      );
+      if (selected === undefined) return;
+      const requestId = globalThis.crypto.randomUUID();
+      deliverWorkoutPlanningRequest({
+        requestId,
+        intent: `Review ${selected.title} in Plan.`,
+        source: {
+          chatId: DESKTOP_CHAT_ID,
+          messageId: globalThis.crypto.randomUUID(),
+          attachmentId,
+        },
+      });
+    },
+    openPlanningRequest(requestId) {
+      if (disposed) return;
+      routeToPlanningRequest(requestId);
+    },
+    retryPlanningRequest(requestId) {
+      retrySavedPlanningRequest(requestId);
+    },
+    retryPlanningRequestLoad() {
+      if (disposed || planningRequestBusyId !== null) return;
+      if (pendingPlanningRequestCreate !== null) {
+        deliverWorkoutPlanningRequest(pendingPlanningRequestCreate);
+        return;
+      }
+      planningRequestError = null;
+      render();
+      void loadPlanningRequests().catch(() => {
+        if (disposed) return;
+        planningRequestsLoaded = false;
+        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+        render();
+      });
+    },
+    refreshPlanningRequests() {
+      if (disposed || planningRequestBusyId !== null) return;
+      void loadPlanningRequests().catch(() => {
+        if (disposed) return;
+        planningRequestsLoaded = false;
+        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+        render();
+      });
+    },
+    focusPlanningRequest(requestId) {
+      if (disposed) return;
+      planningRequestFocusId = requestId;
+      render();
+    },
+    clearPlanningRequestFocus() {
+      if (disposed || planningRequestFocusId === null) return;
+      planningRequestFocusId = null;
+      render();
     },
     stop() {
       if (disposed || state.status !== "streaming" || state.activeTurn === null) return;

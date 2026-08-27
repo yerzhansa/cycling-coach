@@ -16,6 +16,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "
 import {
   PLAN_MIN_FULL_DAYS,
   PlanActiveProjectionDataSchema,
+  PlanChatOriginatedResultProjectionDataSchema,
   PlanEndedProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   type PlanDraftPlanProjection,
@@ -511,6 +512,58 @@ function StatusCard(props: {
           <RetryButton />
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function ChatOriginatedPlanResultProjection(props: {
+  readonly data: ReturnType<typeof PlanChatOriginatedResultProjectionDataSchema.parse>;
+}): ReactElement {
+  const planningActions = useEnduragentStore((state) => state.planningReadActions);
+  const planActions = useEnduragentStore((state) => state.planActions);
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const request = props.data.request;
+  const terminal = request.terminalResult;
+  const applied = request.lifecycle === "applied";
+  return (
+    <section
+      className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
+      data-plan-scenario="PL-S099"
+    >
+      <div className="flex items-start gap-row">
+        {applied ? (
+          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+        ) : (
+          <Info className="mt-0.5 size-5 shrink-0 text-ink-2" aria-hidden="true" />
+        )}
+        <div className={SUPPORT_PAIR}>
+          <p className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2">
+            Plan result
+          </p>
+          <h2 className="m-0 text-lg font-semibold">
+            {terminal?.title ?? (applied ? "Added to Plan" : "Proposal not added")}
+          </h2>
+          <p className="m-0 text-ink-2">
+            {terminal?.detail ?? "This request is complete and cannot be changed."}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap justify-end gap-inset">
+        {props.data.returnTarget === null ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => planningActions?.returnToChatRequest(request.requestId)}
+          >
+            Back to Chat
+          </Button>
+        )}
+        {applied && model?.planId !== null && model?.planId !== undefined ? (
+          <Button type="button" onClick={() => planActions?.open()}>
+            Open current week
+          </Button>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -3869,6 +3922,14 @@ function ReadyProjection(): ReactElement {
     return <DraftFormation />;
   }
   if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
+  if (model.scenarioId === "PL-S099") {
+    const parsed = PlanChatOriginatedResultProjectionDataSchema.safeParse(model.data);
+    return parsed.success ? (
+      <ChatOriginatedPlanResultProjection data={parsed.data} />
+    ) : (
+      <StatusCard title={model.title} support={model.summary} />
+    );
+  }
   if (model.lifecycle === "none" || model.projection === "no-plan") return <NoPlan />;
   if (model.projection === "coach") return <PlanCoach />;
   if (model.projection === "draft") return <DraftProjection />;

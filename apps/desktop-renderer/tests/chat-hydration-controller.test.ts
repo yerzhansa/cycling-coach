@@ -90,6 +90,9 @@ function coachClient(input: {
           items: queued === undefined ? [] : [queued],
         }) as never;
       }
+      if (method === "listPlanningRequests") {
+        return Promise.resolve({ deliveries: [] }) as never;
+      }
       if (method === "enqueueChatMessage") {
         const value = request as { submissionId: string; text: string };
         revision += 1;
@@ -196,9 +199,10 @@ describe("chat controller transcript hydration", () => {
       expect(readTranscriptPage).toHaveBeenCalledTimes(1);
       expect(states.at(-1)?.messages).toHaveLength(2);
     });
-    expect(client.call).toHaveBeenCalledTimes(4);
+    expect(client.call).toHaveBeenCalledTimes(5);
     expect(client.call).toHaveBeenCalledWith("hasSession", { chatId: "desktop" });
     expect(client.call).toHaveBeenCalledWith("getCoachDecision", { chatId: "desktop" });
+    expect(client.call).toHaveBeenCalledWith("listPlanningRequests", { chatId: "desktop" });
   });
 
   it("renders the first persisted page alongside a still-pending live readiness probe", async () => {
@@ -212,6 +216,7 @@ describe("chat controller transcript hydration", () => {
       }
       if (method === "getChatQueue")
         return Promise.resolve({ schemaVersion: 1, revision: 0, items: [] }) as never;
+      if (method === "listPlanningRequests") return Promise.resolve({ deliveries: [] }) as never;
       throw new TypeError();
     });
     const { controller, states } = subject({

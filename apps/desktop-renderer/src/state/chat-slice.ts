@@ -4,6 +4,7 @@ import type {
   ChatQueueRecoveryClaim,
   CoachDecisionAnswer,
   CoachDecisionReadModel,
+  PlanningRequestDelivery,
 } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration.js";
@@ -40,7 +41,8 @@ export interface ChatChoiceView {
 
 export type ChatTranscriptItemView =
   | { readonly kind: "message"; readonly message: ChatMessageView }
-  | { readonly kind: "choice"; readonly choice: ChatChoiceView };
+  | { readonly kind: "choice"; readonly choice: ChatChoiceView }
+  | { readonly kind: "planning-request"; readonly delivery: PlanningRequestDelivery };
 
 export type ChatDecisionPhase = "idle" | "continuing" | "recovering";
 
@@ -58,6 +60,11 @@ export interface ChatSurfaceState {
   readonly attachmentAdmissions: readonly AttachmentAdmissionReadModel[];
   readonly attachmentBusy: boolean;
   readonly attachmentError: string | null;
+  readonly planningRequests: readonly PlanningRequestDelivery[];
+  readonly planningRequestsLoaded: boolean;
+  readonly planningRequestBusyId: string | null;
+  readonly planningRequestError: string | null;
+  readonly planningRequestFocusId: string | null;
   readonly timeline: readonly ChatTranscriptItemView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
@@ -86,6 +93,11 @@ export interface ChatActions {
   removeAttachment(attachmentId: string): void;
   retryAttachment(attachmentId: string): void;
   selectAttachmentWorkout(attachmentId: string, workoutId: string): void;
+  reviewAttachmentInPlan(attachmentId: string): void;
+  openPlanningRequest(requestId: string): void;
+  retryPlanningRequest(requestId: string): void;
+  retryPlanningRequestLoad(): void;
+  clearPlanningRequestFocus(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): void;
@@ -116,6 +128,11 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   attachmentAdmissions: Object.freeze([]),
   attachmentBusy: false,
   attachmentError: null,
+  planningRequests: Object.freeze([]),
+  planningRequestsLoaded: false,
+  planningRequestBusyId: null,
+  planningRequestError: null,
+  planningRequestFocusId: null,
   timeline: Object.freeze([]),
   status: "idle",
   notice: null,
@@ -226,6 +243,9 @@ export function sameChatTimeline(
         item.choice.historical === other.choice.historical
       );
     }
+    if (item.kind === "planning-request" && other.kind === "planning-request") {
+      return JSON.stringify(item.delivery) === JSON.stringify(other.delivery);
+    }
     return false;
   });
 }
@@ -247,6 +267,11 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.attachmentAdmissions === right.attachmentAdmissions &&
     left.attachmentBusy === right.attachmentBusy &&
     left.attachmentError === right.attachmentError &&
+    left.planningRequestsLoaded === right.planningRequestsLoaded &&
+    left.planningRequestBusyId === right.planningRequestBusyId &&
+    left.planningRequestError === right.planningRequestError &&
+    left.planningRequestFocusId === right.planningRequestFocusId &&
+    JSON.stringify(left.planningRequests) === JSON.stringify(right.planningRequests) &&
     left.workBlocked === right.workBlocked &&
     left.sendDisabled === right.sendDisabled &&
     left.inputDisabled === right.inputDisabled &&

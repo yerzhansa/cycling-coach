@@ -1,11 +1,21 @@
-import { Activity, CalendarDays, Check, FileText, Image as ImageIcon, X } from "lucide-react";
+import {
+  Activity,
+  CalendarDays,
+  Check,
+  FileText,
+  Image as ImageIcon,
+  LoaderCircle,
+  X,
+} from "lucide-react";
 import type { ReactElement } from "react";
+import type { PlanningRequestDelivery } from "@enduragent/coach-contract";
 import type {
   ChatChoiceView,
   ChatMessageView,
   ChatTranscriptItemView,
 } from "../../state/chat-slice.js";
 import { cn } from "../../lib/utils.js";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
 import { CoachMessage } from "./CoachMessage.js";
@@ -116,6 +126,104 @@ function ChoiceRow(props: { readonly choice: ChatChoiceView }): ReactElement {
   );
 }
 
+function planningRequestStatus(delivery: PlanningRequestDelivery): string {
+  if (delivery.state === "pending") return "Opening";
+  const request = delivery.planningRequest;
+  if (request === null) return "Plan request";
+  if (request.lifecycle === "applied") return "Added to Plan";
+  if (request.lifecycle === "rejected" || request.lifecycle === "ended") return "Not added";
+  if (request.attention === "date_conflict") return "Date conflict";
+  if (request.attention === "revalidating") return "Checking";
+  if (request.attention === "stale_base") return "Updated review";
+  if (request.attention === "apply_failed") return "Save failed";
+  if (request.proposalId !== null) return "Needs review";
+  return "Continue in Plan";
+}
+
+function planningRequestSummary(delivery: PlanningRequestDelivery): string {
+  const request = delivery.planningRequest;
+  if (delivery.state === "pending") return "The workout and your Chat context are staying together.";
+  if (request?.terminalResult !== null && request?.terminalResult !== undefined) {
+    return request.terminalResult.detail;
+  }
+  if (request?.attention === "apply_failed") {
+    return "The Proposal is preserved and the active Plan is unchanged.";
+  }
+  if (request?.target === "draft") {
+    return "The workout is available to the unapplied Draft.";
+  }
+  if (request?.target === "plan_creation") {
+    return "Plan is waiting for the details needed to build a Draft.";
+  }
+  return "Review the structured Proposal in Plan; the active Plan is unchanged.";
+}
+
+function PlanningRequestRow(props: {
+  readonly delivery: PlanningRequestDelivery;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.chatActions);
+  const busyId = useEnduragentStore((state) => state.chat.planningRequestBusyId);
+  const delivery = props.delivery;
+  const request = delivery.planningRequest;
+  const pending = delivery.state === "pending";
+  const terminal = request !== null && request.lifecycle !== "open";
+  const buttonLabel = terminal
+    ? "Open Plan"
+    : request?.proposalId !== null && request?.proposalId !== undefined
+      ? "Review in Plan"
+      : "Continue in Plan";
+  return (
+    <article
+      className="grid gap-row rounded-card border border-line-2 bg-surface p-5 shadow-elev-1 outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      data-planning-request-id={delivery.requestId}
+      tabIndex={-1}
+      aria-label="Plan request"
+    >
+      <div className="flex items-start justify-between gap-row">
+        <div className="min-w-0">
+          <p className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2">
+            {terminal ? "Plan result" : "Plan request"}
+          </p>
+          <h3 className="mt-inset mb-0 text-base font-semibold">
+            {delivery.source?.intent ?? request?.intent ?? "Plan request"}
+          </h3>
+        </div>
+        <span
+          className={cn(
+            "inline-flex min-h-7 shrink-0 items-center rounded-full px-3 text-xs font-medium",
+            request?.lifecycle === "applied"
+              ? "bg-ok/14 text-ok"
+              : request?.attention === "none" && !pending
+                ? "bg-sunk text-ink-2"
+                : "bg-warn/14 text-warn",
+          )}
+        >
+          {pending ? (
+            <LoaderCircle
+              className="mr-1.5 size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+          ) : null}
+          {planningRequestStatus(delivery)}
+        </span>
+      </div>
+      <p className="m-0 text-sm leading-5 text-ink-2">{planningRequestSummary(delivery)}</p>
+      {pending ? null : (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={actions === null || busyId !== null}
+            onClick={() => actions?.openPlanningRequest(delivery.requestId)}
+          >
+            {buttonLabel}
+          </Button>
+        </div>
+      )}
+    </article>
+  );
+}
+
 export function ConversationTranscript(props: {
   readonly messages: readonly ChatMessageView[];
   readonly timeline?: readonly ChatTranscriptItemView[];
@@ -149,8 +257,13 @@ export function ConversationTranscript(props: {
                   message={item.message}
                   bufferedStreaming={props.bufferedStreaming ?? false}
                 />
-              ) : (
+              ) : item.kind === "choice" ? (
                 <ChoiceRow key={`choice:${item.choice.id}`} choice={item.choice} />
+              ) : (
+                <PlanningRequestRow
+                  key={`planning-request:${item.delivery.requestId}`}
+                  delivery={item.delivery}
+                />
               ),
             )}
           </div>
