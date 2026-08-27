@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -28,22 +28,28 @@ import { REPO_ROOT } from "../../../tools/check-metric-parity";
  */
 
 const GATE = join(REPO_ROOT, "tools/check-metric-parity.ts");
+const CHILD_PROCESS_TIMEOUT_MS = 15_000;
+const TEST_TIMEOUT_MS = 20_000;
 
-function runGate(args: string[]): { code: number; out: string } {
-  try {
-    const out = execFileSync("npx", ["tsx", GATE, ...args], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { code: 0, out };
-  } catch (err) {
-    const e = err as { status?: number; stdout?: string; stderr?: string };
-    return {
-      code: e.status ?? 1,
-      out: `${e.stdout ?? ""}${e.stderr ?? ""}`,
-    };
-  }
+function runGate(args: string[]): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      ["--import", "tsx", GATE, ...args],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        timeout: CHILD_PROCESS_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
+      (error, stdout, stderr) => {
+        resolve({
+          code: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
+          out: `${stdout}${stderr}`,
+        });
+      },
+    );
+  });
 }
 
 describe("external-oracle registry coverage", () => {
@@ -141,43 +147,59 @@ describe("floor(oracle) cross-check against the curve-equipped fixture", () => {
 });
 
 describe("CLI exit-code contract", () => {
-  it("default mode (section-11) is unchanged: acwr / realistic-athlete passes", () => {
-    const { code, out } = runGate(["--metric=acwr", "--fixture=realistic-athlete"]);
-    expect(code).toBe(0);
-    expect(out).toContain("[parity] acwr / realistic-athlete: OK");
-    // The external surface must not leak into the default run.
-    expect(out).not.toContain("[parity:external]");
-  });
+  it(
+    "default mode (section-11) is unchanged: acwr / realistic-athlete passes",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const { code, out } = await runGate(["--metric=acwr", "--fixture=realistic-athlete"]);
+      expect(code).toBe(0);
+      expect(out).toContain("[parity] acwr / realistic-athlete: OK");
+      // The external surface must not leak into the default run.
+      expect(out).not.toContain("[parity:external]");
+    },
+  );
 
-  it("external mode passes on the committed snapshots with coverage > 0", () => {
-    const { code, out } = runGate(["--oracle=external", "--fixture=curve-equipped"]);
-    expect(code).toBe(0);
-    expect(out).toContain("coverage: 6/6 covered quantity(ies) passed");
-    expect(out).toContain("power_mean_max_current / curve-equipped: OK");
-  });
+  it(
+    "external mode passes on the committed snapshots with coverage > 0",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const { code, out } = await runGate(["--oracle=external", "--fixture=curve-equipped"]);
+      expect(code).toBe(0);
+      expect(out).toContain("coverage: 6/6 covered quantity(ies) passed");
+      expect(out).toContain("power_mean_max_current / curve-equipped: OK");
+    },
+  );
 
-  it("both mode passes: section-11 matrix + external cross-checks", () => {
-    const { code, out } = runGate(["--oracle=both", "--fixture=curve-equipped"]);
-    expect(code).toBe(0);
-    expect(out).toContain("coverage: 6/6 covered quantity(ies) passed");
-    // section-11 leg present (a known curve-equipped metric).
-    expect(out).toMatch(/\[parity\] \S+ \/ curve-equipped: OK/);
-  });
+  it(
+    "both mode passes: section-11 matrix + external cross-checks",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const { code, out } = await runGate(["--oracle=both", "--fixture=curve-equipped"]);
+      expect(code).toBe(0);
+      expect(out).toContain("coverage: 6/6 covered quantity(ies) passed");
+      // section-11 leg present (a known curve-equipped metric).
+      expect(out).toMatch(/\[parity\] \S+ \/ curve-equipped: OK/);
+    },
+  );
 
-  it("zero-coverage external run exits non-zero with a clear message", () => {
-    const { code, out } = runGate(["--oracle=external", "--fixture=realistic-athlete"]);
-    expect(code).toBe(2);
-    expect(out).toContain("ZERO covered quantities");
-  });
+  it(
+    "zero-coverage external run exits non-zero with a clear message",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const { code, out } = await runGate(["--oracle=external", "--fixture=realistic-athlete"]);
+      expect(code).toBe(2);
+      expect(out).toContain("ZERO covered quantities");
+    },
+  );
 
-  it("external mode requires an explicit fixture", () => {
-    const { code, out } = runGate(["--oracle=external"]);
+  it("external mode requires an explicit fixture", { timeout: TEST_TIMEOUT_MS }, async () => {
+    const { code, out } = await runGate(["--oracle=external"]);
     expect(code).toBe(2);
     expect(out).toContain("requires an explicit --fixture");
   });
 
-  it("rejects an unknown oracle value", () => {
-    const { code, out } = runGate(["--oracle=nonsense", "--fixture=curve-equipped"]);
+  it("rejects an unknown oracle value", { timeout: TEST_TIMEOUT_MS }, async () => {
+    const { code, out } = await runGate(["--oracle=nonsense", "--fixture=curve-equipped"]);
     expect(code).not.toBe(0);
     expect(out).toContain("unknown --oracle value");
   });
