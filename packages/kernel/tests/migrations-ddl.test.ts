@@ -29,6 +29,7 @@ const EXPECTED_TABLES = [
 ];
 const EXPECTED_FULL_TABLES = [
   ...EXPECTED_TABLES,
+  "chat_plan_outbox",
   "plan",
   "plan_adaptation_ledger",
   "plan_conversation",
@@ -48,6 +49,9 @@ const EXPECTED_FULL_TABLES = [
   "plan_workout",
   "plan_workout_drift",
   "plan_workout_match",
+  "planning_request",
+  "planning_request_terminal_result",
+  "planning_request_tombstone",
   "ingest_metadata",
   "repair_log",
   "dedup_confirmation",
@@ -70,6 +74,11 @@ const EXPECTED_FULL_TABLES = [
   "analytics_curve_current",
   "analytics_curve_refresh_failure",
   "activity_analysis_projection",
+  "chat_attachment_object",
+  "chat_attachment",
+  "chat_attachment_draft",
+  "chat_attachment_draft_ref",
+  "chat_message_attachment",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -203,6 +212,10 @@ describe("001_init migration", () => {
       { version: 22, name: "022_plan_weekly_review" },
       { version: 23, name: "023_plan_race_outcome" },
       { version: 24, name: "024_plan_intake" },
+      { version: 25, name: "025_chat_attachments" },
+      { version: 26, name: "026_planning_requests" },
+      { version: 27, name: "027_chat_plan_outbox" },
+      { version: 28, name: "028_plan_workout_additions" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -294,7 +307,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies all migrations with exactly sixty-one tables and no foreign-key violations", () => {
+  it("applies all migrations with exactly seventy tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -304,7 +317,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(61);
+    expect(names).toHaveLength(70);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -552,6 +565,13 @@ describe("001_init migration", () => {
         "analytics_curve_current_insert_clears_failure",
         "analytics_curve_current_update_clears_failure",
         "plan_settings_defaults_after_insert",
+        "planning_request_terminal_result_no_update",
+        "planning_request_terminal_result_no_delete",
+        "planning_request_tombstone_no_update",
+        "planning_request_tombstone_no_delete",
+        "chat_plan_outbox_no_delete",
+        "chat_plan_outbox_cancelled_no_update",
+        "chat_plan_outbox_detached_delivered_no_update",
       ]),
     );
 
@@ -779,6 +799,7 @@ describe("001_init migration", () => {
       { table: "analytics_curve_generation_promotion", orderBy: "generation_id" },
       { table: "anchor_history", orderBy: "id" },
       { table: "athlete", orderBy: "id" },
+      { table: "chat_plan_outbox", orderBy: "request_id" },
       { table: "dedup_confirmation", orderBy: "id" },
       { table: "field_merge_override_overlay", orderBy: "id" },
       { table: "ingest_candidate_index", orderBy: "candidate_id" },
@@ -811,6 +832,9 @@ describe("001_init migration", () => {
       { table: "plan_workout_match", orderBy: "plan_id, activity_date_key, id" },
       { table: "plan_weekly_review", orderBy: "plan_id, week_start_date_key, id" },
       { table: "planned_workout", orderBy: "id" },
+      { table: "planning_request", orderBy: "request_id" },
+      { table: "planning_request_terminal_result", orderBy: "request_id" },
+      { table: "planning_request_tombstone", orderBy: "request_id" },
       { table: "pool_size_correction_overlay", orderBy: "id" },
       { table: "race_goal", orderBy: "id" },
       { table: "raw_file", orderBy: "sha256" },
@@ -829,7 +853,7 @@ describe("001_init migration", () => {
       { table: "workout", orderBy: "workout_key" },
       { table: "zone_set_history", orderBy: "id" },
     ]);
-    expect(DUMP_TABLES).toHaveLength(56);
+    expect(DUMP_TABLES).toHaveLength(60);
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
@@ -886,7 +910,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     }>;
     expect(tables.find((row) => row.name === "sync_failure")?.strict).toBe(1);
     expect(db.prepare("PRAGMA foreign_key_list(sync_failure)").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(56);
+    expect(DUMP_TABLES).toHaveLength(60);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(PURE_AUTHORED_TABLES).not.toContain("sync_failure");
     expect(MIXED_AUTHORED_TABLES).not.toContain("sync_failure");
@@ -945,7 +969,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
       expect(tables.find((row) => row.name === name)?.strict).toBe(1);
     }
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(56);
+    expect(DUMP_TABLES).toHaveLength(60);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("analytics_curve_refresh_failure");
     expect(DERIVED_TABLES).not.toContain("analytics_curve_generation");
   });
@@ -974,6 +998,88 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     ]);
     expect(DUMP_TABLES.map(({ table: name }) => name)).toContain("activity_analysis_projection");
     expect(DERIVED_TABLES).not.toContain("activity_analysis_projection");
+  });
+
+  it("adds strict conversation-owned attachment storage", () => {
+    db = openFull();
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+      wr: number;
+    }>;
+    for (const name of [
+      "chat_attachment_object",
+      "chat_attachment",
+      "chat_attachment_draft",
+      "chat_attachment_draft_ref",
+      "chat_message_attachment",
+    ]) {
+      expect(tables.find((row) => row.name === name)).toMatchObject({ strict: 1, wr: 1 });
+    }
+    const indexes = new Set(
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{
+          name: string;
+        }>
+      ).map(({ name }) => name),
+    );
+    expect(indexes).toContain("idx_chat_attachment_object_live_digest");
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("chat_attachment");
+    expect(PURE_AUTHORED_TABLES).not.toContain("chat_attachment" as never);
+  });
+
+  it("adds strict durable Planning request storage", () => {
+    db = openFull();
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+    }>;
+    for (const name of [
+      "planning_request",
+      "planning_request_terminal_result",
+      "planning_request_tombstone",
+    ]) {
+      expect(tables.find((row) => row.name === name)?.strict).toBe(1);
+    }
+    expect(db.prepare("PRAGMA foreign_key_list(planning_request)").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "plan_conversation", on_delete: "SET NULL" }),
+        expect.objectContaining({ table: "plan_proposal", on_delete: "SET NULL" }),
+      ]),
+    );
+    expect(
+      db.prepare("PRAGMA foreign_key_list(planning_request_terminal_result)").all(),
+    ).toContainEqual(expect.objectContaining({ table: "planning_request", on_delete: "CASCADE" }));
+    expect(db.prepare("PRAGMA foreign_key_list(planning_request_tombstone)").all()).toContainEqual(
+      expect.objectContaining({ table: "planning_request", on_delete: "CASCADE" }),
+    );
+    expect(PURE_AUTHORED_TABLES).toEqual(
+      expect.arrayContaining([
+        "planning_request",
+        "planning_request_terminal_result",
+        "planning_request_tombstone",
+      ]),
+    );
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("adds strict durable Chat Plan outbox storage", () => {
+    db = openFull();
+    const table = (
+      db.prepare("PRAGMA table_list").all() as Array<{ name: string; strict: number }>
+    ).find((row) => row.name === "chat_plan_outbox");
+    expect(table?.strict).toBe(1);
+    expect(db.prepare("PRAGMA foreign_key_list(chat_plan_outbox)").all()).toEqual([]);
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_chat_plan_outbox_recoverable'",
+        )
+        .get(),
+    ).toEqual({ name: "idx_chat_plan_outbox_recoverable" });
+    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain("chat_plan_outbox");
+    expect(PURE_AUTHORED_TABLES).toContain("chat_plan_outbox");
   });
 
   it("adds strict authored Plan and Plan Workout tables without changing planned_workout", () => {

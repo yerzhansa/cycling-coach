@@ -68,6 +68,36 @@ const planReadModel = {
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
   ["stopChat", { chatId: "chat-1", turnId: "turn-1" }, 10_000],
+  [
+    "admitChatAttachment",
+    {
+      chatId: "desktop",
+      selectionId: "selection-1",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath: "/tmp/activity.fit" },
+    },
+    120_000,
+  ],
+  [
+    "admitPastedChatAttachment",
+    {
+      chatId: "desktop",
+      selectionId: "selection-paste-1",
+      displayName: "clipboard.png",
+      dataBase64: "AA==",
+    },
+    120_000,
+  ],
+  ["getChatAttachmentComposer", { chatId: "desktop" }, 120_000],
+  ["saveChatAttachmentDraftText", { chatId: "desktop", text: "Review this" }, 30_000],
+  ["removeChatAttachment", { chatId: "desktop", attachmentId: "attachment-1" }, 30_000],
+  ["retryChatAttachment", { chatId: "desktop", attachmentId: "attachment-1" }, 120_000],
+  [
+    "selectChatAttachmentWorkout",
+    { chatId: "desktop", attachmentId: "attachment-1", workoutId: "workout-1" },
+    120_000,
+  ],
+  ["clearChatAttachmentDraft", { chatId: "desktop" }, 120_000],
   ["enqueueChatMessage", { chatId: "chat-1", submissionId: "submission-1", text: "Hello" }, 30_000],
   ["getChatQueue", { chatId: "chat-1" }, 30_000],
   ["removeQueuedChatMessage", { chatId: "chat-1", queuedMessageId: "queued-1" }, 30_000],
@@ -92,6 +122,7 @@ const rpcDeadlineCases = [
   ["listArchivedConversations", {}, 30_000],
   ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
+  ["getPlanningReadModel", {}, 30_000],
   [
     "getActivityAnalysis",
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
@@ -154,6 +185,41 @@ const rpcDeadlineCases = [
     { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
     660_000,
   ],
+  [
+    "createPlanningRequest",
+    {
+      payload: {
+        requestId: "request-1",
+        kind: "plan_question",
+        intent: "Review the current week.",
+        source: { chatId: "chat-1", messageId: "message-1" },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: null,
+          selectedWorkout: null,
+        },
+      },
+    },
+    30_000,
+  ],
+  [
+    "createWorkoutPlanningRequest",
+    {
+      requestId: "request-workout",
+      intent: "Review Tempo 3 × 12.",
+      source: {
+        chatId: "chat-1",
+        messageId: "message-workout",
+        attachmentId: "attachment-1",
+      },
+      requestedDate: "1998-08-26",
+    },
+    30_000,
+  ],
+  ["getPlanningRequest", { requestId: "request-1" }, 30_000],
+  ["retryPlanningRequest", { requestId: "request-1" }, 30_000],
+  ["resumePlanningRequests", {}, 30_000],
+  ["listPlanningRequests", { chatId: "chat-1" }, 30_000],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -833,6 +899,24 @@ describe("RPC receive and observers", () => {
         coachText: "Keep tomorrow easy.",
       },
     };
+    const attachmentComposer = {
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "2026-08-26T00:00:00.000Z",
+        },
+      },
+      draft: null,
+    };
     socket.sendHook = (text) => {
       const request = parseCoachRpcEnvelope(text);
       received.push(request);
@@ -840,6 +924,26 @@ describe("RPC receive and observers", () => {
       const results = {
         chat: { text: "answer" },
         stopChat: { stopped: true },
+        admitChatAttachment: {
+          selectionId: "selection-1",
+          displayName: "activity.fit",
+          status: "storage_failed",
+          failureCode: "admission_unavailable",
+          retryable: false,
+        },
+        admitPastedChatAttachment: {
+          selectionId: "selection-paste-1",
+          displayName: "clipboard.png",
+          status: "storage_failed",
+          failureCode: "admission_unavailable",
+          retryable: false,
+        },
+        getChatAttachmentComposer: attachmentComposer,
+        saveChatAttachmentDraftText: attachmentComposer,
+        removeChatAttachment: attachmentComposer,
+        retryChatAttachment: attachmentComposer,
+        selectChatAttachmentWorkout: attachmentComposer,
+        clearChatAttachmentDraft: attachmentComposer,
         enqueueChatMessage: { schemaVersion: 1, revision: 1, items: [] },
         getChatQueue: { schemaVersion: 1, revision: 1, items: [] },
         removeQueuedChatMessage: { schemaVersion: 1, revision: 2, items: [] },
@@ -881,6 +985,12 @@ describe("RPC receive and observers", () => {
           recentActivities: [],
           plannedWorkouts: [],
           wellness: {},
+        },
+        getPlanningReadModel: {
+          schemaVersion: 1,
+          status: "no-plan",
+          asOfDateKey: 20260826,
+          plan: null,
         },
         getActivityAnalysis: {
           schemaVersion: 1,
@@ -1052,6 +1162,12 @@ describe("RPC receive and observers", () => {
           status: "unsupported-capability",
           capability: "planning",
         },
+        createPlanningRequest: { status: "rejected", reason: "invalid_request" },
+        createWorkoutPlanningRequest: { status: "rejected", reason: "invalid_request" },
+        getPlanningRequest: { status: "missing" },
+        retryPlanningRequest: { status: "missing" },
+        resumePlanningRequests: { deliveries: [] },
+        listPlanningRequests: { deliveries: [] },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -1064,9 +1180,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("chat", { chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "answer",
     });
-    await expect(
-      client.call("stopChat", { chatId: "chat-1", turnId: "turn-1" }),
-    ).resolves.toEqual({
+    await expect(client.call("stopChat", { chatId: "chat-1", turnId: "turn-1" })).resolves.toEqual({
       stopped: true,
     });
     await expect(client.call("resetSession", { chatId: "chat-1" })).resolves.toEqual({
@@ -1673,46 +1787,49 @@ describe("RPC receive and observers", () => {
       ],
       observedEvents: 1,
     },
-  ])("fails closed on Planning $name correlation mismatches", async ({ frames, observedEvents }) => {
-    const { socket, connecting } = acceptedSocket();
-    const client = await connecting;
-    socket.sendHook = () => {};
-    const events: unknown[] = [];
-    const operation = client.call(
-      "executePlanTransition",
-      { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
-      { onEvent: (event) => events.push(event) },
-    );
-    for (const frame of frames) {
-      socket.emitMessage(
-        frame.kind === "progress"
-          ? serializeCoachRpcEnvelope({
-              jsonrpc: "2.0",
-              method: "coach.planProgress",
-              params: {
-                requestId: 1,
-                requestMethod: "executePlanTransition",
-                event: frame.event,
-              },
-            })
-          : serializeCoachRpcEnvelope({
-              jsonrpc: "2.0",
-              id: 1,
-              result: {
-                status: "accepted",
-                operationId: frame.operationId,
-                state: planReadModel,
-              },
-            }),
+  ])(
+    "fails closed on Planning $name correlation mismatches",
+    async ({ frames, observedEvents }) => {
+      const { socket, connecting } = acceptedSocket();
+      const client = await connecting;
+      socket.sendHook = () => {};
+      const events: unknown[] = [];
+      const operation = client.call(
+        "executePlanTransition",
+        { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
+        { onEvent: (event) => events.push(event) },
       );
-    }
-    await expect(operation).rejects.toBeInstanceOf(CoachClientProtocolError);
-    expect(events).toHaveLength(observedEvents);
-    expect(socket.closeCalls).toHaveLength(1);
-    const closing = client.close();
-    socket.emitClose(1002, "protocol");
-    await closing;
-  });
+      for (const frame of frames) {
+        socket.emitMessage(
+          frame.kind === "progress"
+            ? serializeCoachRpcEnvelope({
+                jsonrpc: "2.0",
+                method: "coach.planProgress",
+                params: {
+                  requestId: 1,
+                  requestMethod: "executePlanTransition",
+                  event: frame.event,
+                },
+              })
+            : serializeCoachRpcEnvelope({
+                jsonrpc: "2.0",
+                id: 1,
+                result: {
+                  status: "accepted",
+                  operationId: frame.operationId,
+                  state: planReadModel,
+                },
+              }),
+        );
+      }
+      await expect(operation).rejects.toBeInstanceOf(CoachClientProtocolError);
+      expect(events).toHaveLength(observedEvents);
+      expect(socket.closeCalls).toHaveLength(1);
+      const closing = client.close();
+      socket.emitClose(1002, "protocol");
+      await closing;
+    },
+  );
 
   it.each([-32700, -32600] as const)(
     "treats null-id protocol error %s as connection-wide",

@@ -8,7 +8,8 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./migrate": "./dist/migrate.js"
+    "./migrate": "./dist/migrate.js",
+    "./workout-import": "./dist/workout-import/index.js"
   },
   "files": [
     "dist"

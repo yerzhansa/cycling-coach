@@ -1,6 +1,9 @@
 import type {
+  ChatAttachmentComposerItem,
   ChatQueueRecoveryClaim,
   ChatQueueSnapshot,
+  PlanReferenceSelection,
+  PlanHandoffSuggestion,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import { isSlashCommandText } from "./chat/commands.js";
@@ -45,18 +48,28 @@ export interface ChatTranscriptMessage {
   readonly text: string;
   readonly delivery: "complete" | "streaming" | "interrupted";
   readonly historical?: boolean;
+  readonly attachments?: readonly ChatSentAttachment[];
+  readonly planReference?: PlanReferenceSelection;
+  readonly planHandoff?: PlanHandoffSuggestion;
 }
+
+export type ChatSentAttachment = Pick<
+  ChatAttachmentComposerItem,
+  "attachmentId" | "displayName" | "kind" | "extension"
+>;
 
 export interface QueuedMessage {
   readonly id: string;
   readonly text: string;
   readonly command: boolean;
   readonly restored?: boolean;
+  readonly attachmentIds?: readonly string[];
 }
 
 export interface ChatDrainGroup {
   readonly size: number;
   readonly text: string;
+  readonly attachmentIds: readonly string[];
 }
 
 export interface ChatState {
@@ -93,6 +106,7 @@ export type ChatAction =
       readonly userMessageId: string;
       readonly assistantMessageId: string;
       readonly includeUser: boolean;
+      readonly attachments?: readonly ChatSentAttachment[];
     }
   | { readonly type: "bind-turn"; readonly requestKey: number; readonly turnId: string }
   | { readonly type: "bind-decision"; readonly requestKey: number; readonly decisionId: string }
@@ -155,6 +169,9 @@ export function nextDrainGroup(state: ChatState): ChatDrainGroup | null {
       .slice(0, size)
       .map((message) => message.text)
       .join(QUEUED_MESSAGE_SEPARATOR),
+    attachmentIds: [
+      ...new Set(state.queued.slice(0, size).flatMap((message) => message.attachmentIds ?? [])),
+    ],
   };
 }
 
@@ -183,6 +200,9 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
               role: "athlete" as const,
               text: action.userMessage,
               delivery: "complete" as const,
+              ...(action.attachments === undefined || action.attachments.length === 0
+                ? {}
+                : { attachments: action.attachments }),
             },
             assistant,
           ]
@@ -266,6 +286,28 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             messages: hasText
               ? updateAssistant(state, next, action.event.text, "streaming")
               : state.messages,
+          };
+        }
+        case "plan-reference": {
+          const selection = action.event.selection;
+          return {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.assistantMessageId
+                ? { ...message, planReference: selection }
+                : message,
+            ),
+          };
+        }
+        case "plan-handoff": {
+          const suggestion = action.event.suggestion;
+          return {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.assistantMessageId
+                ? { ...message, planHandoff: suggestion }
+                : message,
+            ),
           };
         }
         case "error":
@@ -383,6 +425,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             text: item.text,
             command: item.kind === "slash-command",
             restored: item.restored,
+            attachmentIds: item.attachmentIds,
           })),
         retryRequired: action.snapshot.retryRequired ?? null,
       };
@@ -402,7 +445,11 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         ...state,
         queued: [
           ...state.queued,
-          { id: action.id, text: action.text, command: isSlashCommandText(action.text) },
+          {
+            id: action.id,
+            text: action.text,
+            command: isSlashCommandText(action.text),
+          },
         ],
       };
     }

@@ -16,6 +16,7 @@ interface EnduragentAuth {
     readonly cursor: string | null;
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
+  getPlanningReadModel(): Promise<DesktopPlanningReadModel>;
   getPlanState(): Promise<DesktopPlanStateResult>;
   executePlanTransition(input: DesktopPlanTransitionCommand): Promise<DesktopPlanTransitionResult>;
   onPlanProgress(listener: (progress: DesktopPlanProgressEvent) => void): () => void;
@@ -60,6 +61,11 @@ interface EnduragentAuth {
   acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   setAppearance(appearance: "system" | "light" | "dark"): void;
   chooseImportFiles(): Promise<readonly string[]>;
+  chooseChatAttachments(): Promise<readonly DesktopAttachmentAdmission[]>;
+  pasteChatAttachment(): Promise<readonly DesktopAttachmentAdmission[]>;
+  onDroppedChatAttachments(
+    listener: (results: readonly DesktopAttachmentAdmission[]) => void,
+  ): () => void;
   choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
@@ -70,6 +76,9 @@ interface EnduragentAuth {
 }
 
 type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
+type DesktopAttachmentAdmission = import("@enduragent/coach-contract").AttachmentAdmissionReadModel;
+type DesktopAttachmentReference = import("@enduragent/coach-contract").ChatAttachmentReference;
+type DesktopPlanningReadModel = import("@enduragent/coach-contract").PlanningReadModel;
 type DesktopPlanStateResult = import("@enduragent/coach-contract").GetPlanStateRpcResult;
 type DesktopPlanTransitionCommand =
   import("@enduragent/coach-contract").ExecutePlanTransitionRpcParams;
@@ -136,6 +145,7 @@ interface DesktopTranscriptTurn {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly attachments?: DesktopAttachmentReference[];
 }
 
 interface DesktopArchivedConversationSummary {

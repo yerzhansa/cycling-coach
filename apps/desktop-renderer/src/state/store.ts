@@ -38,12 +38,12 @@ export interface EnduragentState
     ArchiveSlice,
     SettingsSlice,
     TrainingSlice,
+    PlanSlice,
     TrainingExportSlice,
     ActivityAnalysisSlice,
     SyncSlice,
     RideImportSlice,
-    OnboardingSlice,
-    PlanSlice {
+    OnboardingSlice {
   readonly activeView: StoredViewId;
   readonly paletteId: string;
   readonly appearance: Appearance;
@@ -70,12 +70,12 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createArchiveSlice(set, get, api),
   ...createSettingsSlice(set, get, api),
   ...createTrainingSlice(set, get, api),
+  ...createPlanSlice(set, get, api),
   ...createTrainingExportSlice(set, get, api),
   ...createActivityAnalysisSlice(set, get, api),
   ...createSyncSlice(set, get, api),
   ...createRideImportSlice(set, get, api),
   ...createOnboardingSlice(set, get, api),
-  ...createPlanSlice(set, get, api),
   activeView: "chat",
   paletteId: readStoredPaletteId(),
   appearance: readStoredAppearance(),

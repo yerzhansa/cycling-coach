@@ -22,6 +22,10 @@ import planReplacement021 from "./021_plan_replacement.sql";
 import planWeeklyReview022 from "./022_plan_weekly_review.sql";
 import planRaceOutcome023 from "./023_plan_race_outcome.sql";
 import planIntake024 from "./024_plan_intake.sql";
+import chatAttachments025 from "./025_chat_attachments.sql";
+import planningRequests026 from "./026_planning_requests.sql";
+import chatPlanOutbox027 from "./027_chat_plan_outbox.sql";
+import planWorkoutAdditions028 from "./028_plan_workout_additions.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -61,4 +65,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 22, name: "022_plan_weekly_review", sql: planWeeklyReview022 },
   { version: 23, name: "023_plan_race_outcome", sql: planRaceOutcome023 },
   { version: 24, name: "024_plan_intake", sql: planIntake024 },
+  { version: 25, name: "025_chat_attachments", sql: chatAttachments025 },
+  { version: 26, name: "026_planning_requests", sql: planningRequests026 },
+  { version: 27, name: "027_chat_plan_outbox", sql: chatPlanOutbox027 },
+  { version: 28, name: "028_plan_workout_additions", sql: planWorkoutAdditions028 },
 ];

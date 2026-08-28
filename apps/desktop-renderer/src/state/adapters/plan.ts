@@ -36,6 +36,7 @@ export interface PlanBridge {
 export interface PlanViewAdapter {
   start(): void;
   open(): void;
+  openChatRequest(sourceConversationId: string, requestId: string): void;
   startPlan(): void;
   closeCoach(): void;
   submitCoach(message: string): Promise<boolean>;
@@ -89,6 +90,12 @@ export interface PlanViewAdapter {
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
+  resolvePlanningRequestDate(
+    requestId: string,
+    resolution:
+      | { readonly kind: "use-date"; readonly date: string }
+      | { readonly kind: "replace-workout"; readonly workoutId: string },
+  ): void;
   openHistory(): void;
   closeHistory(): void;
   undoPlanChange(ledgerId: string): void;
@@ -622,6 +629,15 @@ export function createPlanViewAdapter(input: {
       void refresh(true);
     },
     open,
+    openChatRequest(sourceConversationId, requestId) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T36",
+        commandId: createCommandId(),
+        sourceConversationId,
+        requestId,
+      });
+    },
     startPlan,
     closeCoach() {
       const model = planReadModel(input.read());
@@ -1226,6 +1242,15 @@ export function createPlanViewAdapter(input: {
         ...(selectedProposalReturn === null || selectedProposalReturn === undefined
           ? {}
           : { selectedProposalReturn }),
+      });
+    },
+    resolvePlanningRequestDate(requestId, resolution) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T40",
+        commandId: createCommandId(),
+        requestId,
+        resolution,
       });
     },
     openHistory() {

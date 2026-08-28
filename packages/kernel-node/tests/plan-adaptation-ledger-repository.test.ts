@@ -65,6 +65,7 @@ function appliedRecord(
     id: id(3),
     planId: PLAN_ID,
     targetWorkoutId: WORKOUT_ID,
+    operation: "update",
     kind: "proposal-applied",
     sourceId: id(8),
     reversalOfId: null,
@@ -87,6 +88,7 @@ function undoRecord(): PlanAdaptationLedgerRecord {
     id: id(4),
     planId: PLAN_ID,
     targetWorkoutId: WORKOUT_ID,
+    operation: "update",
     kind: "undo",
     sourceId: applied.id,
     reversalOfId: applied.id,
@@ -135,6 +137,67 @@ describe("Plan adaptation ledger repository", () => {
         expect.objectContaining({ id: id(3), kind: "proposal-applied" }),
       ],
     );
+  });
+
+  it("atomically removes an added Workout on Undo while preserving both history entries", async () => {
+    const repository = createPlanAdaptationLedgerRepository(store);
+    const plans = createPlanRepository(store);
+    const addedWorkout: PlanWorkoutRecord = {
+      ...appliedWorkout,
+      name: "Tempo 3 × 12",
+      durationS: 3_840,
+      structureJson: JSON.stringify({ intervals: [{ repetitions: 3, durationS: 720 }] }),
+    };
+    await plans.replace(plan, [addedWorkout]);
+    const addition: PlanAdaptationLedgerRecord = {
+      ...appliedRecord(),
+      operation: "add",
+      label: "Tempo 3 × 12 added",
+      beforeJson: null,
+      afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(addedWorkout)),
+    };
+    await repository.append(addition);
+    const undo: PlanAdaptationLedgerRecord = {
+      id: id(4),
+      planId: PLAN_ID,
+      targetWorkoutId: WORKOUT_ID,
+      operation: "remove",
+      kind: "undo",
+      sourceId: addition.id,
+      reversalOfId: addition.id,
+      label: "Tempo 3 × 12 added undone",
+      beforeJson: addition.afterJson,
+      afterJson: null,
+      weekLoadBefore: addition.weekLoadAfter,
+      weekLoadAfter: addition.weekLoadBefore,
+      occurredAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    };
+
+    await expect(
+      repository.reverse({
+        targetId: addition.id,
+        expectedPlanUpdatedAtMs: 20,
+        expectedPlanHlcPhysicalMs: 20,
+        expectedPlanHlcCounter: 0,
+        expectedWorkout: addedWorkout,
+        nextWorkout: null,
+        undo,
+        mirrorJob: {
+          id: id(6),
+          windowStartDateKey: 20260826,
+          windowEndDateKey: 20260901,
+          createdAtMs: 30,
+        },
+      }),
+    ).resolves.toMatchObject({ operation: "remove", kind: "undo" });
+    await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([]);
+    await expect(repository.readForPlan(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ id: undo.id, operation: "remove", afterJson: null }),
+      expect.objectContaining({ id: addition.id, operation: "add", beforeJson: null }),
+    ]);
   });
 
   it("atomically restores the exact snapshot, appends one inverse, and queues reconciliation", async () => {

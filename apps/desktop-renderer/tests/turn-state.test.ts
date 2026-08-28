@@ -33,9 +33,11 @@ describe("desktop turn state", () => {
   it("keeps an active durable claim hidden across newer queue snapshots", () => {
     const item = (id: string, position: number) => ({
       queuedMessageId: id,
+      messageId: `message-${id}`,
       submissionId: `submission-${id}`,
       text: id,
       kind: "ordinary" as const,
+      attachmentIds: [],
       position,
       restored: false,
     });
@@ -76,9 +78,11 @@ describe("desktop turn state", () => {
       items: [
         {
           queuedMessageId: "queued-1",
+          messageId: "message-1",
           submissionId: "submission-1",
           text: "Later",
           kind: "ordinary" as const,
+          attachmentIds: [],
           position: 0,
           restored: false,
         },
@@ -151,6 +155,23 @@ describe("desktop turn state", () => {
       event: { type: "final-text", turnId: "turn-1", text: "Ride easy." },
     });
     expect(state.progress).toBe("Checking your training data…");
+  });
+
+  it("binds a typed Plan reference to the active coach message", () => {
+    const state = reduceChatState(started(), {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "plan-reference",
+        turnId: "turn-1",
+        selection: { kind: "current_week", planId: "plan-1", weekNumber: 1 },
+      },
+    });
+    expect(state.messages.at(-1)?.planReference).toEqual({
+      kind: "current_week",
+      planId: "plan-1",
+      weekNumber: 1,
+    });
   });
 
   it.each(["", " \n\t"])(
@@ -597,13 +618,13 @@ describe("desktop message queue", () => {
   it("coalesces consecutive free text and gives each command its own drain group", () => {
     let state = queued(started(), "one", "two", "/plan", "three", "four", "/status");
 
-    expect(nextDrainGroup(state)).toEqual({ size: 2, text: "one\n\ntwo" });
+    expect(nextDrainGroup(state)).toEqual({ size: 2, text: "one\n\ntwo", attachmentIds: [] });
     state = reduceChatState(state, { type: "dequeue-group" });
-    expect(nextDrainGroup(state)).toEqual({ size: 1, text: "/plan" });
+    expect(nextDrainGroup(state)).toEqual({ size: 1, text: "/plan", attachmentIds: [] });
     state = reduceChatState(state, { type: "dequeue-group" });
-    expect(nextDrainGroup(state)).toEqual({ size: 2, text: "three\n\nfour" });
+    expect(nextDrainGroup(state)).toEqual({ size: 2, text: "three\n\nfour", attachmentIds: [] });
     state = reduceChatState(state, { type: "dequeue-group" });
-    expect(nextDrainGroup(state)).toEqual({ size: 1, text: "/status" });
+    expect(nextDrainGroup(state)).toEqual({ size: 1, text: "/status", attachmentIds: [] });
     state = reduceChatState(state, { type: "dequeue-group" });
 
     expect(state.queued).toEqual([]);
@@ -622,7 +643,11 @@ describe("desktop message queue", () => {
 
     expect(completed.status).toBe("idle");
     expect(completed.queued).toBe(state.queued);
-    expect(nextDrainGroup(completed)).toEqual({ size: 1, text: "Next question" });
+    expect(nextDrainGroup(completed)).toEqual({
+      size: 1,
+      text: "Next question",
+      attachmentIds: [],
+    });
   });
 
   it.each([

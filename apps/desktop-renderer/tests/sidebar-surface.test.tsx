@@ -22,6 +22,19 @@ import { planReadModel } from "./plan-fixtures.js";
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    chooseAttachments: vi.fn(),
+    pasteAttachment: vi.fn(),
+    receiveAttachmentAdmissions: vi.fn(),
+    saveAttachmentDraftText: vi.fn(),
+    removeAttachment: vi.fn(),
+    retryAttachment: vi.fn(),
+    selectAttachmentWorkout: vi.fn(),
+    reviewAttachmentInPlan: vi.fn(),
+    continueMessageInPlan: vi.fn(),
+    openPlanningRequest: vi.fn(),
+    retryPlanningRequest: vi.fn(),
+    retryPlanningRequestLoad: vi.fn(),
+    clearPlanningRequestFocus: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -111,6 +124,7 @@ function stubPlanActions(): PlanActions {
     openRaceOutcome: vi.fn(),
     recordRaceOutcome: vi.fn(),
     openAttention: vi.fn(),
+    resolvePlanningRequestDate: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };

@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
+import type {
+  AttachmentCapabilitiesReadModel,
+  ChatAttachmentComposerReadModel,
+  CoachDecisionReadModel,
+  PlanningRequestDelivery,
+  PlanningRequestReadModel,
+} from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
@@ -22,6 +28,19 @@ import { ChatView } from "../src/ui/chat/ChatView.js";
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(async () => true),
+    chooseAttachments: vi.fn(),
+    pasteAttachment: vi.fn(),
+    receiveAttachmentAdmissions: vi.fn(),
+    saveAttachmentDraftText: vi.fn(),
+    removeAttachment: vi.fn(),
+    retryAttachment: vi.fn(),
+    selectAttachmentWorkout: vi.fn(),
+    reviewAttachmentInPlan: vi.fn(),
+    continueMessageInPlan: vi.fn(),
+    openPlanningRequest: vi.fn(),
+    retryPlanningRequest: vi.fn(),
+    retryPlanningRequestLoad: vi.fn(),
+    clearPlanningRequestFocus: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -53,6 +72,101 @@ function composer(): HTMLTextAreaElement {
   const element = document.querySelector("textarea#message");
   if (!(element instanceof HTMLTextAreaElement)) throw new TypeError("composer missing");
   return element;
+}
+
+const ATTACHMENT_CAPABILITIES: AttachmentCapabilitiesReadModel = {
+  schemaVersion: 1,
+  active: { provider: "test", model: "vision", transport: "test" },
+  documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+  completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+  plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+  images: {
+    enabled: true,
+    mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+    reason: "supported",
+    source: "maintained_catalogue",
+    checkedAt: "2026-08-26T00:00:00.000Z",
+  },
+};
+
+function attachmentSurface(
+  attachment: NonNullable<ChatAttachmentComposerReadModel["draft"]>["attachments"][number],
+  text = "Review this",
+  state: "active" | "restored" = "active",
+): ChatAttachmentComposerReadModel {
+  return {
+    schemaVersion: 1,
+    capabilities: ATTACHMENT_CAPABILITIES,
+    draft: {
+      schemaVersion: 1,
+      chatId: "desktop",
+      text,
+      state,
+      updatedAt: "2026-08-26T00:00:00.000Z",
+      attachments: [attachment],
+    },
+  };
+}
+
+function planningDelivery(
+  lifecycle: "open" | "applied" | "rejected" = "open",
+): PlanningRequestDelivery {
+  const terminal: PlanningRequestReadModel["terminalResult"] =
+    lifecycle === "applied"
+      ? {
+          kind: "applied",
+          resultId: "result-1",
+          completedAtMs: 3,
+          title: "Added to Plan",
+          detail: "Tempo 3 × 12 · Wednesday · 64 min",
+          workoutRef: { setId: "set-1", workoutId: "tempo" },
+          planRevisionId: "revision-1",
+        }
+      : lifecycle === "rejected"
+        ? {
+            kind: "rejected",
+            resultId: "result-1",
+            completedAtMs: 3,
+            title: "Proposal rejected",
+            detail: "The active Plan remains unchanged.",
+            workoutRef: { setId: "set-1", workoutId: "tempo" },
+            planRevisionId: null,
+          }
+        : null;
+  return {
+    requestId: "request-plan-1",
+    source: {
+      kind: "workout_review",
+      intent: "Review Tempo 3 × 12 in Plan.",
+      chatId: "desktop",
+      messageId: "message-plan-1",
+      attachmentId: "attachment-workout",
+    },
+    state: "delivered",
+    attemptCount: 1,
+    failureCode: null,
+    retryable: false,
+    createdAtMs: 1,
+    updatedAtMs: 3,
+    deliveredAtMs: 2,
+    planningRequest: {
+      requestId: "request-plan-1",
+      kind: "workout_review",
+      target: "active_plan",
+      intent: "Review Tempo 3 × 12 in Plan.",
+      planConversationId: "plan-conversation-1",
+      proposalId: lifecycle === "open" ? "proposal-1" : null,
+      requestedDateKey: null,
+      resolvedDateKey: null,
+      source: { chatId: "desktop", messageId: "message-plan-1", available: true },
+      lifecycle,
+      attention: lifecycle === "open" ? "needs_review" : "none",
+      revision: 1,
+      createdAtMs: 1,
+      updatedAtMs: 3,
+      terminalResult: terminal,
+    },
+  };
 }
 
 function unansweredDecision(): Extract<CoachDecisionReadModel, { status: "unanswered" }> {
@@ -92,6 +206,10 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       training: EMPTY_TRAINING_SURFACE,
+      planSurface: { status: "loading", value: null },
+      planFocus: null,
+      planReturnToChat: false,
+      planActions: null,
       chatActions: actions,
       onboarding: READY_ONBOARDING,
     });
@@ -102,6 +220,10 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       training: EMPTY_TRAINING_SURFACE,
+      planSurface: { status: "loading", value: null },
+      planFocus: null,
+      planReturnToChat: false,
+      planActions: null,
       chatActions: null,
       onboarding: CLOSED_ONBOARDING,
     });
@@ -309,6 +431,57 @@ describe("chat surface", () => {
     it("projects only available workout, Load, and cycling-anchor facts", () => {
       act(() => {
         useEnduragentStore.setState({
+          planSurface: {
+            status: "ready",
+            value: {
+              schemaVersion: 1,
+              status: "ready",
+              asOfDateKey: 19980825,
+              plan: {
+                id: "plan-1",
+                name: "Eight-week consistency",
+                goal: "Build consistency",
+                lifecycle: "active",
+                startDateKey: 19980824,
+                targetDateKey: null,
+                currentWeek: 1,
+                totalWeeks: 8,
+                phase: "Base",
+                weekStartDateKey: 19980824,
+                weekEndDateKey: 19980830,
+                workouts: [
+                  {
+                    id: "workout-1",
+                    dateKey: 19980825,
+                    sport: "cycling",
+                    name: "Tempo builder",
+                    durationSeconds: 3_600,
+                    origin: "coach",
+                    navigation: { destination: "plan", focus: "workout", entityId: "workout-1" },
+                  },
+                  {
+                    id: "workout-2",
+                    dateKey: 19980827,
+                    sport: "cycling",
+                    name: "Recovery spin",
+                    durationSeconds: 2_700,
+                    origin: "coach",
+                    navigation: { destination: "plan", focus: "workout", entityId: "workout-2" },
+                  },
+                ],
+                todayWorkout: {
+                  id: "workout-1",
+                  dateKey: 19980825,
+                  sport: "cycling",
+                  name: "Tempo builder",
+                  durationSeconds: 3_600,
+                  origin: "coach",
+                  navigation: { destination: "plan", focus: "workout", entityId: "workout-1" },
+                },
+                navigation: { destination: "plan", focus: "active-plan", entityId: "plan-1" },
+              },
+            },
+          },
           training: {
             ...EMPTY_TRAINING_SURFACE,
             status: "ready",
@@ -369,8 +542,9 @@ describe("chat surface", () => {
       render(<Harness />);
       const context = screen.getByRole("complementary", { name: "Training context" });
       expect(context).toHaveTextContent("Tempo builder");
-      expect(context).toHaveTextContent("1998-08-25 · Tempo");
-      expect(context).toHaveTextContent("2 scheduled workouts");
+      expect(context).toHaveTextContent("60 min · cycling");
+      expect(context).toHaveTextContent("Eight-week consistency");
+      expect(context).toHaveTextContent("Week 1 of 8 · Base");
       expect(context).toHaveTextContent("4 cycling activities · 7 days");
       expect(context).toHaveTextContent("182 W");
       expect(context).not.toHaveTextContent(/Fitness|Fatigue|Form|Memory|Updated|Fresh 2m/u);
@@ -632,6 +806,301 @@ describe("chat surface", () => {
       render(<Harness />);
       expect(screen.queryByRole("group", { name: "Coaching shortcuts" })).toBeNull();
       expect(screen.queryByRole("button", { name: /command$/u })).toBeNull();
+    });
+  });
+
+  describe("attachments", () => {
+    it("restores document text and sends the stable attachment without requiring message text", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: attachmentSurface(
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-doc",
+            displayName: "training-notes.pdf",
+            kind: "document",
+            extension: "pdf",
+            byteSize: 1_800_000,
+            status: "ready",
+            preview: { kind: "document", extractedTextChars: 12_000, visualPageCount: 0 },
+          },
+          "",
+          "restored",
+        ),
+      });
+      render(<Harness />);
+
+      expect(screen.getByLabelText("training-notes.pdf attachment")).toBeVisible();
+      expect(screen.getByText("Stored locally")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Send message" }));
+      expect(actions.saveAttachmentDraftText).toHaveBeenCalledWith("");
+      expect(actions.submit).toHaveBeenCalledWith("", ["attachment-doc"]);
+    });
+
+    it("previews a completed activity and keeps Remove scoped to that attachment", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-fit",
+          displayName: "sunday-endurance.fit",
+          kind: "activity",
+          extension: "fit",
+          byteSize: 842_000,
+          status: "ready",
+          preview: {
+            kind: "activity",
+            sourceFormat: "fit",
+            sessions: [
+              {
+                sport: "cycling",
+                startUtc: 1_777_000_000,
+                durationSeconds: 8_040,
+                distanceMeters: 68_400,
+              },
+            ],
+          },
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Will add to Training when sent")).toBeVisible();
+      expect(screen.getByText("68.4 km")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Remove" }));
+      expect(actions.removeAttachment).toHaveBeenCalledWith("attachment-fit");
+    });
+
+    it("requires and records one planned-Workout selection", async () => {
+      const user = userEvent.setup();
+      setChat({
+        sendDisabled: true,
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-workout",
+          displayName: "workouts.zwo",
+          kind: "workout",
+          extension: "zwo",
+          byteSize: 2_400,
+          status: "ready",
+          preview: {
+            kind: "workout",
+            sourceFormat: "zwo",
+            selectedWorkoutId: null,
+            workouts: [
+              {
+                workoutId: "vo2",
+                title: "VO₂ step builder",
+                durationSeconds: 3_300,
+                target: "105–120% FTP",
+                purpose: "Build aerobic power",
+              },
+              {
+                workoutId: "tempo",
+                title: "Tempo 3 × 12",
+                durationSeconds: 3_840,
+                target: "88–92% FTP",
+                purpose: "Sustainable power",
+              },
+            ],
+          },
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: /Tempo 3 × 12/u }));
+      expect(actions.selectAttachmentWorkout).toHaveBeenCalledWith("attachment-workout", "tempo");
+    });
+
+    it("offers the selected Workout to Plan without changing the Send path", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planningRequestsLoaded: true,
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-workout",
+          displayName: "tempo.mrc",
+          kind: "workout",
+          extension: "mrc",
+          byteSize: 2_400,
+          status: "ready",
+          preview: {
+            kind: "workout",
+            sourceFormat: "mrc",
+            selectedWorkoutId: "tempo",
+            workouts: [
+              {
+                workoutId: "tempo",
+                title: "Tempo 3 × 12",
+                durationSeconds: 3_840,
+                target: "88–92% FTP",
+                purpose: "Sustainable power",
+              },
+            ],
+          },
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Tempo 3 × 12 selected")).toBeVisible();
+      expect(screen.getByText(/Send asks Coach to analyze it/u)).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Review in Plan" }));
+      expect(actions.reviewAttachmentInPlan).toHaveBeenCalledWith("attachment-workout");
+    });
+
+    it("renders open and terminal request cards with one typed Plan action", async () => {
+      const user = userEvent.setup();
+      const open = planningDelivery("open");
+      setChat({
+        planningRequests: [open],
+        planningRequestsLoaded: true,
+        timeline: [{ kind: "planning-request", delivery: open }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("heading", { name: "Review Tempo 3 × 12 in Plan." })).toBeVisible();
+      expect(screen.getByText("Needs review")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Review in Plan" }));
+      expect(actions.openPlanningRequest).toHaveBeenCalledWith("request-plan-1");
+
+      const applied = planningDelivery("applied");
+      setChat({
+        planningRequests: [applied],
+        timeline: [{ kind: "planning-request", delivery: applied }],
+      });
+      expect(screen.getByText("Added to Plan")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open Plan" }));
+      expect(actions.openPlanningRequest).toHaveBeenLastCalledWith("request-plan-1");
+    });
+
+    it("renders one host-owned text handoff and keeps Plan unchanged until continued", async () => {
+      const user = userEvent.setup();
+      const message: ChatMessageView = {
+        id: "message-live-1",
+        turnId: "turn-1",
+        role: "coach",
+        delivery: "complete",
+        historical: false,
+        text: "This change should be reviewed in Plan.",
+        planHandoff: {
+          kind: "plan_change",
+          title: "Review a lighter Friday",
+          intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+        },
+      };
+      setChat({
+        messages: [message],
+        planningRequestsLoaded: true,
+        timeline: [{ kind: "message", message }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("heading", { name: "Review a lighter Friday" })).toBeVisible();
+      expect(screen.getByText(/Nothing changes until you approve it/u)).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Continue in Plan" }));
+      expect(actions.continueMessageInPlan).toHaveBeenCalledWith("turn-1", message.planHandoff);
+    });
+
+    it("shows a retry action for a safely saved failed Plan handoff", async () => {
+      const user = userEvent.setup();
+      const delivered = planningDelivery("open");
+      const failed: PlanningRequestDelivery = {
+        ...delivered,
+        state: "failed",
+        failureCode: "planning_unavailable",
+        retryable: true,
+        deliveredAtMs: null,
+        planningRequest: null,
+      };
+      setChat({
+        planningRequests: [failed],
+        planningRequestsLoaded: true,
+        timeline: [{ kind: "planning-request", delivery: failed }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Couldn’t open")).toBeVisible();
+      expect(screen.getAllByText(/will not create a duplicate/u)).not.toHaveLength(0);
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(actions.retryPlanningRequest).toHaveBeenCalledWith(failed.requestId);
+    });
+
+    it("shows model-incompatible image recovery and retryable parser failure", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-image",
+          displayName: "bike-position.jpg",
+          kind: "image",
+          extension: "jpg",
+          byteSize: 2_400_000,
+          status: "blocked",
+          reason: "model_incompatible",
+        }),
+      });
+      render(<Harness />);
+      expect(screen.getByText("This model can’t view this file")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open Settings" }));
+      expect(useEnduragentStore.getState().activeView).toBe("settings");
+
+      setChat({
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-failed",
+          displayName: "broken.csv",
+          kind: "document",
+          extension: "csv",
+          byteSize: 2_000,
+          status: "failed",
+          stage: "parsing",
+          failureCode: "csv_invalid",
+          retryable: true,
+        }),
+      });
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(actions.retryAttachment).toHaveBeenCalledWith("attachment-failed");
+    });
+
+    it("explains an unknown format without losing or sending the restored draft", async () => {
+      setChat({
+        sendDisabled: true,
+        attachments: {
+          schemaVersion: 1,
+          capabilities: ATTACHMENT_CAPABILITIES,
+          draft: {
+            schemaVersion: 1,
+            chatId: "desktop",
+            text: "Keep my question",
+            state: "restored",
+            updatedAt: "2026-08-26T00:00:00.000Z",
+            attachments: [],
+          },
+        },
+        attachmentAdmissions: [
+          {
+            selectionId: "selection-unknown",
+            displayName: "ride-data.xyz",
+            status: "rejected",
+            reason: "format_unsupported",
+          },
+        ],
+      });
+      render(<Harness />);
+      await waitFor(() => expect(composer()).toHaveValue("Keep my question"));
+      expect(screen.getByText("This file type isn’t supported")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      expect(actions.submit).not.toHaveBeenCalled();
+    });
+
+    it("opens the native picker from the centered Composer attachment control", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: { schemaVersion: 1, capabilities: ATTACHMENT_CAPABILITIES, draft: null },
+      });
+      render(<Harness />);
+      await user.click(screen.getByRole("button", { name: "Attach files" }));
+      expect(actions.chooseAttachments).toHaveBeenCalledOnce();
     });
   });
 

@@ -26,13 +26,19 @@ import type {
   TranscriptWriterPort,
 } from "@enduragent/engine";
 import {
+  ChatAttachmentReferenceSchema,
   CoachDecisionAnswerSchema,
   CoachDecisionReadModelSchema,
+  PlanReferenceSelectionSchema,
+  PlanHandoffSuggestionSchema,
   PlanIntakePatchSchema,
   type CoachDecisionAnswer,
   type CoachDecisionContinuationLineage,
   type CoachDecisionOption,
   type CoachDecisionReadModel,
+  type ChatAttachmentReference,
+  type PlanReferenceSelection,
+  type PlanHandoffSuggestion,
   type PlanIntakePatch,
 } from "@enduragent/coach-contract";
 import {
@@ -244,6 +250,9 @@ export interface TranscriptPageTurn {
   readonly athleteText: string;
   readonly coachText: string;
   readonly delivery?: "interrupted";
+  readonly attachments?: ChatAttachmentReference[];
+  readonly planReference?: PlanReferenceSelection;
+  readonly planHandoff?: PlanHandoffSuggestion;
 }
 
 export type TranscriptPageEntry =
@@ -451,23 +460,29 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
   if (value === null || value.version !== TRANSCRIPT_SCHEMA_VERSION) return null;
 
   if (value.kind === "turn-completed" || value.kind === "turn-interrupted") {
+    const keys = ["version", "kind", "chatId", "turnId", "completedAt", "athleteText", "coachText"];
+    const optionalKeys = [
+      ...(value.attachments === undefined ? [] : ["attachments"]),
+      ...(value.planReference === undefined ? [] : ["planReference"]),
+      ...(value.planHandoff === undefined ? [] : ["planHandoff"]),
+    ];
     if (
-      !hasExactKeys(value, [
-        "version",
-        "kind",
-        "chatId",
-        "turnId",
-        "completedAt",
-        "athleteText",
-        "coachText",
-      ]) ||
+      !hasExactKeys(value, [...keys, ...optionalKeys]) ||
       typeof value.chatId !== "string" ||
       typeof value.turnId !== "string" ||
       value.turnId.length === 0 ||
       typeof value.completedAt !== "string" ||
       !isIsoTimestamp(value.completedAt) ||
       typeof value.athleteText !== "string" ||
-      typeof value.coachText !== "string"
+      typeof value.coachText !== "string" ||
+      (value.kind === "turn-interrupted" && value.planReference !== undefined) ||
+      (value.kind === "turn-interrupted" && value.planHandoff !== undefined) ||
+      (value.attachments !== undefined &&
+        !ChatAttachmentReferenceSchema.array().max(5).safeParse(value.attachments).success) ||
+      (value.planReference !== undefined &&
+        !PlanReferenceSelectionSchema.safeParse(value.planReference).success) ||
+      (value.planHandoff !== undefined &&
+        !PlanHandoffSuggestionSchema.safeParse(value.planHandoff).success)
     ) {
       return null;
     }
@@ -668,7 +683,13 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     typeof input.completedAt !== "string" ||
     !isIsoTimestamp(input.completedAt) ||
     typeof input.athleteText !== "string" ||
-    typeof input.coachText !== "string"
+    typeof input.coachText !== "string" ||
+    (input.attachments !== undefined &&
+      !ChatAttachmentReferenceSchema.array().max(5).safeParse(input.attachments).success) ||
+    (input.planReference !== undefined &&
+      !PlanReferenceSelectionSchema.safeParse(input.planReference).success) ||
+    (input.planHandoff !== undefined &&
+      !PlanHandoffSuggestionSchema.safeParse(input.planHandoff).success)
   ) {
     throw new TypeError("Completed transcript turn is invalid.");
   }
@@ -680,12 +701,18 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     completedAt: input.completedAt,
     athleteText: input.athleteText,
     coachText: input.coachText,
+    ...(input.attachments === undefined ? {} : { attachments: [...input.attachments] }),
+    ...(input.planReference === undefined ? {} : { planReference: { ...input.planReference } }),
+    ...(input.planHandoff === undefined ? {} : { planHandoff: { ...input.planHandoff } }),
   };
 }
 
 function interruptedTurnRecord(
   input: TranscriptInterruptedTurnInput,
 ): TranscriptInterruptedTurnRecord {
+  if (input.planReference !== undefined || input.planHandoff !== undefined) {
+    throw new TypeError("Interrupted transcript turn cannot carry Plan metadata.");
+  }
   const completed = completedTurnRecord(input);
   return { ...completed, kind: "turn-interrupted" };
 }
@@ -936,6 +963,9 @@ function transcriptPageTurn(record: TranscriptTurnRecord): TranscriptPageTurn {
     completedAt: record.completedAt,
     athleteText: record.athleteText,
     coachText: record.coachText,
+    ...(record.attachments === undefined ? {} : { attachments: [...record.attachments] }),
+    ...(record.planReference === undefined ? {} : { planReference: record.planReference }),
+    ...(record.planHandoff === undefined ? {} : { planHandoff: record.planHandoff }),
     ...(record.kind === "turn-interrupted" ? { delivery: "interrupted" as const } : {}),
   };
 }

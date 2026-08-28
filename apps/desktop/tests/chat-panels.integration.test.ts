@@ -145,6 +145,25 @@ const readySetupStatus = {
   durableTrainingData: true,
 } as const;
 
+const emptyAttachmentComposer = {
+  schemaVersion: 1,
+  capabilities: {
+    schemaVersion: 1,
+    active: { provider: "test", model: "text-only", transport: "test" },
+    documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+    completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+    plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+    images: {
+      enabled: false,
+      mediaTypes: [],
+      reason: "model_incompatible",
+      source: "maintained_catalogue",
+      checkedAt: "2026-08-26T00:00:00.000Z",
+    },
+  },
+  draft: null,
+} as const;
+
 const tallTurn =
   "Long ride notes that make the newest restored turn taller than the window. ".repeat(52);
 
@@ -165,7 +184,9 @@ function makeScript(
   let queueRevision = 0;
   let queueItems: Array<{
     queuedMessageId: string;
+    messageId: string;
     submissionId: string;
+    attachmentIds: string[];
     text: string;
     kind: "ordinary" | "slash-command";
     position: number;
@@ -374,13 +395,25 @@ function makeScript(
         return response({ value: units, source: "cycling" });
       }
       if (request.method === "getChatQueue") return response(queueSnapshot());
+      if (
+        request.method === "getChatAttachmentComposer" ||
+        request.method === "saveChatAttachmentDraftText" ||
+        request.method === "removeChatAttachment" ||
+        request.method === "retryChatAttachment" ||
+        request.method === "selectChatAttachmentWorkout" ||
+        request.method === "clearChatAttachmentDraft"
+      ) {
+        return response(emptyAttachmentComposer);
+      }
       if (request.method === "enqueueChatMessage") {
         const params = request.params as { readonly submissionId: string; readonly text: string };
         if (!queueItems.some((item) => item.submissionId === params.submissionId)) {
           queueRevision += 1;
           queueItems.push({
             queuedMessageId: `queued-${queueRevision}`,
+            messageId: `message-${queueRevision}`,
             submissionId: params.submissionId,
+            attachmentIds: [],
             text: params.text,
             kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
             position: queueItems.length,
@@ -458,6 +491,14 @@ ${"nonwrapping".repeat(36)}
                     completedAt: "2001-01-03T00:00:00.000Z",
                     athleteText: "Persisted athlete 3",
                     coachText: "**Persisted coach 3**",
+                    attachments: [
+                      {
+                        attachmentId: "attachment-persisted-3",
+                        displayName: "training-notes.txt",
+                        kind: "document",
+                        extension: "txt",
+                      },
+                    ],
                   },
                   {
                     turnId: "persisted-turn-4",
@@ -572,6 +613,7 @@ async function launch(input: {
   readonly width: number;
   readonly height: number;
   readonly reducedMotion: boolean;
+  readonly colorScheme?: "light" | "dark";
   readonly syncOutcome?: SyncOutcome;
   readonly transcriptHistory?: boolean;
 }): Promise<{ readonly fixture: RunningDesktopFixture; readonly calls: ScriptRequest[] }> {
@@ -581,7 +623,7 @@ async function launch(input: {
     token,
     width: input.width,
     height: input.height,
-    colorScheme: "light",
+    colorScheme: input.colorScheme ?? "light",
     reducedMotion: input.reducedMotion,
   });
   fixtures.push(fixture);
@@ -604,17 +646,33 @@ async function launch(input: {
     if (document.querySelector("[data-setup-host]") !== null) {
       throw new Error("ready fixture unexpectedly requires setup");
     }
-    const chatDeadline = Date.now() + 10000;
-    const chatReady = () => {
-      const composer = document.querySelector("textarea#message");
-      return composer instanceof HTMLTextAreaElement && !composer.disabled;
-    };
-    while (!chatReady() && Date.now() < chatDeadline) {
+    const composerDeadline = Date.now() + 10000;
+    let composer = document.querySelector("textarea#message");
+    while (
+      (!(composer instanceof HTMLTextAreaElement) || composer.disabled) &&
+      Date.now() < composerDeadline
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 20));
+      composer = document.querySelector("textarea#message");
     }
-    const composer = document.querySelector("textarea#message");
     if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
-      throw new Error("ready fixture did not enable chat");
+      throw new Error(
+        "ready fixture did not enable chat: " + JSON.stringify({
+          composerFound: composer instanceof HTMLTextAreaElement,
+          composerDisabled:
+            composer instanceof HTMLTextAreaElement ? composer.disabled : null,
+          rpc: document.documentElement.dataset.rpc ?? null,
+          newConversationDisabled:
+            document.querySelector("button.new-conversation-button")?.hasAttribute("disabled") ??
+            null,
+          alerts: Array.from(document.querySelectorAll('[role="alert"]')).map((node) =>
+            node.textContent?.trim(),
+          ),
+          statuses: Array.from(document.querySelectorAll('[role="status"]')).map((node) =>
+            node.textContent?.trim(),
+          ),
+        }),
+      );
     }
   `);
   return { fixture, calls };
@@ -646,6 +704,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly athleteLiteral: boolean;
       readonly coachMarkdown: boolean;
       readonly loadEarlierHidden: boolean;
+      readonly sentAttachmentRestored: boolean;
     }>(`
       const conversation = document.querySelector(".conversation");
       const textarea = document.querySelector("#message");
@@ -684,10 +743,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         focusPreserved: document.activeElement === textarea,
         historySilent: allRows.every((row) => row.getAttribute("aria-live") === "off"),
         athleteLiteral:
-          allRows[4].querySelectorAll("strong").length === 0 &&
+          allRows[4].querySelector(".chat-message__text")?.querySelectorAll("strong").length === 0 &&
           allRows[4].querySelector(".chat-message__text").textContent === "Persisted athlete 3",
         coachMarkdown:
           allRows[5].querySelector("strong")?.textContent === "Persisted coach 3",
+        sentAttachmentRestored:
+          allRows[4].textContent.includes("training-notes.txt") &&
+          allRows[4].textContent.includes("TXT"),
         loadEarlierHidden: loadEarlier.hidden,
       };
     `);
@@ -702,6 +764,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       historySilent: true,
       athleteLiteral: true,
       coachMarkdown: true,
+      sentAttachmentRestored: true,
       loadEarlierHidden: true,
     });
     expect(calls.filter((call) => call.method === "getTranscriptPage")).toEqual([
@@ -1115,6 +1178,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "chatgptLogin",
         "chatgptStatus",
         "checkForUpdates",
+        "chooseChatAttachments",
         "chooseImportFiles",
         "choosePlanRaceCourseFile",
         "claudeCliRecheck",
@@ -1129,6 +1193,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "getArchivedTranscriptPage",
         "getDaemonConnection",
         "getPlanState",
+        "getPlanningReadModel",
         "getTranscriptPage",
         "getUpdateState",
         "initialSetupStatusSettled",
@@ -1136,9 +1201,11 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "listTelegramAllowedSenders",
         "llmConfiguration",
         "onChatgptLoginProgress",
+        "onDroppedChatAttachments",
         "onDroppedImportFiles",
         "onPlanProgress",
         "onUpdateState",
+        "pasteChatAttachment",
         "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
         "platform",
@@ -2013,6 +2080,79 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(
       calls.slice(syncCallIndex + 1).filter((call) => call.method === "getAthleteState"),
     ).toHaveLength(1);
+    expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
+    fixtures.splice(fixtures.indexOf(fixture), 1);
+  }, 90_000);
+
+  it("keeps the dark Reading room usable at wide and compact viewports", async () => {
+    const { fixture } = await launch({
+      width: 1440,
+      height: 900,
+      reducedMotion: false,
+      colorScheme: "dark",
+    });
+    expect(
+      await fixture.evaluate<{
+        readonly theme: string | undefined;
+        readonly colorScheme: string;
+        readonly overflow: boolean;
+        readonly composerOpaque: boolean;
+        readonly disclaimerCentered: boolean;
+        readonly contextVisible: boolean;
+      }>(`
+        const composer = document.querySelector(".composer-wrap");
+        const disclaimer = document.querySelector(".composer-wrap > p:last-child");
+        return {
+          theme: document.documentElement.dataset.theme,
+          colorScheme: getComputedStyle(document.documentElement).colorScheme,
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
+          disclaimerCentered: getComputedStyle(disclaimer).textAlign === "center",
+          contextVisible: document.querySelector(".training-context") !== null,
+        };
+      `),
+    ).toEqual({
+      theme: "dark",
+      colorScheme: "dark",
+      overflow: false,
+      composerOpaque: true,
+      disclaimerCentered: true,
+      contextVisible: true,
+    });
+
+    await fixture.setViewport(720, 800);
+    expect(
+      await fixture.evaluate<{
+        readonly overflow: boolean;
+        readonly contextDrawerOpened: boolean;
+        readonly composerVisible: boolean;
+        readonly disclaimerCentered: boolean;
+      }>(`
+        const compactDeadline = Date.now() + 5000;
+        while (
+          document.querySelector('[aria-label="Show training context"]') === null &&
+          Date.now() < compactDeadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        document.querySelector('[aria-label="Show training context"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const composer = document.querySelector(".composer-wrap").getBoundingClientRect();
+        const disclaimer = document.querySelector(".composer-wrap > p:last-child");
+        return {
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          contextDrawerOpened:
+            document.querySelector('[data-slot="dialog-content"] .training-context') !== null,
+          composerVisible: composer.top >= 0 && composer.bottom <= window.innerHeight,
+          disclaimerCentered: getComputedStyle(disclaimer).textAlign === "center",
+        };
+      `),
+    ).toEqual({
+      overflow: false,
+      contextDrawerOpened: true,
+      composerVisible: true,
+      disclaimerCentered: true,
+    });
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
   }, 90_000);

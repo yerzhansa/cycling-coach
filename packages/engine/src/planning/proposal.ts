@@ -21,7 +21,7 @@ export interface PlanProposalWorkoutValue {
 
 export interface PlanProposalWorkoutChange {
   readonly workoutId: string;
-  readonly before: PlanProposalWorkoutValue;
+  readonly before: PlanProposalWorkoutValue | null;
   readonly after: PlanProposalWorkoutValue;
 }
 
@@ -52,7 +52,7 @@ export interface ValidatedPlanProposal {
   readonly mutation: PlanProposalMutation;
   readonly base: PlanProposalBaseSnapshot;
   readonly changes: readonly {
-    readonly current: PlanWorkoutRecord;
+    readonly current: PlanWorkoutRecord | null;
     readonly next: PlanWorkoutRecord;
   }[];
   readonly diff: readonly PlanProposalDiffLine[];
@@ -177,9 +177,9 @@ export function parsePlanProposalMutation(value: string): PlanProposalMutation {
     const workoutId = String(value.workoutId);
     if (ids.has(workoutId)) throw new PlanProposalError("invalid-mutation");
     ids.add(workoutId);
-    const before = workoutValue(value.before);
+    const before = value.before === null ? null : workoutValue(value.before);
     const after = workoutValue(value.after);
-    if (canonicalJson(before) === canonicalJson(after))
+    if (before !== null && canonicalJson(before) === canonicalJson(after))
       throw new PlanProposalError("invalid-mutation");
     return Object.freeze({ workoutId, before, after });
   });
@@ -227,8 +227,7 @@ function parseBase(value: string): PlanProposalBaseSnapshot {
     Number(parsed.planHlcPhysicalMs) < 0 ||
     !Number.isSafeInteger(parsed.planHlcCounter) ||
     Number(parsed.planHlcCounter) < 0 ||
-    !Array.isArray(parsed.workouts) ||
-    parsed.workouts.length === 0
+    !Array.isArray(parsed.workouts)
   ) {
     throw new PlanProposalError("invalid-base");
   }
@@ -295,6 +294,23 @@ export function projectPlanProposalDiff(
 ): readonly PlanProposalDiffLine[] {
   const lines: PlanProposalDiffLine[] = [];
   for (const change of mutation.changes) {
+    if (change.before === null) {
+      lines.push(
+        {
+          field: "date",
+          label: "Date",
+          before: "None",
+          after: String(change.after.dateKey),
+        },
+        {
+          field: "workout",
+          label: "Workout",
+          before: "None",
+          after: change.after.name,
+        },
+      );
+      continue;
+    }
     if (change.before.durationS !== change.after.durationS) {
       lines.push({
         field: "duration",
@@ -361,6 +377,29 @@ export function validatePlanProposal(input: {
   const changes = mutation.changes.map((change) => {
     const current = currentById.get(change.workoutId);
     const captured = baseById.get(change.workoutId);
+    if (change.before === null) {
+      if (
+        current !== undefined ||
+        captured !== undefined ||
+        change.after.dateKey <= input.todayDateKey ||
+        planWeekIndex(input.plan, change.after.dateKey).kind !== "inside" ||
+        input.workouts.some((workout) => workout.dateKey === change.after.dateKey)
+      ) {
+        throw new PlanProposalError("stale-base");
+      }
+      return Object.freeze({
+        current: null,
+        next: Object.freeze({
+          id: change.workoutId,
+          planId: input.plan.id,
+          ...change.after,
+          origin: "coach" as const,
+          deviceId: input.plan.deviceId,
+          hlcPhysicalMs: input.plan.hlcPhysicalMs,
+          hlcCounter: input.plan.hlcCounter,
+        }),
+      });
+    }
     if (current === undefined || captured === undefined) {
       throw new PlanProposalError("stale-base");
     }
@@ -390,7 +429,10 @@ export function validatePlanProposal(input: {
   if (mutation.weekLoad !== null) {
     if (input.calculateWeekLoad === undefined) throw new PlanProposalError("missing-capability");
     const nextById = new Map(changes.map(({ next }) => [next.id, next]));
-    const nextWorkouts = input.workouts.map((workout) => nextById.get(workout.id) ?? workout);
+    const nextWorkouts = [
+      ...input.workouts.map((workout) => nextById.get(workout.id) ?? workout),
+      ...changes.flatMap(({ current, next }) => (current === null ? [next] : [])),
+    ];
     let before: number;
     let after: number;
     try {
@@ -462,6 +504,9 @@ export async function applyValidatedPlanProposal(
       readonly createdAtMs: number;
     };
     readonly ledgerId: string;
+    readonly requestCompletion?: Parameters<
+      PlanProposalRepository["apply"]
+    >[0]["requestCompletion"];
   },
 ): Promise<PlanProposalRecord> {
   const workouts = validated.changes.map(({ next }) =>
@@ -479,19 +524,23 @@ export async function applyValidatedPlanProposal(
     expectedPlanUpdatedAtMs: validated.base.planUpdatedAtMs,
     expectedPlanHlcPhysicalMs: validated.base.planHlcPhysicalMs,
     expectedPlanHlcCounter: validated.base.planHlcCounter,
-    expectedWorkouts: validated.changes.map(({ current }) => current),
+    expectedWorkouts: validated.changes.flatMap(({ current }) =>
+      current === null ? [] : [current],
+    ),
     mirrorJob: input.mirrorJob,
     ledger: {
       id: input.ledgerId,
       planId: input.plan.id,
-      targetWorkoutId: change.current.id,
+      targetWorkoutId: change.next.id,
+      operation: change.current === null ? "add" : "update",
       kind: "proposal-applied",
       sourceId: validated.proposal.id,
       reversalOfId: null,
       label: validated.proposal.title,
-      beforeJson: encodePlanAdaptationWorkoutSnapshot(
-        planAdaptationWorkoutSnapshot(change.current),
-      ),
+      beforeJson:
+        change.current === null
+          ? null
+          : encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(change.current)),
       afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(workouts[0]!)),
       weekLoadBefore: validated.mutation.weekLoad?.before ?? null,
       weekLoadAfter: validated.mutation.weekLoad?.after ?? null,
@@ -512,5 +561,8 @@ export async function applyValidatedPlanProposal(
     deviceId: input.deviceId,
     hlcPhysicalMs: input.hlcPhysicalMs,
     hlcCounter: input.hlcCounter,
+    ...(input.requestCompletion === undefined
+      ? {}
+      : { requestCompletion: input.requestCompletion }),
   });
 }

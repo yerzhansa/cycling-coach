@@ -1,7 +1,12 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: { index: "src/index.ts", migrate: "src/migrate.ts" },
+  entry: {
+    index: "src/index.ts",
+    migrate: "src/migrate.ts",
+    "workout-import/index": "src/workout-import/index.ts",
+    "workout-import/worker": "src/workout-import/worker.ts",
+  },
   format: ["esm"],
   dts: true,
   sourcemap: true,

@@ -8,8 +8,12 @@ import {
   type CoachClientCallOptions,
 } from "@enduragent/coach-client";
 import type {
+  ChatAttachmentComposerReadModel,
   ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
+  CreatePlanningRequestRpcParams,
+  CreateWorkoutPlanningRequestRpcParams,
+  PlanningRequestDelivery,
   QueuedChatMessage,
   TurnEvent,
 } from "@enduragent/coach-contract";
@@ -61,6 +65,48 @@ function errorEvent(message = "Safe athlete message"): Extract<TurnEvent, { type
   };
 }
 
+function planningDelivery(
+  state: PlanningRequestDelivery["state"] = "delivered",
+): PlanningRequestDelivery {
+  return {
+    requestId: "request-plan-1",
+    source: {
+      kind: "workout_review",
+      intent: "Review Tempo 3 × 12 in Plan.",
+      chatId: "desktop",
+      messageId: "message-plan-1",
+      attachmentId: "attachment-workout",
+    },
+    state,
+    attemptCount: 1,
+    failureCode: state === "failed" ? "planning_unavailable" : null,
+    retryable: state === "failed" || state === "pending",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    deliveredAtMs: state === "delivered" ? 2 : null,
+    planningRequest:
+      state === "delivered"
+        ? {
+            requestId: "request-plan-1",
+            kind: "workout_review",
+            target: "active_plan",
+            intent: "Review Tempo 3 × 12 in Plan.",
+            planConversationId: "plan-conversation-1",
+            proposalId: "proposal-1",
+            requestedDateKey: null,
+            resolvedDateKey: null,
+            source: { chatId: "desktop", messageId: "message-plan-1", available: true },
+            lifecycle: "open",
+            attention: "needs_review",
+            revision: 1,
+            createdAtMs: 1,
+            updatedAtMs: 2,
+            terminalResult: null,
+          }
+        : null,
+  };
+}
+
 function deliver(options: CoachClientCallOptions<"chat"> | undefined, event: TurnEvent): void {
   const requestMethod = (
     options as
@@ -98,6 +144,31 @@ function client(
       chatId: string;
       turnId: string;
     }) => Promise<{ stopped: boolean }>;
+    readonly composer?: () => Promise<ChatAttachmentComposerReadModel>;
+    readonly saveAttachmentDraftText?: (text: string) => Promise<ChatAttachmentComposerReadModel>;
+    readonly clearAttachmentDraft?: () => Promise<ChatAttachmentComposerReadModel>;
+    readonly listPlanningRequests?: () => Promise<{
+      readonly deliveries: readonly PlanningRequestDelivery[];
+    }>;
+    readonly resumePlanningRequests?: () => Promise<{
+      readonly deliveries: readonly PlanningRequestDelivery[];
+    }>;
+    readonly createWorkoutPlanningRequest?: (
+      request: CreateWorkoutPlanningRequestRpcParams,
+    ) => Promise<
+      | { readonly status: "accepted"; readonly delivery: PlanningRequestDelivery }
+      | { readonly status: "rejected"; readonly reason: "invalid_request" | "request_conflict" }
+    >;
+    readonly createPlanningRequest?: (
+      request: CreatePlanningRequestRpcParams,
+    ) => Promise<
+      | { readonly status: "accepted"; readonly delivery: PlanningRequestDelivery }
+      | { readonly status: "rejected"; readonly reason: "invalid_request" | "request_conflict" }
+    >;
+    readonly retryPlanningRequest?: () => Promise<
+      | { readonly status: "found"; readonly delivery: PlanningRequestDelivery }
+      | { readonly status: "missing" }
+    >;
   } = {},
 ): CoachClient {
   let queueRevision = 0;
@@ -118,19 +189,86 @@ function client(
     const hideQueueCall = (): void => {
       call.mock.calls.pop();
     };
+    const emptyComposer = (): ChatAttachmentComposerReadModel => ({
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "2001-01-01T00:00:00.000Z",
+        },
+      },
+      draft: null,
+    });
+    if (method === "getChatAttachmentComposer") {
+      hideQueueCall();
+      return (sessions.composer?.() ?? Promise.resolve(emptyComposer())) as never;
+    }
+    if (method === "listPlanningRequests") {
+      hideQueueCall();
+      return (sessions.listPlanningRequests?.() ?? Promise.resolve({ deliveries: [] })) as never;
+    }
+    if (method === "resumePlanningRequests") {
+      hideQueueCall();
+      return (sessions.resumePlanningRequests?.() ?? Promise.resolve({ deliveries: [] })) as never;
+    }
+    if (method === "createWorkoutPlanningRequest") {
+      return (sessions.createWorkoutPlanningRequest?.(
+        request as CreateWorkoutPlanningRequestRpcParams,
+      ) ?? Promise.resolve({ status: "rejected", reason: "invalid_request" })) as never;
+    }
+    if (method === "createPlanningRequest") {
+      return (sessions.createPlanningRequest?.(request as CreatePlanningRequestRpcParams) ??
+        Promise.resolve({ status: "rejected", reason: "invalid_request" })) as never;
+    }
+    if (method === "retryPlanningRequest") {
+      return (sessions.retryPlanningRequest?.() ?? Promise.resolve({ status: "missing" })) as never;
+    }
+    if (method === "saveChatAttachmentDraftText") {
+      hideQueueCall();
+      const value = request as { text: string };
+      return (sessions.saveAttachmentDraftText?.(value.text) ??
+        Promise.resolve(emptyComposer())) as never;
+    }
+    if (
+      method === "removeChatAttachment" ||
+      method === "retryChatAttachment" ||
+      method === "selectChatAttachmentWorkout" ||
+      method === "clearChatAttachmentDraft"
+    ) {
+      hideQueueCall();
+      return (
+        method === "clearChatAttachmentDraft" && sessions.clearAttachmentDraft !== undefined
+          ? sessions.clearAttachmentDraft()
+          : Promise.resolve(emptyComposer())
+      ) as never;
+    }
     if (method === "getChatQueue") {
       hideQueueCall();
       return Promise.resolve(snapshot()) as never;
     }
     if (method === "enqueueChatMessage") {
       hideQueueCall();
-      const value = request as { submissionId: string; text: string };
+      const value = request as {
+        submissionId: string;
+        text: string;
+        attachmentIds?: readonly string[];
+      };
       if (!queued.some((item) => item.submissionId === value.submissionId)) {
         queued.push({
           queuedMessageId: `queued-${value.submissionId}`,
+          messageId: `message-${value.submissionId}`,
           submissionId: value.submissionId,
           text: value.text,
           kind: value.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+          attachmentIds: [...(value.attachmentIds ?? [])],
           position: queued.length,
           restored: false,
         });
@@ -233,6 +371,7 @@ function subject(
   spendRefreshImplementation: () => Promise<void> = async () => {},
   canChat: () => boolean = () => true,
   settleSubmissions = true,
+  openPlanningRequest = vi.fn(),
 ) {
   const states: ChatState[] = [];
   const controls: ChatViewControls[] = [];
@@ -265,12 +404,13 @@ function subject(
     refreshSpend,
     canChat,
     initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
+    openPlanningRequest,
   });
   const submittedController = {
     ...controller,
-    async submit(message: string): Promise<boolean> {
+    async submit(message: string, attachmentIds: readonly string[] = []): Promise<boolean> {
       const alreadyStreaming = states.at(-1)?.status === "streaming";
-      const acknowledged = await controller.submit(message);
+      const acknowledged = await controller.submit(message, attachmentIds);
       if (
         !settleSubmissions ||
         !acknowledged ||
@@ -290,6 +430,7 @@ function subject(
     controls,
     refresh,
     refreshSpend,
+    openPlanningRequest,
   };
 }
 
@@ -1005,6 +1146,461 @@ describe("chat controller", () => {
     const { controller } = subject(fake);
     await controller.submit("  \n");
     expect(fake.call).not.toHaveBeenCalled();
+  });
+
+  it("restores the durable Composer and sends an attachment-only Message", async () => {
+    const surface: ChatAttachmentComposerReadModel = {
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "2026-08-26T00:00:00.000Z",
+        },
+      },
+      draft: {
+        schemaVersion: 1,
+        chatId: "desktop",
+        text: "",
+        state: "restored",
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        attachments: [
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-1",
+            displayName: "notes.txt",
+            kind: "document",
+            extension: "txt",
+            byteSize: 42,
+            status: "ready",
+            preview: { kind: "document", extractedTextChars: 42, visualPageCount: 0 },
+          },
+        ],
+      },
+    };
+    const fake = client(replies(), { composer: async () => surface });
+    const { controller, controls, states } = subject(fake);
+    await controller.start();
+    expect(controls.at(-1)?.attachments?.value).toEqual(surface);
+
+    await expect(controller.submit("", ["attachment-1"])).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual([""]);
+    expect(states.at(-1)?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "athlete",
+        text: "",
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "notes.txt",
+            kind: "document",
+            extension: "txt",
+          },
+        ],
+      }),
+    );
+    await expect(controller.submit("/status", ["attachment-1"])).resolves.toBe(false);
+  });
+
+  it("creates one trusted Workout handoff and opens the delivered request in Plan", async () => {
+    const surface: ChatAttachmentComposerReadModel = {
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "1998-08-26T00:00:00.000Z",
+        },
+      },
+      draft: {
+        schemaVersion: 1,
+        chatId: "desktop",
+        text: "",
+        state: "active",
+        updatedAt: "1998-08-26T00:00:00.000Z",
+        attachments: [
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-workout",
+            displayName: "tempo.mrc",
+            kind: "workout",
+            extension: "mrc",
+            byteSize: 420,
+            status: "ready",
+            preview: {
+              kind: "workout",
+              sourceFormat: "mrc",
+              selectedWorkoutId: "tempo",
+              workouts: [
+                {
+                  workoutId: "tempo",
+                  title: "Tempo 3 × 12",
+                  durationSeconds: 3_840,
+                  target: "88–92% FTP",
+                  purpose: "Sustainable power",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    let delivered = planningDelivery();
+    const create = vi.fn(async (request: CreateWorkoutPlanningRequestRpcParams) => {
+      delivered = {
+        ...delivered,
+        requestId: request.requestId,
+        source: delivered.source === null ? null : { ...delivered.source, ...request.source },
+        planningRequest:
+          delivered.planningRequest === null
+            ? null
+            : {
+                ...delivered.planningRequest,
+                requestId: request.requestId,
+                source: {
+                  ...delivered.planningRequest.source,
+                  chatId: request.source.chatId,
+                  messageId: request.source.messageId,
+                },
+              },
+      };
+      return { status: "accepted" as const, delivery: delivered };
+    });
+    const fake = client(replies(), {
+      composer: async () => surface,
+      listPlanningRequests: async () => ({ deliveries: [] }),
+      createWorkoutPlanningRequest: create,
+    });
+    const { controller, controls, openPlanningRequest } = subject(fake);
+    await controller.start();
+
+    controller.reviewAttachmentInPlan("attachment-workout");
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const createdRequestId = create.mock.calls[0]![0].requestId;
+    await vi.waitFor(() =>
+      expect(openPlanningRequest).toHaveBeenCalledWith("desktop", createdRequestId),
+    );
+    expect(vi.mocked(fake.call)).toHaveBeenCalledWith(
+      "createWorkoutPlanningRequest",
+      expect.objectContaining({
+        requestId: expect.any(String),
+        intent: "Review Tempo 3 × 12 in Plan.",
+        source: {
+          chatId: "desktop",
+          messageId: expect.any(String),
+          attachmentId: "attachment-workout",
+        },
+      }),
+    );
+    expect(controls.at(-1)?.planningRequests?.value).toContainEqual(delivered);
+  });
+
+  it("resumes durable Plan handoffs before restoring their Chat cards", async () => {
+    const order: string[] = [];
+    const restored = planningDelivery();
+    const resumePlanningRequests = vi.fn(async () => {
+      order.push("resume");
+      return { deliveries: [restored] };
+    });
+    const listPlanningRequests = vi.fn(async () => {
+      order.push("list");
+      return { deliveries: [restored] };
+    });
+    const fake = client(replies(), { resumePlanningRequests, listPlanningRequests });
+    const { controller, controls } = subject(fake);
+
+    await controller.start();
+
+    expect(order).toEqual(["resume", "list"]);
+    expect(resumePlanningRequests).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planningRequests).toMatchObject({
+      loaded: true,
+      error: null,
+      value: [restored],
+    });
+  });
+
+  it("keeps the last safe Plan cards when relaunch recovery cannot deliver", async () => {
+    const restored = planningDelivery("failed");
+    const resumePlanningRequests = vi.fn(async () => {
+      throw new Error("planning unavailable");
+    });
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [restored] }));
+    const fake = client(replies(), { resumePlanningRequests, listPlanningRequests });
+    const { controller, controls } = subject(fake);
+
+    await controller.start();
+
+    expect(resumePlanningRequests).toHaveBeenCalledOnce();
+    expect(listPlanningRequests).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planningRequests).toMatchObject({
+      loaded: false,
+      error: expect.any(String),
+      value: [restored],
+    });
+  });
+
+  it("retries one saved failed Plan request without changing its identity", async () => {
+    const failed = planningDelivery("failed");
+    const delivered = planningDelivery();
+    const retry = vi.fn(async () => ({ status: "found" as const, delivery: delivered }));
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [failed] }),
+      retryPlanningRequest: retry,
+    });
+    const { controller, openPlanningRequest } = subject(fake);
+    await controller.start();
+
+    controller.retryPlanningRequest(failed.requestId);
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledOnce());
+    expect(vi.mocked(fake.call)).toHaveBeenCalledWith("retryPlanningRequest", {
+      requestId: failed.requestId,
+    });
+    await vi.waitFor(() =>
+      expect(openPlanningRequest).toHaveBeenCalledWith("desktop", failed.requestId),
+    );
+  });
+
+  it("retries an uncertain new Plan request with the same request and message identity", async () => {
+    const surface: ChatAttachmentComposerReadModel = {
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "1998-08-26T00:00:00.000Z",
+        },
+      },
+      draft: {
+        schemaVersion: 1,
+        chatId: "desktop",
+        text: "",
+        state: "active",
+        updatedAt: "1998-08-26T00:00:00.000Z",
+        attachments: [
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-workout",
+            displayName: "tempo.mrc",
+            kind: "workout",
+            extension: "mrc",
+            byteSize: 420,
+            status: "ready",
+            preview: {
+              kind: "workout",
+              sourceFormat: "mrc",
+              selectedWorkoutId: "tempo",
+              workouts: [
+                {
+                  workoutId: "tempo",
+                  title: "Tempo 3 × 12",
+                  durationSeconds: 3_840,
+                  target: "88–92% FTP",
+                  purpose: "Sustainable power",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    let attempt = 0;
+    const create = vi.fn(async (request: CreateWorkoutPlanningRequestRpcParams) => {
+      attempt += 1;
+      if (attempt === 1) throw new CoachClientDisconnectedError(1006, "synthetic");
+      const delivery = planningDelivery();
+      return {
+        status: "accepted" as const,
+        delivery: {
+          ...delivery,
+          requestId: request.requestId,
+          source: delivery.source === null ? null : { ...delivery.source, ...request.source },
+          planningRequest:
+            delivery.planningRequest === null
+              ? null
+              : {
+                  ...delivery.planningRequest,
+                  requestId: request.requestId,
+                  source: {
+                    ...delivery.planningRequest.source,
+                    chatId: request.source.chatId,
+                    messageId: request.source.messageId,
+                  },
+                },
+        },
+      };
+    });
+    const fake = client(replies(), {
+      composer: async () => surface,
+      listPlanningRequests: async () => ({ deliveries: [] }),
+      createWorkoutPlanningRequest: create,
+    });
+    const { controller, openPlanningRequest } = subject(fake);
+    await controller.start();
+
+    controller.reviewAttachmentInPlan("attachment-workout");
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    controller.retryPlanningRequestLoad();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+    expect(create.mock.calls[1]![0]).toEqual(create.mock.calls[0]![0]);
+    await vi.waitFor(() =>
+      expect(openPlanningRequest).toHaveBeenCalledWith(
+        "desktop",
+        create.mock.calls[0]![0].requestId,
+      ),
+    );
+  });
+
+  it("retries an uncertain text-only Plan handoff with the same durable payload", async () => {
+    let attempt = 0;
+    const create = vi.fn(async (request: CreatePlanningRequestRpcParams) => {
+      attempt += 1;
+      if (attempt === 1) throw new CoachClientDisconnectedError(1006, "synthetic");
+      const payload = request.payload;
+      const delivery: PlanningRequestDelivery = {
+        requestId: payload.requestId,
+        source: {
+          kind: payload.kind,
+          intent: payload.intent,
+          chatId: payload.source.chatId,
+          messageId: payload.source.messageId,
+          attachmentId: null,
+        },
+        state: "delivered",
+        attemptCount: 2,
+        failureCode: null,
+        retryable: false,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        deliveredAtMs: 2,
+        planningRequest: {
+          requestId: payload.requestId,
+          kind: payload.kind,
+          target: "active_plan",
+          intent: payload.intent,
+          planConversationId: null,
+          proposalId: null,
+          requestedDateKey: 20260829,
+          resolvedDateKey: null,
+          source: { chatId: "desktop", messageId: "turn-1", available: true },
+          lifecycle: "open",
+          attention: "none",
+          revision: 1,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          terminalResult: null,
+        },
+      };
+      return { status: "accepted" as const, delivery };
+    });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [] }),
+      createPlanningRequest: create,
+    });
+    const { controller, openPlanningRequest } = subject(fake);
+    await controller.start();
+
+    controller.continueMessageInPlan("turn-1", {
+      kind: "plan_change",
+      title: "Review a lighter Friday",
+      intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+      requestedDate: "2026-08-29",
+    });
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    controller.retryPlanningRequestLoad();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+    expect(create.mock.calls[1]![0]).toEqual(create.mock.calls[0]![0]);
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      payload: {
+        kind: "plan_change",
+        intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+        source: { chatId: "desktop", messageId: "turn-1" },
+        sourceSnapshot: { attachment: null, selectedWorkout: null },
+        requestedDate: "2026-08-29",
+      },
+    });
+    await vi.waitFor(() =>
+      expect(openPlanningRequest).toHaveBeenCalledWith(
+        "desktop",
+        create.mock.calls[0]![0].payload.requestId,
+      ),
+    );
+  });
+
+  it("serializes the latest durable draft save before enqueueing Send", async () => {
+    let releaseSave!: () => void;
+    const saved = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const order: string[] = [];
+    const fake = client(
+      async () => {
+        order.push("chat");
+        return { text: "Done" };
+      },
+      {
+        saveAttachmentDraftText: async () => {
+          order.push("save-start");
+          await saved;
+          order.push("save-end");
+          return {
+            schemaVersion: 1,
+            capabilities: {
+              schemaVersion: 1,
+              active: { provider: "test", model: "text-only", transport: "test" },
+              documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+              completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+              plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+              images: {
+                enabled: false,
+                mediaTypes: [],
+                reason: "model_incompatible",
+                source: "maintained_catalogue",
+                checkedAt: "2026-08-26T00:00:00.000Z",
+              },
+            },
+            draft: null,
+          };
+        },
+      },
+    );
+    const { controller } = subject(
+      fake,
+      fake,
+      async () => {},
+      async () => {},
+      () => true,
+      false,
+    );
+    controller.saveAttachmentDraftText("Latest draft");
+    const submission = controller.submit("Latest draft");
+    await vi.waitFor(() => expect(order).toEqual(["save-start"]));
+    releaseSave();
+    await submission;
+    expect(order).toEqual(["save-start", "save-end", "chat"]);
   });
 
   it("starts one exact session probe and deduplicates repeated starts", async () => {

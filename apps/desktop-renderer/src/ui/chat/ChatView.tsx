@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog.js";
 import { Composer, type ComposerHandle } from "./Composer.js";
+import { AttachmentPanel } from "./AttachmentPanel.js";
 import { CoachDecisionPanel } from "./CoachDecisionPanel.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
@@ -57,6 +58,9 @@ export function ChatView(): ReactElement {
   const hydrationStatus = useEnduragentStore((state) => state.chat.hydrationStatus);
   const hasEarlier = useEnduragentStore((state) => state.chat.hydrationHasEarlier);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
+  const planningRequestFocusId = useEnduragentStore(
+    (state) => state.chat.planningRequestFocusId,
+  );
   const actions = useEnduragentStore((state) => state.chatActions);
   const mountedView = useRef(activeView);
 
@@ -87,6 +91,17 @@ export function ChatView(): ReactElement {
     if (activeView !== "chat") return;
     chatScrollAnchor.reanchor();
   }, [activeView]);
+
+  useLayoutEffect(() => {
+    if (activeView !== "chat" || planningRequestFocusId === null) return;
+    const target = [...document.querySelectorAll<HTMLElement>("[data-planning-request-id]")].find(
+      (element) => element.dataset.planningRequestId === planningRequestFocusId,
+    );
+    if (target === undefined) return;
+    target.scrollIntoView({ block: "center" });
+    target.focus({ preventScroll: true });
+    actions?.clearPlanningRequestFocus();
+  }, [actions, activeView, planningRequestFocusId]);
 
   useEffect(() => {
     if (mountedView.current === "chat") composer.current?.focus();
@@ -173,6 +188,7 @@ export function ChatView(): ReactElement {
               <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
             </div>
             <QueuedMessages />
+            <AttachmentPanel />
             <Composer handle={composer} hidden={decisionCustomOpen} />
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>

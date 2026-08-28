@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildActivePlanReadModel,
+  buildChatOriginatedPlanResultReadModel,
   buildEndedPlanReadModel,
   buildPlanLifecycleReadModel,
 } from "../src/planning-lifecycle.js";
@@ -26,6 +27,61 @@ function build(input: Partial<Parameters<typeof buildPlanLifecycleReadModel>[0]>
 }
 
 describe("Plan lifecycle projection", () => {
+  it("projects a terminal Chat-originated result with only an exact available return", () => {
+    const request = {
+      requestId: "request-1",
+      kind: "workout_review" as const,
+      target: "active_plan" as const,
+      intent: "Add Tempo 3 × 12 to Wednesday.",
+      planConversationId: null,
+      proposalId: "proposal-1",
+      requestedDateKey: 19980825,
+      resolvedDateKey: 19980826,
+      source: { chatId: "chat-1", messageId: "message-1", available: true },
+      lifecycle: "applied" as const,
+      attention: "none" as const,
+      revision: 3,
+      createdAtMs: 10,
+      updatedAtMs: 30,
+      terminalResult: {
+        kind: "applied" as const,
+        resultId: "result-1",
+        completedAtMs: 30,
+        title: "Workout added",
+        detail: "Tempo 3 × 12 is scheduled for Wednesday.",
+        workoutRef: { setId: "set-1", workoutId: "workout-1" },
+        planRevisionId: "revision-1",
+      },
+    };
+    const available = buildChatOriginatedPlanResultReadModel({
+      request,
+      planId: "plan-1",
+      lifecycle: "active",
+      revision: 3,
+    });
+    expect(available).toMatchObject({
+      scenarioId: "PL-S099",
+      title: "Workout added",
+      summary: "Tempo 3 × 12 is scheduled for Wednesday.",
+      data: {
+        returnTarget: { destination: "chat", chatId: "chat-1", messageId: "message-1" },
+      },
+    });
+    expect(available.transitions.map((transition) => transition.transitionId)).toEqual([
+      "PL-T37",
+      "PL-T39",
+    ]);
+
+    const detached = buildChatOriginatedPlanResultReadModel({
+      request: { ...request, source: { ...request.source, available: false } },
+      planId: "plan-1",
+      lifecycle: "active",
+      revision: 4,
+    });
+    expect(detached.data.returnTarget).toBeNull();
+    expect(detached.transitions.map((transition) => transition.transitionId)).toEqual(["PL-T39"]);
+  });
+
   it("advertises only the accepted natural completion and outcome actions", () => {
     const data = {
       plan: {

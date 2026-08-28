@@ -209,6 +209,30 @@ describe("chat transcript hydration", () => {
     ]);
   });
 
+  it("restores sent attachment cards on the athlete message after relaunch", () => {
+    const attached = {
+      ...turn("turn-attached"),
+      attachments: [
+        {
+          attachmentId: "attachment-1",
+          displayName: "training-notes.txt",
+          kind: "document" as const,
+          extension: "txt" as const,
+        },
+      ],
+    };
+
+    expect(mergeHydratedMessages([attached], [])).toMatchObject([
+      {
+        id: "history:athlete:turn-attached",
+        role: "athlete",
+        historical: true,
+        attachments: attached.attachments,
+      },
+      { id: "history:coach:turn-attached", role: "coach", historical: true },
+    ]);
+  });
+
   it("clears stale history and restarts from newest once after a reset signal", async () => {
     const recovery = deferred<TranscriptPage>();
     const readPage = vi

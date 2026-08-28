@@ -8,13 +8,27 @@ import type {
 } from "@enduragent/coach-contract";
 import { CoachAgent, type DeferredPlanTurn } from "./agent/coach-agent.js";
 import { extractAccountId } from "./agent/codex/jwt.js";
-import type { EngineHostPorts } from "./host-ports.js";
+import type { ChatAttachmentActivitySummary, EngineHostPorts } from "./host-ports.js";
 import type { Sport } from "./sport.js";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { SourceProvenance } from "./provenance.js";
 
 export type { CoachEngine } from "@enduragent/coach-contract";
 export type { ChatStreamTimeouts } from "./host-ports.js";
+export {
+  createAttachmentCapabilityResolver,
+  transportForProvider,
+  type ActiveAttachmentModel,
+  type AttachmentCapabilityResolver,
+  type AttachmentCapabilityResolverOptions,
+  type NativeMediaTransport,
+} from "./attachment-capabilities.js";
+export {
+  parseOpenRouterModelMetadataSnapshot,
+  type OpenRouterModelMetadataCache,
+  type OpenRouterModelMetadataSnapshot,
+  type ResolveOpenRouterModelMetadataInput,
+} from "./openrouter-model-metadata.js";
 export * from "./planning/proposal.js";
 export * from "./planning/history.js";
 export * from "./planning/auto-apply.js";
@@ -33,6 +47,11 @@ export type {
   CallerRole,
   ChatLineage,
   ChatStorePort,
+  ChatAttachmentActivitySummary,
+  ChatAttachmentTurnPort,
+  ChatAttachmentTurnPreparation,
+  ChatNativeMediaInput,
+  AttachmentCapabilitiesPort,
   CoachDecisionStorePort,
   ConversationResetInput,
   EngineConfig,
@@ -52,6 +71,7 @@ export type {
   ModelTransportRequest,
   PlatformCalendarMutationsPort,
   PlatformClientPort,
+  PlanningReadPort,
   ReferenceStateSnapshot,
   SecretRef,
   SecretsPort,
@@ -102,10 +122,28 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       throw new Error("Durable chat queue storage is unavailable.");
     return operation as NonNullable<EngineHostPorts["chatStore"][K]>;
   };
-  const snapshot = (chatId: string): ChatQueueSnapshot =>
-    queuePort("getChatQueue").call(input.ports.chatStore, chatId);
+  const snapshot = async (chatId: string): Promise<ChatQueueSnapshot> => {
+    const completedClaim = input.ports.chatStore.getCompletedChatQueueClaim?.(chatId);
+    if (completedClaim !== undefined && completedClaim !== null) {
+      await input.ports.chatAttachments?.completeQueuedTurn({
+        chatId,
+        messageIds: completedClaim.messageIds,
+      });
+    }
+    return queuePort("getChatQueue").call(input.ports.chatStore, chatId);
+  };
   const queueText = (items: readonly QueuedChatMessage[]): string =>
     items.map((item) => item.text).join("\n\n");
+  const activityContext = (
+    activities: readonly ChatAttachmentActivitySummary[],
+  ): string | undefined =>
+    activities.length === 0
+      ? undefined
+      : [
+          "Canonical Training activities imported for this athlete turn.",
+          "Use only these normalized local fields; raw attachment bytes were not provided.",
+          JSON.stringify(activities),
+        ].join("\n");
   const runQueue = (
     chatId: string,
     mode: "resume" | "command" | "retry",
@@ -115,7 +153,7 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
     const active = queueRuns.get(chatId);
     if (active !== undefined) return active;
     const task = withQueueAuthority(chatId, async (): Promise<ChatQueueRunResult> => {
-      const before = snapshot(chatId);
+      const before = await snapshot(chatId);
       const pendingDecision = input.ports.coachDecisions?.getDecision(chatId);
       if (
         pendingDecision?.status === "unanswered" ||
@@ -163,12 +201,49 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       }
       let interrupted = false;
       try {
+        const capabilities = selected.some((item) => item.attachmentIds.length > 0)
+          ? await input.ports.attachmentCapabilities?.resolve()
+          : undefined;
+        const attachmentPreparation = await input.ports.chatAttachments?.prepareQueuedTurn({
+          chatId,
+          messages: selected.map((item) => ({
+            messageId: item.messageId,
+            attachmentIds: item.attachmentIds,
+          })),
+          ...(capabilities === undefined ? {} : { capabilities }),
+        });
+        const normalizedAttachmentContext = [
+          attachmentPreparation === undefined
+            ? undefined
+            : activityContext(attachmentPreparation.activities),
+          attachmentPreparation?.attachmentContext,
+        ]
+          .filter((value): value is string => value !== undefined && value.length > 0)
+          .join("\n\n");
         let decision;
         let planIntakePatch: PlanIntakePatch | undefined;
         const text = await agent.chat(
           chatId,
           queueText(selected),
-          undefined,
+          normalizedAttachmentContext.length === 0 &&
+            attachmentPreparation?.untrustedAttachmentText === undefined &&
+            (attachmentPreparation?.nativeMedia?.length ?? 0) === 0
+            ? undefined
+            : {
+                ...(normalizedAttachmentContext.length === 0
+                  ? {}
+                  : { attachmentContext: normalizedAttachmentContext }),
+                ...(attachmentPreparation?.nativeMedia === undefined
+                  ? {}
+                  : { nativeMedia: attachmentPreparation.nativeMedia }),
+                ...(attachmentPreparation?.untrustedAttachmentText === undefined
+                  ? {}
+                  : { untrustedAttachmentText: attachmentPreparation.untrustedAttachmentText }),
+                ...(attachmentPreparation?.attachments === undefined ||
+                attachmentPreparation.attachments.length === 0
+                  ? {}
+                  : { attachments: attachmentPreparation.attachments }),
+              },
           (event) => {
             if (event.type === "interrupted") interrupted = true;
             onEvent?.(event);
@@ -201,6 +276,10 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
                   },
           };
         }
+        await input.ports.chatAttachments?.completeQueuedTurn({
+          chatId,
+          messageIds: selected.map((item) => item.messageId),
+        });
         return {
           snapshot: queuePort("completeChatQueueClaim").call(
             input.ports.chatStore,
@@ -257,14 +336,36 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
         : { text, decision, ...(planIntakePatch === undefined ? {} : { planIntakePatch }) };
     },
     stopChat: async (request) => ({ stopped: agent.stopChat(request.chatId, request.turnId) }),
-    enqueueChatMessage: async (request) =>
-      queuePort("enqueueChatMessage").call(
+    enqueueChatMessage: async (request) => {
+      const queued = queuePort("enqueueChatMessage").call(
         input.ports.chatStore,
         request.chatId,
         request.submissionId,
         request.text,
         input.ports.randomId(),
-      ),
+        input.ports.randomId(),
+        request.attachmentIds,
+      );
+      const item = queued.items.find(
+        (candidate) => candidate.submissionId === request.submissionId,
+      );
+      if (item === undefined || item.attachmentIds.length === 0) return queued;
+      try {
+        await input.ports.chatAttachments?.acceptQueuedMessage?.({
+          chatId: request.chatId,
+          messageId: item.messageId,
+          attachmentIds: item.attachmentIds,
+        });
+      } catch (error) {
+        queuePort("removeQueuedChatMessage").call(
+          input.ports.chatStore,
+          request.chatId,
+          item.queuedMessageId,
+        );
+        throw error;
+      }
+      return queued;
+    },
     getChatQueue: async (request) => snapshot(request.chatId),
     removeQueuedChatMessage: async (request) =>
       queuePort("removeQueuedChatMessage").call(

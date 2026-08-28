@@ -117,6 +117,14 @@ interface OutboundFrame {
 const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   chat: 11 * 60_000,
   stopChat: 10_000,
+  admitChatAttachment: 120_000,
+  admitPastedChatAttachment: 120_000,
+  getChatAttachmentComposer: 120_000,
+  saveChatAttachmentDraftText: 30_000,
+  removeChatAttachment: 30_000,
+  retryChatAttachment: 120_000,
+  selectChatAttachmentWorkout: 120_000,
+  clearChatAttachmentDraft: 120_000,
   enqueueChatMessage: 30_000,
   getChatQueue: 30_000,
   removeQueuedChatMessage: 30_000,
@@ -133,6 +141,7 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   listArchivedConversations: 30_000,
   getArchivedTranscriptPage: 30_000,
   getAthleteState: 30_000,
+  getPlanningReadModel: 30_000,
   getActivityAnalysis: 90_000,
   exportTrainingFile: 120_000,
   importFiles: 60 * 60_000,
@@ -167,6 +176,12 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   selfTest: 2 * 60_000,
   getPlanState: 30_000,
   executePlanTransition: 11 * 60_000,
+  createPlanningRequest: 30_000,
+  createWorkoutPlanningRequest: 30_000,
+  getPlanningRequest: 30_000,
+  retryPlanningRequest: 30_000,
+  resumePlanningRequests: 30_000,
+  listPlanningRequests: 30_000,
 };
 
 function positiveSafeInteger(value: unknown): value is number {
@@ -529,8 +544,7 @@ class CoachClientRuntime {
       if (
         progress.commandId !== request.commandId ||
         progress.transitionId !== request.transitionId ||
-        (pending.planOperationId !== undefined &&
-          progress.operationId !== pending.planOperationId)
+        (pending.planOperationId !== undefined && progress.operationId !== pending.planOperationId)
       ) {
         this.failProtocol();
         return;

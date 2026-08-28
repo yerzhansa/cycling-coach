@@ -35,6 +35,8 @@ import {
   serializeCoachRpcEnvelope,
   type CoachEngine,
   type CoachOperations,
+  type PlanningReadOperations,
+  type PlanningRequestOperations,
   type CoachRpcMethodName,
   type CoachSelfTestOperations,
   type DaemonOwner,
@@ -44,6 +46,7 @@ import {
   type SetDailySpendCapRpcParams,
   type SpendSummary,
 } from "@enduragent/coach-contract";
+import { unavailableChatAttachmentAdmission } from "../attachment-operations.js";
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { DaemonHealthState } from "./healthz-server.js";
@@ -294,7 +297,10 @@ export async function ensureDaemonToken(
 
 export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations & PlanningOperations;
+  readonly operations: CoachOperations &
+    PlanningReadOperations &
+    PlanningRequestOperations &
+    PlanningOperations;
   readonly spend: SpendRpcHandlers;
   readonly selfTestOperations: CoachSelfTestOperations;
   readonly telegram: DesktopTelegramController;
@@ -495,6 +501,12 @@ function sameToken(received: string, expected: string): boolean {
 const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "chat",
   "stopChat",
+  "getChatAttachmentComposer",
+  "saveChatAttachmentDraftText",
+  "removeChatAttachment",
+  "retryChatAttachment",
+  "selectChatAttachmentWorkout",
+  "clearChatAttachmentDraft",
   "enqueueChatMessage",
   "getChatQueue",
   "removeQueuedChatMessage",
@@ -511,6 +523,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "listArchivedConversations",
   "getArchivedTranscriptPage",
   "getAthleteState",
+  "getPlanningReadModel",
   "getActivityAnalysis",
   "importFiles",
   "sync",
@@ -525,6 +538,12 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "selfTest",
   "getPlanState",
   "executePlanTransition",
+  "createPlanningRequest",
+  "createWorkoutPlanningRequest",
+  "getPlanningRequest",
+  "retryPlanningRequest",
+  "resumePlanningRequests",
+  "listPlanningRequests",
 ]);
 
 const PLAN_CHAT_RENDERER_METHODS = new Set<CoachRpcMethodName>([
@@ -885,6 +904,14 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     if (
       generic.data.method === "chat" ||
       generic.data.method === "stopChat" ||
+      generic.data.method === "admitChatAttachment" ||
+      generic.data.method === "admitPastedChatAttachment" ||
+      generic.data.method === "getChatAttachmentComposer" ||
+      generic.data.method === "saveChatAttachmentDraftText" ||
+      generic.data.method === "removeChatAttachment" ||
+      generic.data.method === "retryChatAttachment" ||
+      generic.data.method === "selectChatAttachmentWorkout" ||
+      generic.data.method === "clearChatAttachmentDraft" ||
       generic.data.method === "enqueueChatMessage" ||
       generic.data.method === "getChatQueue" ||
       generic.data.method === "removeQueuedChatMessage" ||
@@ -901,6 +928,9 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       const chatId = (params.data as { readonly chatId: string }).chatId;
       if (
         chatId.startsWith("telegram:") ||
+        ((generic.data.method === "admitChatAttachment" ||
+          generic.data.method === "admitPastedChatAttachment") &&
+          chatId !== "desktop") ||
         (state.authority === "renderer" && !rendererChatIdAllowed(generic.data.method, chatId))
       ) {
         void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
@@ -966,6 +996,123 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 input.engine.stopChat === undefined
                   ? { stopped: false }
                   : await input.engine.stopChat(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "admitChatAttachment":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.admitChatAttachment.requestSchema.parse(
+                generic.data.params,
+              );
+              result =
+                input.operations.admitChatAttachment === undefined
+                  ? unavailableChatAttachmentAdmission(request)
+                  : await input.operations.admitChatAttachment(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "admitPastedChatAttachment":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.admitPastedChatAttachment.requestSchema.parse(
+                  generic.data.params,
+                );
+              result =
+                input.operations.admitPastedChatAttachment === undefined
+                  ? {
+                      selectionId: request.selectionId,
+                      displayName: request.displayName,
+                      status: "storage_failed",
+                      failureCode: "admission_unavailable",
+                      retryable: false,
+                    }
+                  : await input.operations.admitPastedChatAttachment(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getChatAttachmentComposer":
+            try {
+              if (input.operations.getChatAttachmentComposer === undefined) {
+                throw new Error("chat attachment composer unavailable");
+              }
+              result = await input.operations.getChatAttachmentComposer(
+                COACH_RPC_METHOD_REGISTRY.getChatAttachmentComposer.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "saveChatAttachmentDraftText":
+            try {
+              if (input.operations.saveChatAttachmentDraftText === undefined) {
+                throw new Error("chat attachment draft unavailable");
+              }
+              result = await input.operations.saveChatAttachmentDraftText(
+                COACH_RPC_METHOD_REGISTRY.saveChatAttachmentDraftText.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "removeChatAttachment":
+            try {
+              if (input.operations.removeChatAttachment === undefined) {
+                throw new Error("chat attachment removal unavailable");
+              }
+              result = await input.operations.removeChatAttachment(
+                COACH_RPC_METHOD_REGISTRY.removeChatAttachment.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "retryChatAttachment":
+            try {
+              if (input.operations.retryChatAttachment === undefined) {
+                throw new Error("chat attachment retry unavailable");
+              }
+              result = await input.operations.retryChatAttachment(
+                COACH_RPC_METHOD_REGISTRY.retryChatAttachment.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "selectChatAttachmentWorkout":
+            try {
+              if (input.operations.selectChatAttachmentWorkout === undefined) {
+                throw new Error("chat attachment workout selection unavailable");
+              }
+              result = await input.operations.selectChatAttachmentWorkout(
+                COACH_RPC_METHOD_REGISTRY.selectChatAttachmentWorkout.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "clearChatAttachmentDraft":
+            try {
+              if (input.operations.clearChatAttachmentDraft === undefined) {
+                throw new Error("chat attachment draft cleanup unavailable");
+              }
+              result = await input.operations.clearChatAttachmentDraft(
+                COACH_RPC_METHOD_REGISTRY.clearChatAttachmentDraft.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
             } catch (error) {
               invocationFailure = { error };
             }
@@ -1166,6 +1313,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);
               result = await input.engine.getAthleteState();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getPlanningReadModel":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getPlanningReadModel.requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations.getPlanningReadModel === undefined) {
+                throw new TypeError("Planning read operation is unavailable.");
+              }
+              result = await input.operations.getPlanningReadModel(request);
             } catch (error) {
               invocationFailure = { error };
             }
@@ -1560,6 +1720,90 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                   eventFailure = { error };
                 }
               });
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "createPlanningRequest":
+            try {
+              if (input.operations.createPlanningRequest === undefined) {
+                throw new TypeError("Planning request creation is unavailable.");
+              }
+              result = await input.operations.createPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.createPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "createWorkoutPlanningRequest":
+            try {
+              if (input.operations.createWorkoutPlanningRequest === undefined) {
+                throw new TypeError("Workout Planning request creation is unavailable.");
+              }
+              result = await input.operations.createWorkoutPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.createWorkoutPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getPlanningRequest":
+            try {
+              if (input.operations.getPlanningRequest === undefined) {
+                throw new TypeError("Planning request read is unavailable.");
+              }
+              result = await input.operations.getPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.getPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "retryPlanningRequest":
+            try {
+              if (input.operations.retryPlanningRequest === undefined) {
+                throw new TypeError("Planning request retry is unavailable.");
+              }
+              result = await input.operations.retryPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.retryPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "resumePlanningRequests":
+            try {
+              if (input.operations.resumePlanningRequests === undefined) {
+                throw new TypeError("Planning request recovery is unavailable.");
+              }
+              result = await input.operations.resumePlanningRequests(
+                COACH_RPC_METHOD_REGISTRY.resumePlanningRequests.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "listPlanningRequests":
+            try {
+              if (input.operations.listPlanningRequests === undefined) {
+                throw new TypeError("Planning request list is unavailable.");
+              }
+              result = await input.operations.listPlanningRequests(
+                COACH_RPC_METHOD_REGISTRY.listPlanningRequests.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
             } catch (error) {
               invocationFailure = { error };
             }

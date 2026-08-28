@@ -25,6 +25,7 @@ const planId = "plan-1";
 const draftId = "draft-1";
 const conversationId = "conversation-1";
 const proposalId = "proposal-1";
+const requestId = "request-1";
 const workoutId = "workout-1";
 const eventId = "event-1";
 
@@ -94,9 +95,9 @@ const commands = [
     transitionId: "PL-T36",
     commandId,
     sourceConversationId: conversationId,
-    requestId: "request-1",
+    requestId,
   },
-  { transitionId: "PL-T37", commandId, sourceConversationId: conversationId },
+  { transitionId: "PL-T37", commandId, sourceConversationId: conversationId, requestId },
   { transitionId: "PL-T38", commandId, planId, proposalId, expectedRevision: 5 },
   {
     transitionId: "PL-T39",
@@ -105,6 +106,12 @@ const commands = [
     sourceScenarioId: "PL-S004",
     destinationScenarioId: "PL-S021",
     returnFocusId: "workout-row-1",
+  },
+  {
+    transitionId: "PL-T40",
+    commandId,
+    requestId,
+    resolution: { kind: "use-date", date: "1998-08-26" },
   },
 ] satisfies PlanTransitionCommand[];
 

@@ -18,9 +18,7 @@ import { runningReferenceAdapter } from "./reference/index.js";
 import { athleteProfileSchema } from "./schemas.js";
 
 function loadSkills(): Record<string, string> {
-  return Object.fromEntries(
-    skillEntries.map(({ name, content }) => [`running-${name}`, content]),
-  );
+  return Object.fromEntries(skillEntries.map(({ name, content }) => [`running-${name}`, content]));
 }
 
 export const RUNNING_VOCABULARY: readonly string[] = [
@@ -89,8 +87,17 @@ export const runningSport: Sport = {
       ...createMemoryTools(deps.memory, sections, {
         bindProvenance: deps.bindMemoryToolProvenance,
       }),
-      ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
-      ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes, deps.athleteData),
+      ...createPureCoreIntervalsTools(
+        deps.intervals,
+        deps.tz,
+        deps.athleteData,
+        deps.calendarMutations,
+      ),
+      ...createCoreToolsWithSportConfig(
+        deps.intervals,
+        runningSport.intervalsActivityTypes,
+        deps.athleteData,
+      ),
       ...createRunningTools(deps.memory, deps.intervals, deps.tz, deps.resolvedCs),
     };
     return Object.entries(toolset).map(([name, t]) => ({

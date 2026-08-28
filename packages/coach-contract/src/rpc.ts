@@ -13,6 +13,28 @@ import {
 } from "./engine.js";
 import { TurnEventSchema, type TurnEvent } from "./turn-event.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
+import { PlanHandoffSuggestionSchema, PlanReferenceSelectionSchema } from "./plan-chat-card.js";
+import {
+  AdmitPastedChatAttachmentRequestSchema,
+  AdmitChatAttachmentRequestSchema,
+  AttachmentAdmissionReadModelSchema,
+  ChatAttachmentComposerReadModelSchema,
+  ChatAttachmentReferenceSchema,
+  ChatAttachmentMutationRequestSchema,
+  ClearChatAttachmentDraftRequestSchema,
+  GetChatAttachmentComposerRequestSchema,
+  SaveChatAttachmentDraftTextRequestSchema,
+  SelectChatAttachmentWorkoutRequestSchema,
+  type AdmitPastedChatAttachmentRequest,
+  type AdmitChatAttachmentRequest,
+  type AttachmentAdmissionReadModel,
+  type ChatAttachmentComposerReadModel,
+  type ChatAttachmentMutationRequest,
+  type ClearChatAttachmentDraftRequest,
+  type GetChatAttachmentComposerRequest,
+  type SaveChatAttachmentDraftTextRequest,
+  type SelectChatAttachmentWorkoutRequest,
+} from "./chat-attachment.js";
 import {
   AnswerCoachDecisionRpcParamsSchema,
   AnswerCoachDecisionRpcResultSchema,
@@ -97,6 +119,26 @@ import {
   RetryQueuedTurnRequestSchema,
   RunQueuedCommandRequestSchema,
 } from "./chat-queue.js";
+import {
+  GetPlanningReadModelRpcParamsSchema,
+  GetPlanningReadModelRpcResultSchema,
+  type PlanningReadOperations,
+} from "./planning-read.js";
+import {
+  CreatePlanningRequestRpcParamsSchema,
+  CreatePlanningRequestRpcResultSchema,
+  CreateWorkoutPlanningRequestRpcParamsSchema,
+  CreateWorkoutPlanningRequestRpcResultSchema,
+  GetPlanningRequestRpcParamsSchema,
+  GetPlanningRequestRpcResultSchema,
+  ListPlanningRequestsRpcParamsSchema,
+  ListPlanningRequestsRpcResultSchema,
+  ResumePlanningRequestsRpcParamsSchema,
+  ResumePlanningRequestsRpcResultSchema,
+  RetryPlanningRequestRpcParamsSchema,
+  RetryPlanningRequestRpcResultSchema,
+  type PlanningRequestOperations,
+} from "./planning-request.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -191,6 +233,14 @@ export type JsonRpcNotificationEnvelope = z.infer<typeof JsonRpcNotificationEnve
 export const COACH_RPC_METHOD_NAMES = [
   "chat",
   "stopChat",
+  "admitChatAttachment",
+  "admitPastedChatAttachment",
+  "getChatAttachmentComposer",
+  "saveChatAttachmentDraftText",
+  "removeChatAttachment",
+  "retryChatAttachment",
+  "selectChatAttachmentWorkout",
+  "clearChatAttachmentDraft",
   "enqueueChatMessage",
   "getChatQueue",
   "removeQueuedChatMessage",
@@ -207,6 +257,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "listArchivedConversations",
   "getArchivedTranscriptPage",
   "getAthleteState",
+  "getPlanningReadModel",
   "getActivityAnalysis",
   "exportTrainingFile",
   "importFiles",
@@ -241,6 +292,12 @@ export const COACH_RPC_METHOD_NAMES = [
   "selfTest",
   "getPlanState",
   "executePlanTransition",
+  "createPlanningRequest",
+  "createWorkoutPlanningRequest",
+  "getPlanningRequest",
+  "retryPlanningRequest",
+  "resumePlanningRequests",
+  "listPlanningRequests",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -368,8 +425,23 @@ export const TranscriptPageTurnSchema = z
     athleteText: z.string(),
     coachText: z.string(),
     delivery: z.literal("interrupted").optional(),
+    attachments: z.array(ChatAttachmentReferenceSchema).max(5).optional(),
+    planReference: PlanReferenceSelectionSchema.optional(),
+    planHandoff: PlanHandoffSuggestionSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.delivery === "interrupted" &&
+      (value.planReference !== undefined || value.planHandoff !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["planHandoff"],
+        message: "interrupted turns cannot carry Plan metadata",
+      });
+    }
+  });
 export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;
 
 export const TranscriptPageEntrySchema = z.discriminatedUnion("kind", [
@@ -1116,6 +1188,28 @@ export const OperationProgressEventSchema = z
 export type OperationProgressEvent = z.infer<typeof OperationProgressEventSchema>;
 
 export interface CoachOperations {
+  admitChatAttachment?(request: AdmitChatAttachmentRequest): Promise<AttachmentAdmissionReadModel>;
+  admitPastedChatAttachment?(
+    request: AdmitPastedChatAttachmentRequest,
+  ): Promise<AttachmentAdmissionReadModel>;
+  getChatAttachmentComposer?(
+    request: GetChatAttachmentComposerRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  saveChatAttachmentDraftText?(
+    request: SaveChatAttachmentDraftTextRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  removeChatAttachment?(
+    request: ChatAttachmentMutationRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  retryChatAttachment?(
+    request: ChatAttachmentMutationRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  selectChatAttachmentWorkout?(
+    request: SelectChatAttachmentWorkoutRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  clearChatAttachmentDraft?(
+    request: ClearChatAttachmentDraftRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
   getActivityAnalysis?(
     request: ActivityAnalysisRequest,
     signal?: AbortSignal,
@@ -1199,6 +1293,8 @@ export interface TelegramControlOperations {
 
 export type CoachRpcService = CoachEngine &
   CoachOperations &
+  PlanningReadOperations &
+  PlanningRequestOperations &
   SpendOperations &
   CoachSelfTestOperations &
   TelegramControlOperations &
@@ -1219,6 +1315,70 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("stopChat"),
       params: StopChatRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("admitChatAttachment"),
+      params: AdmitChatAttachmentRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("admitPastedChatAttachment"),
+      params: AdmitPastedChatAttachmentRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getChatAttachmentComposer"),
+      params: GetChatAttachmentComposerRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("saveChatAttachmentDraftText"),
+      params: SaveChatAttachmentDraftTextRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("removeChatAttachment"),
+      params: ChatAttachmentMutationRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("retryChatAttachment"),
+      params: ChatAttachmentMutationRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("selectChatAttachmentWorkout"),
+      params: SelectChatAttachmentWorkoutRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("clearChatAttachmentDraft"),
+      params: ClearChatAttachmentDraftRequestSchema,
     })
     .strict(),
   z
@@ -1347,6 +1507,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("getAthleteState"),
       params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getPlanningReadModel"),
+      params: GetPlanningReadModelRpcParamsSchema,
     })
     .strict(),
   z
@@ -1621,6 +1789,54 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: ExecutePlanTransitionRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("createPlanningRequest"),
+      params: CreatePlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("createWorkoutPlanningRequest"),
+      params: CreateWorkoutPlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getPlanningRequest"),
+      params: GetPlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("retryPlanningRequest"),
+      params: RetryPlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resumePlanningRequests"),
+      params: ResumePlanningRequestsRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("listPlanningRequests"),
+      params: ListPlanningRequestsRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -1745,6 +1961,54 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: StopChatResponseSchema,
     eventSchema: NoRpcEventSchema,
   },
+  admitChatAttachment: {
+    wireName: "admitChatAttachment",
+    requestSchema: AdmitChatAttachmentRequestSchema,
+    responseSchema: AttachmentAdmissionReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  admitPastedChatAttachment: {
+    wireName: "admitPastedChatAttachment",
+    requestSchema: AdmitPastedChatAttachmentRequestSchema,
+    responseSchema: AttachmentAdmissionReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getChatAttachmentComposer: {
+    wireName: "getChatAttachmentComposer",
+    requestSchema: GetChatAttachmentComposerRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  saveChatAttachmentDraftText: {
+    wireName: "saveChatAttachmentDraftText",
+    requestSchema: SaveChatAttachmentDraftTextRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  removeChatAttachment: {
+    wireName: "removeChatAttachment",
+    requestSchema: ChatAttachmentMutationRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  retryChatAttachment: {
+    wireName: "retryChatAttachment",
+    requestSchema: ChatAttachmentMutationRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  selectChatAttachmentWorkout: {
+    wireName: "selectChatAttachmentWorkout",
+    requestSchema: SelectChatAttachmentWorkoutRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  clearChatAttachmentDraft: {
+    wireName: "clearChatAttachmentDraft",
+    requestSchema: ClearChatAttachmentDraftRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
   enqueueChatMessage: {
     wireName: "enqueueChatMessage",
     requestSchema: EnqueueChatMessageRequestSchema,
@@ -1839,6 +2103,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "getAthleteState",
     requestSchema: EmptyRpcParamsSchema,
     responseSchema: AthleteStateSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getPlanningReadModel: {
+    wireName: "getPlanningReadModel",
+    requestSchema: GetPlanningReadModelRpcParamsSchema,
+    responseSchema: GetPlanningReadModelRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getActivityAnalysis: {
@@ -2044,6 +2314,42 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: ExecutePlanTransitionRpcParamsSchema,
     responseSchema: ExecutePlanTransitionRpcResultSchema,
     eventSchema: PlanProgressEventSchema,
+  },
+  createPlanningRequest: {
+    wireName: "createPlanningRequest",
+    requestSchema: CreatePlanningRequestRpcParamsSchema,
+    responseSchema: CreatePlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  createWorkoutPlanningRequest: {
+    wireName: "createWorkoutPlanningRequest",
+    requestSchema: CreateWorkoutPlanningRequestRpcParamsSchema,
+    responseSchema: CreateWorkoutPlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getPlanningRequest: {
+    wireName: "getPlanningRequest",
+    requestSchema: GetPlanningRequestRpcParamsSchema,
+    responseSchema: GetPlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  retryPlanningRequest: {
+    wireName: "retryPlanningRequest",
+    requestSchema: RetryPlanningRequestRpcParamsSchema,
+    responseSchema: RetryPlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resumePlanningRequests: {
+    wireName: "resumePlanningRequests",
+    requestSchema: ResumePlanningRequestsRpcParamsSchema,
+    responseSchema: ResumePlanningRequestsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  listPlanningRequests: {
+    wireName: "listPlanningRequests",
+    requestSchema: ListPlanningRequestsRpcParamsSchema,
+    responseSchema: ListPlanningRequestsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;
 

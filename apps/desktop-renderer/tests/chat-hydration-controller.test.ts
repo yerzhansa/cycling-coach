@@ -29,6 +29,27 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function emptyAttachmentComposer() {
+  return {
+    schemaVersion: 1 as const,
+    capabilities: {
+      schemaVersion: 1 as const,
+      active: { provider: "test", model: "text-only", transport: "test" },
+      documents: { enabled: true as const, extensions: ["pdf", "txt", "csv", "docx"] as const },
+      completedActivities: { enabled: true as const, extensions: ["fit", "tcx", "gpx"] as const },
+      plannedWorkouts: { enabled: true as const, extensions: ["zwo", "erg", "mrc"] as const },
+      images: {
+        enabled: false as const,
+        mediaTypes: [] as const,
+        reason: "model_incompatible" as const,
+        source: "maintained_catalogue" as const,
+        checkedAt: "2001-01-01T00:00:00.000Z",
+      },
+    },
+    draft: null,
+  };
+}
+
 function coachClient(input: {
   readonly hasSession?: boolean;
   readonly resetSession?: () => Promise<{ memoryFlushed: boolean }>;
@@ -59,12 +80,21 @@ function coachClient(input: {
       if (method === "getCoachDecision") {
         return Promise.resolve({ decision: null }) as never;
       }
+      if (method === "getChatAttachmentComposer") {
+        return Promise.resolve(emptyAttachmentComposer()) as never;
+      }
       if (method === "getChatQueue") {
         return Promise.resolve({
           schemaVersion: 1,
           revision,
           items: queued === undefined ? [] : [queued],
         }) as never;
+      }
+      if (method === "listPlanningRequests") {
+        return Promise.resolve({ deliveries: [] }) as never;
+      }
+      if (method === "resumePlanningRequests") {
+        return Promise.resolve({ deliveries: [] }) as never;
       }
       if (method === "enqueueChatMessage") {
         const value = request as { submissionId: string; text: string };
@@ -172,9 +202,11 @@ describe("chat controller transcript hydration", () => {
       expect(readTranscriptPage).toHaveBeenCalledTimes(1);
       expect(states.at(-1)?.messages).toHaveLength(2);
     });
-    expect(client.call).toHaveBeenCalledTimes(3);
+    expect(client.call).toHaveBeenCalledTimes(6);
     expect(client.call).toHaveBeenCalledWith("hasSession", { chatId: "desktop" });
     expect(client.call).toHaveBeenCalledWith("getCoachDecision", { chatId: "desktop" });
+    expect(client.call).toHaveBeenCalledWith("resumePlanningRequests", {});
+    expect(client.call).toHaveBeenCalledWith("listPlanningRequests", { chatId: "desktop" });
   });
 
   it("renders the first persisted page alongside a still-pending live readiness probe", async () => {
@@ -183,8 +215,12 @@ describe("chat controller transcript hydration", () => {
     vi.mocked(client.call).mockImplementation((method) => {
       if (method === "hasSession") return session.promise as never;
       if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
+      if (method === "getChatAttachmentComposer") {
+        return Promise.resolve(emptyAttachmentComposer()) as never;
+      }
       if (method === "getChatQueue")
         return Promise.resolve({ schemaVersion: 1, revision: 0, items: [] }) as never;
+      if (method === "listPlanningRequests") return Promise.resolve({ deliveries: [] }) as never;
       throw new TypeError();
     });
     const { controller, states } = subject({

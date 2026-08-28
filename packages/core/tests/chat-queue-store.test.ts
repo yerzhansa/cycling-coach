@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   renameSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -49,6 +50,68 @@ describe("ChatQueueStore", () => {
     const restored = new ChatQueueStore(root).get("desktop");
     expect(restored.revision).toBe(2);
     expect(restored.items.map((item) => item.restored)).toEqual([true, true]);
+  });
+
+  it("stores one stable Message identity and attachment list per ordinary queue item", () => {
+    const { value } = store();
+    const queued = value.enqueue(
+      "desktop",
+      "submission-1",
+      "Review this",
+      "queued-1",
+      "message-1",
+      ["attachment-1"],
+    );
+    expect(queued.items[0]).toMatchObject({
+      queuedMessageId: "queued-1",
+      messageId: "message-1",
+      attachmentIds: ["attachment-1"],
+    });
+    expect(() =>
+      value.enqueue("desktop", "submission-2", "/review", "queued-2", "message-2", [
+        "attachment-2",
+      ]),
+    ).toThrow(/text-only/u);
+  });
+
+  it("restores legacy queues with deterministic Message identities and upgrades on mutation", () => {
+    const { root, value } = store();
+    const path = join(
+      root,
+      "chat-queues",
+      `${createHash("sha256").update("desktop").digest("hex")}.json`,
+    );
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        revision: 1,
+        items: [
+          {
+            queuedMessageId: "legacy-queued-1",
+            submissionId: "legacy-submission-1",
+            text: "Legacy message",
+            kind: "ordinary",
+          },
+        ],
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    expect(value.get("desktop").items[0]).toMatchObject({
+      queuedMessageId: "legacy-queued-1",
+      messageId: "legacy-queued-1",
+      attachmentIds: [],
+      restored: true,
+    });
+    value.enqueue("desktop", "submission-2", "New", "queued-2", "message-2", []);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      schemaVersion: 2,
+      items: [
+        { messageId: "legacy-queued-1", attachmentIds: [] },
+        { messageId: "message-2", attachmentIds: [] },
+      ],
+    });
   });
 
   it("removes every unclaimed item by stable identity before dispatch", () => {
@@ -112,6 +175,21 @@ describe("ChatQueueStore", () => {
     ).toMatchObject({
       claimId: "claim-2",
     });
+
+    const retry = store();
+    retry.value.enqueue("desktop", "submission-3", "First", "message-3", "athlete-message-3");
+    retry.value.claim("desktop", {
+      claimId: "claim-3",
+      turnId: "turn-3",
+      queuedMessageIds: ["message-3"],
+    });
+    retry.value.requireRetry("desktop", "claim-3");
+    const restored = new ChatQueueStore(retry.root);
+    expect(restored.getCompletedClaim("desktop", new Set(["turn-3"]))).toEqual({
+      turnId: "turn-3",
+      messageIds: ["athlete-message-3"],
+    });
+    expect(restored.reconcile("desktop", new Set(["turn-3"])).items).toEqual([]);
   });
 
   it("fails closed on corrupt or non-private queue snapshots", () => {

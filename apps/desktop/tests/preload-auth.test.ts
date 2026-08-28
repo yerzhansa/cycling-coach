@@ -59,6 +59,7 @@ interface AuthBridge {
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
+  getPlanningReadModel(): Promise<unknown>;
   getPlanState(): Promise<unknown>;
   executePlanTransition(input: unknown): Promise<unknown>;
   onPlanProgress(listener: (progress: unknown) => void): () => void;
@@ -93,6 +94,9 @@ interface AuthBridge {
   removeTelegramAllowedSender(input: unknown): Promise<unknown>;
   acknowledgeTelegramGapWarning(): Promise<unknown>;
   chooseImportFiles(): Promise<readonly string[]>;
+  chooseChatAttachments(): Promise<readonly unknown[]>;
+  pasteChatAttachment(): Promise<readonly unknown[]>;
+  onDroppedChatAttachments(listener: (results: readonly unknown[]) => void): () => void;
   choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
@@ -334,6 +338,7 @@ describe("desktop preload ChatGPT auth", () => {
         "cancelChatgptLogin",
         "chatgptLogin",
         "chatgptStatus",
+        "chooseChatAttachments",
         "chooseImportFiles",
         "choosePlanRaceCourseFile",
         "claudeCliRecheck",
@@ -349,16 +354,19 @@ describe("desktop preload ChatGPT auth", () => {
         "getDaemonConnection",
         "getPlanState",
         "getTranscriptPage",
+        "getPlanningReadModel",
         "initialSetupStatusSettled",
         "listArchivedConversations",
         "listTelegramAllowedSenders",
         "getArchivedTranscriptPage",
         "llmConfiguration",
         "checkForUpdates",
+        "onChatgptLoginProgress",
+        "onDroppedChatAttachments",
         "onDroppedImportFiles",
         "onPlanProgress",
-        "onChatgptLoginProgress",
         "onUpdateState",
+        "pasteChatAttachment",
         "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
         "platform",
@@ -1022,6 +1030,14 @@ describe("desktop preload ChatGPT auth", () => {
           completedAt: "1998-07-06T00:00:00.000Z",
           athleteText: "a",
           coachText: "b",
+          attachments: [
+            {
+              attachmentId: "attachment-1",
+              displayName: "training-notes.txt",
+              kind: "document",
+              extension: "txt",
+            },
+          ],
         },
       ],
       nextCursor: cursor,
@@ -1036,6 +1052,60 @@ describe("desktop preload ChatGPT auth", () => {
       cursor: null,
       limit: 25,
     });
+  });
+
+  it("validates decision-aware transcript pages with typed Plan references", async () => {
+    const turn = {
+      turnId: "turn-1",
+      completedAt: "1998-07-06T00:00:00.000Z",
+      athleteText: "Show Tuesday",
+      coachText: "Tempo builder",
+      planReference: { kind: "workout_detail", planId: "plan-1", workoutId: "workout-1" },
+    };
+    const response = {
+      schemaVersion: 2,
+      status: "page",
+      turns: [turn],
+      entries: [{ kind: "turn", ...turn }],
+      nextCursor: null,
+    };
+    mocks.invoke.mockResolvedValueOnce(response);
+
+    await expect(bridge.getTranscriptPage({ cursor: null, limit: 25 })).resolves.toEqual(response);
+
+    mocks.invoke.mockResolvedValueOnce({
+      ...response,
+      turns: [
+        { ...turn, planReference: { ...turn.planReference, markup: "<button>Apply</button>" } },
+      ],
+      entries: [
+        {
+          kind: "turn",
+          ...turn,
+          planReference: { ...turn.planReference, markup: "<button>Apply</button>" },
+        },
+      ],
+    });
+    await expect(bridge.getTranscriptPage({ cursor: null, limit: 25 })).rejects.toBeInstanceOf(
+      TypeError,
+    );
+  });
+
+  it("validates and copies the Planning-owned read model", async () => {
+    const response = {
+      schemaVersion: 1,
+      status: "no-plan",
+      asOfDateKey: 20260826,
+      plan: null,
+    };
+    mocks.invoke.mockResolvedValueOnce(response);
+    const value = await bridge.getPlanningReadModel();
+    expect(value).toEqual(response);
+    expect(value).not.toBe(response);
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:planning:read");
+
+    mocks.invoke.mockResolvedValueOnce({ ...response, athleteHome: "/private/athlete" });
+    await expect(bridge.getPlanningReadModel()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("rejects malformed transcript requests before IPC and redacts malformed responses", async () => {
@@ -1074,6 +1144,28 @@ describe("desktop preload ChatGPT auth", () => {
             completedAt: "not-a-timestamp",
             athleteText: "a",
             coachText: "b",
+          },
+        ],
+        nextCursor: null,
+      },
+      {
+        schemaVersion: 1,
+        status: "page",
+        turns: [
+          {
+            turnId: "turn-1",
+            completedAt: "1998-07-06T00:00:00.000Z",
+            athleteText: "a",
+            coachText: "b",
+            attachments: [
+              {
+                attachmentId: "attachment-1",
+                displayName: "ride.fit",
+                kind: "activity",
+                extension: "fit",
+                sourcePath: "/private/ride.fit",
+              },
+            ],
           },
         ],
         nextCursor: null,

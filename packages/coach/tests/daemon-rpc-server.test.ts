@@ -32,6 +32,7 @@ import {
   type CoachDecisionReadModel,
   type CoachEngine,
   type CoachOperations,
+  type PlanningReadOperations,
   type PlanningOperations,
   type PlanReadModel,
   type SpendSummary,
@@ -132,7 +133,7 @@ const completedDecision = {
   },
 } satisfies CoachDecisionReadModel;
 
-const operations: CoachOperations = {
+const operations: CoachOperations & PlanningReadOperations = {
   exportTrainingFile: async () => ({
     status: "exported",
     byteLength: 4_096,
@@ -198,6 +199,12 @@ const operations: CoachOperations = {
     status: "page",
     turns: [],
     nextCursor: null,
+  }),
+  getPlanningReadModel: async () => ({
+    schemaVersion: 1,
+    status: "no-plan",
+    asOfDateKey: 20260826,
+    plan: null,
   }),
   configureRuntime: async ({ llm, intervals, session }) => ({
     schemaVersion: 3,
@@ -832,6 +839,10 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       }),
       operations: {
         ...operations,
+        getPlanningReadModel: async () => {
+          calls.push("getPlanningReadModel");
+          return { schemaVersion: 1, status: "no-plan", asOfDateKey: 20260826, plan: null };
+        },
         exportTrainingFile: async (request, signal) => {
           calls.push("exportTrainingFile");
           return operations.exportTrainingFile!(request, signal);
@@ -917,6 +928,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       },
       { id: 40, method: "retryQueuedTurn", params: { chatId: "chat", claimId: "claim-1" } },
       { id: 4, method: "getAthleteState", params: {} },
+      { id: 41, method: "getPlanningReadModel", params: {} },
       {
         id: 5,
         method: "getActivityAnalysis",
@@ -953,6 +965,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "runQueuedCommand:chat",
       "retryQueuedTurn:chat",
       "getAthleteState",
+      "getPlanningReadModel",
       "getActivityAnalysis",
       "exportTrainingFile",
     ]);
@@ -2023,6 +2036,113 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it("dispatches strict Chat-to-Plan request delivery operations", async () => {
+    const token = "x".repeat(43);
+    const createPlanningRequest = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "invalid_request" as const,
+    }));
+    const createWorkoutPlanningRequest = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "invalid_request" as const,
+    }));
+    const getPlanningRequest = vi.fn(async () => ({ status: "missing" as const }));
+    const retryPlanningRequest = vi.fn(async () => ({ status: "missing" as const }));
+    const resumePlanningRequests = vi.fn(async () => ({ deliveries: [] }));
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [] }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: {
+        ...operations,
+        createPlanningRequest,
+        createWorkoutPlanningRequest,
+        getPlanningRequest,
+        retryPlanningRequest,
+        resumePlanningRequests,
+        listPlanningRequests,
+      },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    const payload = {
+      requestId: "request-1",
+      kind: "plan_question",
+      intent: "Review the current week.",
+      source: { chatId: "desktop", messageId: "message-1" },
+      sourceSnapshot: {
+        capturedAt: "1998-08-24T08:00:00.000Z",
+        attachment: null,
+        selectedWorkout: null,
+      },
+    };
+    for (const request of [
+      { id: "create-request", method: "createPlanningRequest", params: { payload } },
+      {
+        id: "create-workout-request",
+        method: "createWorkoutPlanningRequest",
+        params: {
+          requestId: "request-workout",
+          intent: "Review Tempo 3 × 12.",
+          source: {
+            chatId: "desktop",
+            messageId: "message-workout",
+            attachmentId: "attachment-1",
+          },
+        },
+      },
+      { id: "get-request", method: "getPlanningRequest", params: { requestId: "request-1" } },
+      { id: "retry-request", method: "retryPlanningRequest", params: { requestId: "request-1" } },
+      { id: "resume-requests", method: "resumePlanningRequests", params: {} },
+      { id: "list-requests", method: "listPlanningRequests", params: { chatId: "desktop" } },
+    ]) {
+      client.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id: request.id,
+        result:
+          request.method === "createPlanningRequest" ||
+          request.method === "createWorkoutPlanningRequest"
+            ? { status: "rejected", reason: "invalid_request" }
+            : request.method === "resumePlanningRequests" ||
+                request.method === "listPlanningRequests"
+              ? { deliveries: [] }
+              : { status: "missing" },
+      });
+    }
+    expect(createPlanningRequest).toHaveBeenCalledWith({ payload });
+    expect(createWorkoutPlanningRequest).toHaveBeenCalledWith({
+      requestId: "request-workout",
+      intent: "Review Tempo 3 × 12.",
+      source: {
+        chatId: "desktop",
+        messageId: "message-workout",
+        attachmentId: "attachment-1",
+      },
+    });
+    expect(getPlanningRequest).toHaveBeenCalledWith({ requestId: "request-1" });
+    expect(retryPlanningRequest).toHaveBeenCalledWith({ requestId: "request-1" });
+    expect(resumePlanningRequests).toHaveBeenCalledWith({});
+    expect(listPlanningRequests).toHaveBeenCalledWith({ chatId: "desktop" });
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "invalid-request",
+        method: "resumePlanningRequests",
+        params: { extra: true },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "invalid-request",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(resumePlanningRequests).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
   it.each([
     {
       name: "command id",
@@ -2312,6 +2432,128 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
 });
 
 describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
+  it("admits native paths only for privileged Desktop-main callers and fails closed before storage", async () => {
+    const token = "x".repeat(43);
+    const admitChatAttachment = vi.fn(async (request) => ({
+      selectionId: request.selectionId,
+      displayName: "activity.fit",
+      status: "storage_failed" as const,
+      failureCode: "admission_unavailable" as const,
+      retryable: false,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, admitChatAttachment },
+      token,
+      owner: "app-supervised",
+    });
+    const privileged = await openSocket(rpc);
+    privileged.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await privileged.frames.next();
+
+    const request = {
+      chatId: "desktop",
+      selectionId: "selection-1",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath: "/tmp/activity.fit" },
+    } as const;
+    privileged.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "privileged-admission",
+        method: "admitChatAttachment",
+        params: request,
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await privileged.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "privileged-admission",
+      result: {
+        selectionId: "selection-1",
+        displayName: "activity.fit",
+        status: "storage_failed",
+        failureCode: "admission_unavailable",
+        retryable: false,
+      },
+    });
+    expect(admitChatAttachment).toHaveBeenCalledWith(request);
+
+    privileged.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "foreign-admission",
+        method: "admitChatAttachment",
+        params: { ...request, chatId: "other" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await privileged.frames.next())).toMatchObject({
+      id: "foreign-admission",
+      error: { code: -32602, message: "Invalid params" },
+    });
+
+    const renderer = await openSocket(rpc);
+    renderer.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await renderer.frames.next();
+    renderer.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "renderer-admission",
+        method: "admitChatAttachment",
+        params: request,
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await renderer.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "renderer-admission",
+      error: { code: -32601, message: "Method not found" },
+    });
+    expect(admitChatAttachment).toHaveBeenCalledOnce();
+
+    await renderer.close();
+    await privileged.close();
+  });
+
+  it("returns a typed unavailable result when durable admission is not installed", async () => {
+    const token = "x".repeat(43);
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations,
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "unavailable",
+        method: "admitChatAttachment",
+        params: {
+          chatId: "desktop",
+          selectionId: "selection-1",
+          source: "drop",
+          candidate: { kind: "native-path", sourcePath: "C:\\rides\\activity.fit" },
+        },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "unavailable",
+      result: {
+        selectionId: "selection-1",
+        displayName: "activity.fit",
+        status: "storage_failed",
+        failureCode: "admission_unavailable",
+        retryable: false,
+      },
+    });
+    await client.close();
+  });
+
   it("binds renderer capabilities to the ordinary Chat and dedicated Plan namespaces", async () => {
     const token = "x".repeat(43);
     const chat = vi.fn(async () => ({ text: "ok" }));

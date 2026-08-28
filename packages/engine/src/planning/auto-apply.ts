@@ -83,6 +83,9 @@ export function validatePlanAutoApply(input: {
   if (change === undefined || input.proposal.changes.length !== 1) {
     return { status: "approval-required", reason: "not-a-reduction" };
   }
+  if (change.current === null) {
+    return { status: "approval-required", reason: "week-structure" };
+  }
   if (
     change.next.dateKey !== change.current.dateKey ||
     change.next.sport !== change.current.sport ||

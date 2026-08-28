@@ -1,10 +1,15 @@
 import type {
+  AttachmentCapabilitiesReadModel,
   AthleteState,
+  ChatAttachmentReference,
+  PlanningReadModel,
+  PlanReferenceSelection,
   ChatQueueSnapshot,
   CoachDecisionAnswer,
   CoachDecisionContinuationLineage,
   CoachDecisionReadModel,
   PlanIntakePatch,
+  PlanHandoffSuggestion,
   RequestUserDecisionInput,
   RequestUserDecisionResult,
 } from "@enduragent/coach-contract";
@@ -161,6 +166,8 @@ export interface ChatStorePort {
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId?: string,
+    attachmentIds?: readonly string[],
   ): ChatQueueSnapshot;
   removeQueuedChatMessage?(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
   claimChatQueue?(
@@ -173,6 +180,64 @@ export interface ChatStorePort {
   requireChatQueueRetry?(chatId: string, claimId: string): ChatQueueSnapshot;
   retryChatQueueClaim?(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
   clearChatQueue?(chatId: string): ChatQueueSnapshot;
+  getCompletedChatQueueClaim?(chatId: string): {
+    readonly turnId: string;
+    readonly messageIds: readonly string[];
+  } | null;
+}
+
+export interface ChatAttachmentActivitySummary {
+  readonly attachmentId: string;
+  readonly messageId: string;
+  readonly activityIds: readonly string[];
+  readonly sessions: readonly {
+    readonly activityId: string;
+    readonly sport: string;
+    readonly startUtc: number;
+    readonly elapsedSeconds: number | null;
+    readonly distanceMeters: number | null;
+  }[];
+}
+
+export interface ChatNativeMediaInput {
+  readonly attachmentId: string;
+  readonly mediaType: "image/png" | "image/jpeg" | "image/webp";
+  readonly bytes: Uint8Array;
+  readonly width: number;
+  readonly height: number;
+  readonly pageNumber?: number;
+}
+
+export interface ChatAttachmentTurnPreparation {
+  readonly activities: readonly ChatAttachmentActivitySummary[];
+  readonly attachments?: readonly ChatAttachmentReference[];
+  readonly attachmentContext?: string;
+  readonly untrustedAttachmentText?: string;
+  readonly nativeMedia?: readonly ChatNativeMediaInput[];
+}
+
+export interface ChatAttachmentTurnPort {
+  acceptQueuedMessage?(input: {
+    readonly chatId: string;
+    readonly messageId: string;
+    readonly attachmentIds: readonly string[];
+  }): Promise<void>;
+  prepareQueuedTurn(input: {
+    readonly chatId: string;
+    readonly messages: readonly {
+      readonly messageId: string;
+      readonly attachmentIds: readonly string[];
+    }[];
+    readonly capabilities?: AttachmentCapabilitiesReadModel;
+  }): Promise<ChatAttachmentTurnPreparation>;
+  completeQueuedTurn(input: {
+    readonly chatId: string;
+    readonly messageIds: readonly string[];
+  }): Promise<void>;
+}
+
+export interface AttachmentCapabilitiesPort {
+  resolve(signal?: AbortSignal): Promise<AttachmentCapabilitiesReadModel>;
 }
 
 export type TranscriptConversationBoundaryReason = "explicit-reset" | "stale-reset";
@@ -189,6 +254,9 @@ export interface TranscriptCompletedTurnInput {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly attachments?: readonly ChatAttachmentReference[];
+  readonly planReference?: PlanReferenceSelection;
+  readonly planHandoff?: PlanHandoffSuggestion;
 }
 
 export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;
@@ -399,6 +467,10 @@ export interface AthleteStateReaderPort {
   getAthleteState(): Promise<AthleteState>;
 }
 
+export interface PlanningReadPort {
+  getPlanningReadModel(): Promise<PlanningReadModel>;
+}
+
 export interface ReferenceStateSnapshot {
   readonly errorState: {
     readonly mitigation?: string;
@@ -414,6 +486,9 @@ export interface EngineHostPorts {
   readonly config: EngineConfig;
   readonly memory: MemoryStorePort;
   readonly chatStore: ChatStorePort;
+  readonly chatAttachments?: ChatAttachmentTurnPort;
+  readonly attachmentCapabilities?: AttachmentCapabilitiesPort;
+  readonly planningRead?: PlanningReadPort;
   readonly transcriptWriter: TranscriptWriterPort;
   readonly coachDecisions?: CoachDecisionStorePort;
   readonly secrets: SecretsPort;

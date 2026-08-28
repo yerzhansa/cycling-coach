@@ -278,7 +278,7 @@ function validCourseFailureJson(value: string | null | undefined): boolean {
   }
 }
 
-function validateSourceRequest(record: PlanSourceRequestRecord): void {
+export function validatePlanSourceRequestRecord(record: PlanSourceRequestRecord): void {
   if (
     !ULID.test(record.id) ||
     !ULID.test(record.conversationId) ||
@@ -400,7 +400,7 @@ function sourceRequestFromRow(row: Row): PlanSourceRequestRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validateSourceRequest(record);
+  validatePlanSourceRequestRecord(record);
   return record;
 }
 
@@ -736,7 +736,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
 
     async createOrGetSourceRequest(record) {
-      validateSourceRequest(record);
+      validatePlanSourceRequestRecord(record);
       return store.transaction(async () => {
         await requireOpenConversation(record.conversationId);
         const existing = await readSourceRequest(record.id);
@@ -770,7 +770,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
 
     async bindSourceBoundary(record) {
-      validateSourceRequest(record);
+      validatePlanSourceRequestRecord(record);
       if (record.sourceBoundaryRef === null) {
         throw new PlanConversationValidationError("invalid-source-request");
       }

@@ -9,6 +9,9 @@ export interface TranscriptTurn {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly attachments?: Extract<TranscriptPageEntry, { readonly kind: "turn" }>["attachments"];
+  readonly planReference?: Extract<TranscriptPageEntry, { readonly kind: "turn" }>["planReference"];
+  readonly planHandoff?: Extract<TranscriptPageEntry, { readonly kind: "turn" }>["planHandoff"];
 }
 
 export type TranscriptPage =
@@ -123,6 +126,7 @@ export function mergeHydratedMessages(
           text: entry.athleteText,
           delivery: "complete",
           historical: true,
+          ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
         },
         {
           id: `history:coach:${entry.turnId}`,
@@ -131,6 +135,8 @@ export function mergeHydratedMessages(
           text: entry.coachText,
           delivery: entry.delivery ?? "complete",
           historical: true,
+          ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
+          ...(entry.planHandoff === undefined ? {} : { planHandoff: entry.planHandoff }),
         },
       ];
     }

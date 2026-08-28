@@ -99,9 +99,11 @@ describe("durable chat queue controller", () => {
       items: [
         {
           queuedMessageId: "queued-1",
+          messageId: "message-1",
           submissionId: "submission-1",
           text: "Hello",
           kind: "ordinary",
+          attachmentIds: [],
           position: 0,
           restored: false,
         },
@@ -150,9 +152,11 @@ describe("durable chat queue controller", () => {
             items: [
               {
                 queuedMessageId: `queued-${revision}`,
+                messageId: `message-${revision}`,
                 submissionId: input.submissionId,
                 text: input.text,
                 kind: "ordinary",
+                attachmentIds: [],
                 position: 0,
                 restored: false,
               },
@@ -194,9 +198,11 @@ describe("durable chat queue controller", () => {
       items: [
         {
           queuedMessageId: "command-1",
+          messageId: "message-command-1",
           submissionId: "submission-1",
           text: "/review",
           kind: "slash-command",
+          attachmentIds: [],
           position: 0,
           restored: true,
         },
@@ -249,9 +255,11 @@ describe("durable chat queue controller", () => {
       items: [
         {
           queuedMessageId: "queued-1",
+          messageId: "message-1",
           submissionId: "submission-1",
           text: "Restored",
           kind: "ordinary",
+          attachmentIds: [],
           position: 0,
           restored: true,
         },
@@ -307,9 +315,11 @@ describe("durable chat queue controller", () => {
             items: [
               {
                 queuedMessageId: "queued-1",
+                messageId: "message-1",
                 submissionId: input.submissionId,
                 text: input.text,
                 kind: "ordinary",
+                attachmentIds: [],
                 position: 0,
                 restored: false,
               },
@@ -345,9 +355,11 @@ describe("durable chat queue controller", () => {
       items: [
         {
           queuedMessageId: "command-1",
+          messageId: "message-command-1",
           submissionId: "submission-1",
           text: "/review",
           kind: "slash-command",
+          attachmentIds: [],
           position: 0,
           restored: true,
         },
@@ -381,9 +393,11 @@ describe("durable chat queue controller", () => {
       items: [
         {
           queuedMessageId: "command-1",
+          messageId: "message-command-1",
           submissionId: "submission-1",
           text: "/review",
           kind: "slash-command",
+          attachmentIds: [],
           position: 0,
           restored: true,
         },
@@ -417,17 +431,21 @@ describe("durable chat queue controller", () => {
     let secondOptions: CoachClientCallOptions<"chat"> | undefined;
     const first = {
       queuedMessageId: "queued-1",
+      messageId: "message-1",
       submissionId: "submission-1",
       text: "First",
       kind: "ordinary" as const,
+      attachmentIds: [],
       position: 0,
       restored: false,
     };
     const later = {
       queuedMessageId: "queued-2",
+      messageId: "message-2",
       submissionId: "submission-2",
       text: "Later",
       kind: "ordinary" as const,
+      attachmentIds: [],
       position: 1,
       restored: false,
     };
@@ -523,17 +541,21 @@ describe("durable chat queue controller", () => {
     let options: CoachClientCallOptions<"chat"> | undefined;
     const head = {
       queuedMessageId: "queued-1",
+      messageId: "message-1",
       submissionId: "submission-1",
       text: "First",
       kind: "ordinary" as const,
+      attachmentIds: [],
       position: 0,
       restored: true,
     };
     const later = {
       queuedMessageId: "queued-2",
+      messageId: "message-2",
       submissionId: "submission-2",
       text: "Later",
       kind: "ordinary" as const,
+      attachmentIds: [],
       position: 1,
       restored: false,
     };
@@ -606,17 +628,21 @@ describe("durable chat queue controller", () => {
     const items = [
       {
         queuedMessageId: "queued-1",
+        messageId: "message-1",
         submissionId: "submission-1",
         text: "First",
         kind: "ordinary" as const,
+        attachmentIds: [],
         position: 0,
         restored: false,
       },
       {
         queuedMessageId: "queued-2",
+        messageId: "message-2",
         submissionId: "submission-2",
         text: "/later",
         kind: "slash-command" as const,
+        attachmentIds: [],
         position: 1,
         restored: true,
       },

@@ -88,14 +88,8 @@ export function createMemoryQueryTool(memory: MemoryStorePort, bindProvenance: b
       "experiments. Returns matching notes and events grouped by date.",
     inputSchema: zodSchema(
       z.object({
-        from: z
-          .string()
-          .regex(DATE_KEY_RE)
-          .describe("Start date (inclusive), YYYY-MM-DD"),
-        to: z
-          .string()
-          .regex(DATE_KEY_RE)
-          .describe("End date (inclusive), YYYY-MM-DD"),
+        from: z.string().regex(DATE_KEY_RE).describe("Start date (inclusive), YYYY-MM-DD"),
+        to: z.string().regex(DATE_KEY_RE).describe("End date (inclusive), YYYY-MM-DD"),
         query: z
           .string()
           .optional()
@@ -119,9 +113,7 @@ export function createMemoryQueryTool(memory: MemoryStorePort, bindProvenance: b
       const byDate = new Map<string, string[]>();
 
       for (const { date, text } of memory.readDailyNotesInRange(from, to)) {
-        const lines = q
-          ? text.split("\n").filter((l) => l.toLowerCase().includes(q))
-          : [text];
+        const lines = q ? text.split("\n").filter((l) => l.toLowerCase().includes(q)) : [text];
         if (lines.length > 0) byDate.set(date, lines);
       }
 

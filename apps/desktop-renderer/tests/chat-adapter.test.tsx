@@ -95,6 +95,15 @@ describe("chat view adapter", () => {
       decisionError: null,
       decisionLoadError: null,
       queueMutationError: null,
+      attachments: null,
+      attachmentAdmissions: [],
+      attachmentBusy: false,
+      attachmentError: null,
+      planningRequests: [],
+      planningRequestsLoaded: false,
+      planningRequestBusyId: null,
+      planningRequestError: null,
+      planningRequestFocusId: null,
       timeline: [
         {
           kind: "message",
@@ -466,6 +475,46 @@ describe("chat view adapter", () => {
       ["history:coach:persisted-1", true],
       ["m1", false],
     ]);
+  });
+
+  it("projects persisted attachment references on a relaunched historical message", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const attachments = [
+      {
+        attachmentId: "attachment-1",
+        displayName: "training-notes.txt",
+        kind: "document" as const,
+        extension: "txt" as const,
+      },
+    ];
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 1,
+          change: "initial",
+          entries: [
+            {
+              kind: "turn",
+              turnId: "persisted-attachment",
+              completedAt: "2001-01-01T00:00:00.000Z",
+              athleteText: "Review this file",
+              coachText: "Reviewed",
+              attachments,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(published.at(-1)?.timeline[0]).toMatchObject({
+      kind: "message",
+      message: { role: "athlete", historical: true, attachments },
+    });
   });
 
   it("keeps sending available while a turn streams and exposes the queue for the strip", () => {

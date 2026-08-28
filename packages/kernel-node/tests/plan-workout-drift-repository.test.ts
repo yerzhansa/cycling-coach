@@ -139,6 +139,7 @@ describe("Plan workout drift repository", () => {
           id: `${"0".repeat(25)}4`,
           planId: PLAN_ID,
           targetWorkoutId: WORKOUT_ID,
+          operation: "update",
           kind: "drift-adopted",
           sourceId: DRIFT_ID,
           reversalOfId: null,

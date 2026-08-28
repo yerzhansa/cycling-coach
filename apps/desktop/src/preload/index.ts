@@ -1,11 +1,17 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
+  AttachmentAdmissionReadModelSchema,
+  CHAT_ATTACHMENT_LIMITS,
+  GetArchivedTranscriptPageRpcResultSchema,
+  GetPlanningReadModelRpcResultSchema,
+  GetTranscriptPageRpcResultSchema,
+  PlatformAbsolutePathSchema,
+  type AttachmentAdmissionReadModel,
   ExecutePlanTransitionRpcParamsSchema,
   ExecutePlanTransitionRpcResultSchema,
   GetPlanStateRpcResultSchema,
   PlanProgressEventSchema,
   PlanRaceCourseFileSelectionSchema,
-  PlatformAbsolutePathSchema,
   type PlanProgressEvent,
 } from "@enduragent/coach-contract";
 import { parseDesktopAppearance } from "../main/appearance.js";
@@ -14,10 +20,14 @@ import { desktopRendererNavigationToken } from "../main/renderer-navigation.js";
 import {
   DESKTOP_APPEARANCE_CHANNEL,
   DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL,
+  DESKTOP_CHAT_ATTACHMENT_PASTE_CHANNEL,
+  DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL,
   DESKTOP_DOCUMENT_REGISTRATION_CHANNEL,
   DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
+  DESKTOP_PLANNING_READ_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_PLAN_PROGRESS_CHANNEL,
   DESKTOP_PLAN_COURSE_FILE_CHANNEL,
@@ -413,51 +423,14 @@ function canonicalIsoTimestamp(value: unknown): value is string {
 
 function parseTranscriptPage(
   value: unknown,
-  cursor: (candidate: unknown) => candidate is string = transcriptCursor,
+  schema: typeof GetTranscriptPageRpcResultSchema | typeof GetArchivedTranscriptPageRpcResultSchema,
 ): unknown {
-  if (
-    !record(value) ||
-    !exactKeys(value, ["schemaVersion", "status", "turns", "nextCursor"]) ||
-    value.schemaVersion !== 1 ||
-    (value.status !== "page" && value.status !== "restart-required") ||
-    !Array.isArray(value.turns) ||
-    value.turns.length > TRANSCRIPT_PAGE_MAX_TURNS ||
-    (value.nextCursor !== null && !cursor(value.nextCursor)) ||
-    textEncoder.encode(JSON.stringify(value)).byteLength > TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES
-  ) {
+  if (textEncoder.encode(JSON.stringify(value)).byteLength > TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES) {
     throw new TypeError();
   }
-  const turns = value.turns.map((turn) => {
-    if (
-      !record(turn) ||
-      !exactKeys(turn, ["turnId", "completedAt", "athleteText", "coachText"]) ||
-      typeof turn.turnId !== "string" ||
-      turn.turnId.length === 0 ||
-      !canonicalIsoTimestamp(turn.completedAt) ||
-      typeof turn.athleteText !== "string" ||
-      typeof turn.coachText !== "string"
-    ) {
-      throw new TypeError();
-    }
-    return {
-      turnId: turn.turnId,
-      completedAt: turn.completedAt,
-      athleteText: turn.athleteText,
-      coachText: turn.coachText,
-    };
-  });
-  if (value.status === "restart-required" && (turns.length !== 0 || value.nextCursor !== null)) {
-    throw new TypeError();
-  }
-  if (value.status === "page" && turns.length === 0 && value.nextCursor !== null) {
-    throw new TypeError();
-  }
-  return {
-    schemaVersion: 1,
-    status: value.status,
-    turns,
-    nextCursor: value.nextCursor,
-  };
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new TypeError();
+  return parsed.data;
 }
 
 function parseArchivedConversations(value: unknown): unknown {
@@ -1029,6 +1002,19 @@ function parsePaths(value: unknown): readonly string[] {
   return paths;
 }
 
+function parseAttachmentAdmissions(value: unknown): readonly AttachmentAdmissionReadModel[] {
+  if (!Array.isArray(value) || value.length > CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage) {
+    throw new TypeError();
+  }
+  return value.map((item) => AttachmentAdmissionReadModelSchema.parse(item));
+}
+
+function parsePlanningReadModel(value: unknown): unknown {
+  const parsed = GetPlanningReadModelRpcResultSchema.safeParse(value);
+  if (!parsed.success) throw new TypeError();
+  return parsed.data;
+}
+
 function telegramUsername(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value);
 }
@@ -1356,6 +1342,7 @@ async function invokeTelegramSenders(): Promise<unknown> {
 }
 
 let dropDisposer: (() => void) | undefined;
+let chatAttachmentDropDisposer: (() => void) | undefined;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 const chatGptLoginProgressListeners = new Set<(progress: PreloadChatGptLoginProgress) => void>();
 const planProgressListeners = new Set<(progress: PlanProgressEvent) => void>();
@@ -1475,6 +1462,7 @@ contextBridge.exposeInMainWorld(
       const request = parseTranscriptPageRequest(input);
       return parseTranscriptPage(
         await ipcRenderer.invoke(DESKTOP_TRANSCRIPT_PAGE_CHANNEL, request),
+        GetTranscriptPageRpcResultSchema,
       );
     },
     listArchivedConversations: async () =>
@@ -1483,9 +1471,11 @@ contextBridge.exposeInMainWorld(
       const request = parseArchivedPageRequest(input);
       return parseTranscriptPage(
         await ipcRenderer.invoke(DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL, request),
-        archivedTranscriptCursor,
+        GetArchivedTranscriptPageRpcResultSchema,
       );
     },
+    getPlanningReadModel: async () =>
+      parsePlanningReadModel(await ipcRenderer.invoke(DESKTOP_PLANNING_READ_CHANNEL)),
     getPlanState: async (...args: unknown[]) => {
       requireZeroArguments(args);
       const parsed = GetPlanStateRpcResultSchema.safeParse(
@@ -1662,6 +1652,18 @@ contextBridge.exposeInMainWorld(
     },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
+    chooseChatAttachments: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseAttachmentAdmissions(
+        await ipcRenderer.invoke(DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL),
+      );
+    },
+    pasteChatAttachment: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseAttachmentAdmissions(
+        await ipcRenderer.invoke(DESKTOP_CHAT_ATTACHMENT_PASTE_CHANNEL),
+      );
+    },
     exportTrainingFile: async (input: unknown) => {
       const request = parseTrainingExportRequest(input);
       return parseTrainingExportResult(
@@ -1703,6 +1705,48 @@ contextBridge.exposeInMainWorld(
         if (dropDisposer === dispose) dropDisposer = undefined;
       };
       dropDisposer = dispose;
+      return dispose;
+    },
+    onDroppedChatAttachments: (listener: unknown) => {
+      if (typeof listener !== "function" || chatAttachmentDropDisposer !== undefined) {
+        throw new TypeError();
+      }
+      const onDrop = (event: DragEvent): void => {
+        const target = event.target;
+        if (
+          !(target instanceof Element) ||
+          target.closest("[data-chat-attachment-dropzone]") === null
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const paths = Array.from(event.dataTransfer?.files ?? [])
+          .map((file) => webUtils.getPathForFile(file))
+          .filter((path) => PlatformAbsolutePathSchema.safeParse(path).success)
+          .slice(0, CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage);
+        if (paths.length === 0) return;
+        void ipcRenderer
+          .invoke(DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL, paths)
+          .then((value) => listener(parseAttachmentAdmissions(value)))
+          .catch(() => {});
+      };
+      const onDragOver = (event: DragEvent): void => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest("[data-chat-attachment-dropzone]") !== null
+        ) {
+          event.preventDefault();
+        }
+      };
+      window.addEventListener("dragover", onDragOver);
+      window.addEventListener("drop", onDrop);
+      const dispose = (): void => {
+        window.removeEventListener("dragover", onDragOver);
+        window.removeEventListener("drop", onDrop);
+        if (chatAttachmentDropDisposer === dispose) chatAttachmentDropDisposer = undefined;
+      };
+      chatAttachmentDropDisposer = dispose;
       return dispose;
     },
   }),

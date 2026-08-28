@@ -8,6 +8,13 @@ import {
 } from "./adaptation-ledger-repository.js";
 import { addCivilDays } from "./date-keys.js";
 import type { PlanRecord, PlanWorkoutRecord } from "./repository.js";
+import { parsePlanningRequestTerminalResult } from "./request-repository.js";
+import {
+  completePlanningRequestInTransaction,
+  linkPlanningRequestProposalInTransaction,
+  type PlanningRequestCompletionTransactionInput,
+  type PlanningRequestProposalLinkTransactionInput,
+} from "./request-transaction.js";
 
 export type PlanProposalStatus = "proposed" | "applied" | "rejected" | "superseded" | "refused";
 export type PlanProposalConfidence = "Low" | "Moderate" | "High";
@@ -51,6 +58,7 @@ export interface PlanProposalRepository {
   save(
     proposal: PlanProposalRecord,
     premises: readonly PlanProposalPremiseRecord[],
+    requestLink?: PlanningRequestProposalLinkTransactionInput,
   ): Promise<PlanProposalRecord>;
   read(id: string): Promise<PlanProposalRecord | undefined>;
   readOpenForPlan(planId: string): Promise<readonly PlanProposalRecord[]>;
@@ -63,6 +71,7 @@ export interface PlanProposalRepository {
     readonly deviceId: string;
     readonly hlcPhysicalMs: number;
     readonly hlcCounter: number;
+    readonly requestCompletion?: PlanningRequestCompletionTransactionInput;
   }): Promise<PlanProposalRecord>;
   apply(input: {
     readonly id: string;
@@ -83,6 +92,7 @@ export interface PlanProposalRepository {
     readonly deviceId: string;
     readonly hlcPhysicalMs: number;
     readonly hlcCounter: number;
+    readonly requestCompletion?: PlanningRequestCompletionTransactionInput;
   }): Promise<PlanProposalRecord>;
 }
 
@@ -154,7 +164,7 @@ function nullableInteger(row: Row, key: string): number | null {
   return value;
 }
 
-function validateProposal(record: PlanProposalRecord): void {
+export function validatePlanProposalRecord(record: PlanProposalRecord): void {
   const resolved = record.status !== "proposed";
   if (
     !ULID.test(record.id) ||
@@ -187,7 +197,7 @@ function validateProposal(record: PlanProposalRecord): void {
   }
 }
 
-function validatePremise(record: PlanProposalPremiseRecord): void {
+export function validatePlanProposalPremiseRecord(record: PlanProposalPremiseRecord): void {
   if (
     !ULID.test(record.id) ||
     !ULID.test(record.proposalId) ||
@@ -229,7 +239,7 @@ function proposalFromRow(row: Row): PlanProposalRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   };
-  validateProposal(record);
+  validatePlanProposalRecord(record);
   return Object.freeze(record);
 }
 
@@ -248,7 +258,7 @@ function premiseFromRow(row: Row): PlanProposalPremiseRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   };
-  validatePremise(record);
+  validatePlanProposalPremiseRecord(record);
   return Object.freeze(record);
 }
 
@@ -268,13 +278,29 @@ export function createPlanProposalRepository(store: ProposalStore): PlanProposal
   };
 
   const repository: PlanProposalRepository = Object.freeze({
-    async save(proposal: PlanProposalRecord, premises: readonly PlanProposalPremiseRecord[]) {
-      validateProposal(proposal);
+    async save(
+      proposal: PlanProposalRecord,
+      premises: readonly PlanProposalPremiseRecord[],
+      requestLink?: PlanningRequestProposalLinkTransactionInput,
+    ) {
+      validatePlanProposalRecord(proposal);
       if (proposal.status !== "proposed" || premises.length === 0) {
         throw new PlanProposalValidationError("invalid-proposal");
       }
+      if (
+        requestLink !== undefined &&
+        (proposal.parentProposalId === null ||
+          requestLink.previousProposalId !== proposal.parentProposalId ||
+          requestLink.proposalId !== proposal.id ||
+          requestLink.updatedAtMs !== proposal.updatedAtMs ||
+          requestLink.deviceId !== proposal.deviceId ||
+          requestLink.hlcPhysicalMs !== proposal.hlcPhysicalMs ||
+          requestLink.hlcCounter !== proposal.hlcCounter)
+      ) {
+        throw new PlanProposalValidationError("invalid-transition");
+      }
       for (const premise of premises) {
-        validatePremise(premise);
+        validatePlanProposalPremiseRecord(premise);
         if (premise.proposalId !== proposal.id) {
           throw new PlanProposalValidationError("invalid-premise");
         }
@@ -352,6 +378,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ],
           );
         }
+        if (requestLink !== undefined) {
+          await linkPlanningRequestProposalInTransaction(store, requestLink);
+        }
       });
       const stored = await read(proposal.id);
       if (stored === undefined) throw new PlanProposalValidationError("missing-proposal");
@@ -393,25 +422,49 @@ WHERE proposal_id=? ORDER BY source_type,source_id,id`,
       ) {
         throw new PlanProposalValidationError("invalid-proposal");
       }
-      const current = await read(input.id);
-      if (current === undefined) throw new PlanProposalValidationError("missing-proposal");
-      if (current.status !== "proposed" || input.resolvedAtMs < current.createdAtMs) {
+      const requestCompletion =
+        input.requestCompletion === undefined
+          ? undefined
+          : {
+              ...input.requestCompletion,
+              result: parsePlanningRequestTerminalResult(input.requestCompletion.result),
+            };
+      if (
+        requestCompletion !== undefined &&
+        (requestCompletion.expectedProposalId !== input.id ||
+          requestCompletion.updatedAtMs !== input.resolvedAtMs ||
+          requestCompletion.deviceId !== input.deviceId ||
+          requestCompletion.hlcPhysicalMs !== input.hlcPhysicalMs ||
+          requestCompletion.hlcCounter !== input.hlcCounter ||
+          (input.status === "rejected" && requestCompletion.result.kind !== "rejected") ||
+          (input.status === "refused" && requestCompletion.result.kind !== "ended"))
+      ) {
         throw new PlanProposalValidationError("invalid-transition");
       }
-      await store.run(
-        `UPDATE plan_proposal SET status=?, refusal_reason=?, updated_at_ms=?, resolved_at_ms=?,
+      await store.transaction(async () => {
+        const current = await read(input.id);
+        if (current === undefined) throw new PlanProposalValidationError("missing-proposal");
+        if (current.status !== "proposed" || input.resolvedAtMs < current.createdAtMs) {
+          throw new PlanProposalValidationError("invalid-transition");
+        }
+        await store.run(
+          `UPDATE plan_proposal SET status=?, refusal_reason=?, updated_at_ms=?, resolved_at_ms=?,
 device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
-        [
-          input.status,
-          input.status === "refused" ? input.reason! : null,
-          input.resolvedAtMs,
-          input.resolvedAtMs,
-          input.deviceId,
-          input.hlcPhysicalMs,
-          input.hlcCounter,
-          input.id,
-        ],
-      );
+          [
+            input.status,
+            input.status === "refused" ? input.reason! : null,
+            input.resolvedAtMs,
+            input.resolvedAtMs,
+            input.deviceId,
+            input.hlcPhysicalMs,
+            input.hlcCounter,
+            input.id,
+          ],
+        );
+        if (requestCompletion !== undefined) {
+          await completePlanningRequestInTransaction(store, requestCompletion);
+        }
+      });
       const stored = await read(input.id);
       if (stored === undefined || stored.status !== input.status) {
         throw new PlanProposalValidationError("invalid-transition");
@@ -419,6 +472,13 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
       return stored;
     },
     async apply(input: Parameters<PlanProposalRepository["apply"]>[0]) {
+      const requestCompletion =
+        input.requestCompletion === undefined
+          ? undefined
+          : {
+              ...input.requestCompletion,
+              result: parsePlanningRequestTerminalResult(input.requestCompletion.result),
+            };
       const expectedById = new Map(input.expectedWorkouts.map((workout) => [workout.id, workout]));
       if (
         !ULID.test(input.id) ||
@@ -444,22 +504,37 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
         input.hlcCounter < 0 ||
         input.workouts.length === 0 ||
         input.workouts.length !== 1 ||
-        input.expectedWorkouts.length !== input.workouts.length ||
+        input.expectedWorkouts.length > 1 ||
         expectedById.size !== input.expectedWorkouts.length ||
-        input.workouts.some((workout) => !expectedById.has(workout.id))
+        (input.expectedWorkouts.length === 1 &&
+          input.expectedWorkouts[0]!.id !== input.workouts[0]!.id) ||
+        (requestCompletion !== undefined &&
+          (requestCompletion.expectedProposalId !== input.id ||
+            requestCompletion.updatedAtMs !== input.resolvedAtMs ||
+            requestCompletion.deviceId !== input.deviceId ||
+            requestCompletion.hlcPhysicalMs !== input.hlcPhysicalMs ||
+            requestCompletion.hlcCounter !== input.hlcCounter ||
+            requestCompletion.result.kind !== "applied" ||
+            requestCompletion.result.completedAtMs !== input.resolvedAtMs ||
+            requestCompletion.result.planRevisionId !== input.ledger.id))
       ) {
         throw new PlanProposalValidationError("invalid-proposal");
       }
-      const expectedWorkout = input.expectedWorkouts[0]!;
+      const expectedWorkout = input.expectedWorkouts[0];
       const nextWorkout = input.workouts[0]!;
       if (
         input.ledger.kind !== "proposal-applied" ||
         input.ledger.sourceId !== input.id ||
         input.ledger.reversalOfId !== null ||
         input.ledger.planId !== input.plan.id ||
-        input.ledger.targetWorkoutId !== expectedWorkout.id ||
-        input.ledger.beforeJson !==
-          encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(expectedWorkout)) ||
+        input.ledger.targetWorkoutId !== nextWorkout.id ||
+        (expectedWorkout === undefined
+          ? input.ledger.operation !== "add" || input.ledger.beforeJson !== null
+          : input.ledger.operation !== "update" ||
+            input.ledger.beforeJson !==
+              encodePlanAdaptationWorkoutSnapshot(
+                planAdaptationWorkoutSnapshot(expectedWorkout),
+              )) ||
         input.ledger.afterJson !==
           encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(nextWorkout))
       ) {
@@ -489,12 +564,7 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
         }
         for (const workout of input.workouts) {
           const expected = expectedById.get(workout.id);
-          if (
-            expected === undefined ||
-            workout.planId !== input.plan.id ||
-            expected.planId !== input.plan.id ||
-            !ULID.test(workout.id)
-          ) {
+          if (workout.planId !== input.plan.id || !ULID.test(workout.id)) {
             throw new PlanProposalValidationError("invalid-proposal");
           }
           const current = await store.get(
@@ -502,6 +572,35 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
 device_id, hlc_physical_ms, hlc_counter FROM plan_workout WHERE id=? AND plan_id=?`,
             [workout.id, input.plan.id],
           );
+          if (expected === undefined) {
+            const dateConflict = await store.get(
+              "SELECT id FROM plan_workout WHERE plan_id=? AND date_key=? LIMIT 1",
+              [input.plan.id, workout.dateKey],
+            );
+            if (current !== undefined || dateConflict !== undefined) {
+              throw new PlanProposalValidationError("stale-base");
+            }
+            await store.run(
+              `INSERT INTO plan_workout (
+  id, plan_id, date_key, sport, name, duration_s, structure_json, origin,
+  device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                workout.id,
+                workout.planId,
+                workout.dateKey,
+                workout.sport,
+                workout.name,
+                workout.durationS,
+                workout.structureJson,
+                workout.origin,
+                workout.deviceId,
+                workout.hlcPhysicalMs,
+                workout.hlcCounter,
+              ],
+            );
+            continue;
+          }
           if (
             current === undefined ||
             text(current, "id") !== expected.id ||
@@ -590,6 +689,9 @@ WHERE plan_id=? AND kind='mirror' AND window_start_date_key=? AND window_end_dat
         await store.run("DELETE FROM plan_reconciliation_item WHERE job_id=?", [
           text(mirrorJobRow, "id"),
         ]);
+        if (requestCompletion !== undefined) {
+          await completePlanningRequestInTransaction(store, requestCompletion);
+        }
         const storedRow = await store.get(
           `SELECT ${PROPOSAL_COLUMNS} FROM plan_proposal WHERE id=?`,
           [input.id],

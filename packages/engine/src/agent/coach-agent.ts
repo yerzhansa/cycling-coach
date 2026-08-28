@@ -5,6 +5,7 @@ import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type {
   AnswerCoachDecisionRpcParams,
   AnswerCoachDecisionRpcResult,
+  ChatAttachmentReference,
   CoachDecisionContinuationLineage,
   CoachDecisionReadModel,
   GetCoachDecisionRpcParams,
@@ -21,6 +22,7 @@ import { PlanIntakePatchSchema, RequestUserDecisionResultSchema } from "@endurag
 import type {
   ChatLineage,
   ChatStorePort,
+  ChatNativeMediaInput,
   EngineConfig,
   EngineHostPorts,
   LoggerPort,
@@ -43,14 +45,18 @@ import {
 import {
   computeAssembledHash,
   computeTemplateHash,
-  PROMPT_LINEAGE_SCHEMA_VERSION,
+  promptLineageSchemaVersion,
   sha256_16,
 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
 import { memoizeReadTool, evictMemoryReadEntries } from "./read-memoizer.js";
 import { createTurnContext, getTurnContext, type TurnContext } from "./turn-context.js";
-import { markUntrustedResult, isUntrustedEnvelope } from "./prompt-fence.js";
+import {
+  isUntrustedEnvelope,
+  markUntrustedResult,
+  wrapAthleteContextFence,
+} from "./prompt-fence.js";
 import { renderGarminAttribution } from "./garmin-attribution.js";
 import { provenanceFromToolResult } from "./tool-provenance.js";
 import {
@@ -92,6 +98,9 @@ import {
   decisionContinuationMessage,
   decisionRequestInput,
 } from "./coach-decision-tool.js";
+import { PLAN_REFERENCE_TOOL_NAME, createPlanReferenceTool } from "./plan-reference-tool.js";
+import { PLAN_HANDOFF_TOOL_NAME, createPlanHandoffTool } from "./plan-handoff-tool.js";
+import { attachNativeMediaToCurrentUserMessage } from "../native-media-message.js";
 import { createPlanIntakeTool, PLAN_INTAKE_TOOL_NAME } from "./plan-intake-tool.js";
 import { assertPlanCoachReplyAuthority } from "./plan-coach-authority.js";
 
@@ -353,8 +362,10 @@ export class CoachAgent {
   private chatStore: ChatStorePort;
   private log: LoggerPort;
   private tools: ToolSet;
+  private readonly desktopTools: ToolSet;
   private readonly planTools: ToolSet;
   private readonly decisionTool: Tool | undefined;
+  private readonly planReferenceTool: Tool | undefined;
   private systemPrompt: string;
   private tz: string;
   // Derived once from getEffectiveSections(sport): the spec'd sections with
@@ -368,6 +379,7 @@ export class CoachAgent {
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
+  private desktopTemplateHash?: string;
   private planTemplateHash?: string;
   private readonly activeChatTurns = new Map<
     string,
@@ -465,10 +477,33 @@ export class CoachAgent {
           now: ports.now,
         })
       : undefined;
-    this.tools =
-      this.decisionTool === undefined
-        ? sportTools
-        : { ...sportTools, [COACH_DECISION_TOOL_NAME]: this.decisionTool };
+    this.planReferenceTool =
+      ports.planningRead === undefined
+        ? undefined
+        : this.observeToolProvenance(
+            PLAN_REFERENCE_TOOL_NAME,
+            memoizeReadTool(
+              PLAN_REFERENCE_TOOL_NAME,
+              capToolResult(
+                markUntrustedResult(createPlanReferenceTool({ planning: ports.planningRead })),
+                { maxResultTokens },
+              ),
+              (options: unknown) => getTurnContext(options)?.readToolCache,
+            ),
+          );
+    this.tools = {
+      ...sportTools,
+      ...(this.decisionTool === undefined ? {} : { [COACH_DECISION_TOOL_NAME]: this.decisionTool }),
+      ...(this.planReferenceTool === undefined
+        ? {}
+        : { [PLAN_REFERENCE_TOOL_NAME]: this.planReferenceTool }),
+    };
+    this.desktopTools = {
+      ...this.tools,
+      [PLAN_HANDOFF_TOOL_NAME]: capToolResult(markUntrustedResult(createPlanHandoffTool()), {
+        maxResultTokens,
+      }),
+    };
     const planIntakeTool = createPlanIntakeTool();
     this.planTools = {
       ...(this.decisionTool === undefined ? {} : { [COACH_DECISION_TOOL_NAME]: this.decisionTool }),
@@ -480,11 +515,16 @@ export class CoachAgent {
   }
 
   private toolsForChat(chatId: string): ToolSet {
-    return chatId.startsWith("plan:") ? this.planTools : this.tools;
+    if (chatId.startsWith("plan:")) return this.planTools;
+    return chatId === "desktop" ? this.desktopTools : this.tools;
   }
 
   private templateHashForChat(chatId: string, tools: ToolSet): string {
-    const current = chatId.startsWith("plan:") ? this.planTemplateHash : this.templateHash;
+    const current = chatId.startsWith("plan:")
+      ? this.planTemplateHash
+      : chatId === "desktop"
+        ? this.desktopTemplateHash
+        : this.templateHash;
     if (current !== undefined) return current;
     const value = computeTemplateHash({
       soul: chatId.startsWith("plan:") ? PLAN_COACH_AUTHORITY_RULES : this.sport.soul,
@@ -498,6 +538,7 @@ export class CoachAgent {
       model: this.config.llm.model,
     });
     if (chatId.startsWith("plan:")) this.planTemplateHash = value;
+    else if (chatId === "desktop") this.desktopTemplateHash = value;
     else this.templateHash = value;
     return value;
   }
@@ -745,7 +786,14 @@ export class CoachAgent {
   async chat(
     chatId: string,
     userMessage: string,
-    turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
+    turn?: {
+      resolvedCs?: ResolvedCs | null;
+      referenceProvenance?: SourceProvenance;
+      attachmentContext?: string;
+      untrustedAttachmentText?: string;
+      nativeMedia?: readonly ChatNativeMediaInput[];
+      attachments?: readonly ChatAttachmentReference[];
+    },
     onEvent?: TurnEventHandler,
     onDecision?: (decision: CoachDecisionReadModel) => void,
     requestedTurnId?: string,
@@ -962,6 +1010,13 @@ export class CoachAgent {
         // prefix carries only the TZ name, not the date. Idempotent: safe
         // across the retry/compaction loop below.
         const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+        const providerUserMessage =
+          turn?.untrustedAttachmentText === undefined
+            ? userMessageWithTime
+            : `${userMessageWithTime}\n\n${wrapAthleteContextFence({
+                text: turn.untrustedAttachmentText,
+                maxChars: 200_000,
+              })}`;
 
         // One-turn model-visible archive marker: after an automatic reset, tell
         // the model to disclose the fresh session. Not persisted (it is rebuilt
@@ -970,6 +1025,10 @@ export class CoachAgent {
           archivedAt !== undefined
             ? { role: "system", content: archiveMarker(archivedAt) }
             : undefined;
+        const attachmentContextMsg: ModelMessage | undefined =
+          turn?.attachmentContext === undefined
+            ? undefined
+            : { role: "system", content: turn.attachmentContext };
 
         // Build messages array with new user message
         const userTurnMessage = setMessageProvenance(
@@ -979,6 +1038,7 @@ export class CoachAgent {
         let messages: ModelMessage[] = [
           ...(summaryMsg ? [summaryMsg] : []),
           ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
+          ...(attachmentContextMsg ? [attachmentContextMsg] : []),
           ...requeued,
           ...kept,
           userTurnMessage,
@@ -1052,9 +1112,14 @@ export class CoachAgent {
                 contextProvenance,
                 provenanceOfMessages(messages),
               );
+              const providerMessages = attachNativeMediaToCurrentUserMessage(
+                messages,
+                providerUserMessage,
+                turn?.nativeMedia ?? [],
+              );
               const result = await this.llm.generate({
                 system: this.systemPrompt,
-                messages,
+                messages: providerMessages,
                 tools: turnTools,
                 stopWhen: stepCountIs(10),
                 maxSteps: 10,
@@ -1125,7 +1190,7 @@ export class CoachAgent {
               const recovered = await this.recoverStepExhaustedText(
                 text,
                 finishReason,
-                messages,
+                providerMessages,
                 cacheKey,
                 turnBudget,
                 onAttemptTextDelta,
@@ -1147,14 +1212,14 @@ export class CoachAgent {
               if (chatId.startsWith("plan:")) assertPlanCoachReplyAuthority(effectiveText);
 
               const templateHash = this.templateHashForChat(chatId, turnTools);
-              const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+              const assembledHash = computeAssembledHash(this.systemPrompt, providerMessages);
 
               const lineage: ChatLineage = {
                 templateHash,
                 assembledHash,
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
-                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                lineageVersion: promptLineageSchemaVersion(providerMessages),
                 provenance: ctx.provenance.value,
               };
               const completedAt = new Date(this.ports.now()).toISOString();
@@ -1220,9 +1285,30 @@ export class CoachAgent {
                   completedAt,
                   athleteText: userMessage,
                   coachText: responseText,
+                  ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
+                  ...(ctx.planReference.selection === null
+                    ? {}
+                    : { planReference: ctx.planReference.selection }),
+                  ...(ctx.planHandoff.suggestion === null
+                    ? {}
+                    : { planHandoff: ctx.planHandoff.suggestion }),
                 });
               }
               if (ctx.planIntake.patch !== null) onPlanIntake?.(ctx.planIntake.patch);
+              if (ctx.planReference.selection !== null) {
+                emitEvent({
+                  type: "plan-reference",
+                  turnId,
+                  selection: ctx.planReference.selection,
+                });
+              }
+              if (ctx.planHandoff.suggestion !== null) {
+                emitEvent({
+                  type: "plan-handoff",
+                  turnId,
+                  suggestion: ctx.planHandoff.suggestion,
+                });
+              }
               emitEvent({ type: "final-text", turnId, text: responseText });
               return responseText;
             } catch (err) {
@@ -1272,6 +1358,7 @@ export class CoachAgent {
                   completedAt: new Date(this.ports.now()).toISOString(),
                   athleteText: userMessage,
                   coachText: TAINTED_BY_WRITES_MESSAGE,
+                  ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
                 });
                 emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
                 return TAINTED_BY_WRITES_MESSAGE;
@@ -1408,14 +1495,19 @@ export class CoachAgent {
           }
         } catch (terminalErr) {
           if (abortController.signal.aborted) {
+            const providerMessages = attachNativeMediaToCurrentUserMessage(
+              messages,
+              providerUserMessage,
+              turn?.nativeMedia ?? [],
+            );
             const templateHash = this.templateHashForChat(chatId, turnTools);
             try {
               this.chatStore.appendTurn(chatId, userMessage, streamedText, {
                 templateHash,
-                assembledHash: computeAssembledHash(this.systemPrompt, messages),
+                assembledHash: computeAssembledHash(this.systemPrompt, providerMessages),
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
-                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                lineageVersion: promptLineageSchemaVersion(providerMessages),
                 provenance: ctx.provenance.value,
               });
             } catch (persistErr) {
@@ -1427,6 +1519,7 @@ export class CoachAgent {
               completedAt: new Date(this.ports.now()).toISOString(),
               athleteText: userMessage,
               coachText: streamedText,
+              ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
             });
             this.emitTurnOutcome({
               turnId,
@@ -1924,7 +2017,7 @@ export class CoachAgent {
       assembledHash: computeAssembledHash(lineageInput.system, lineageInput.messages),
       provider: this.config.llm.provider,
       model: this.config.llm.model,
-      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+      lineageVersion: promptLineageSchemaVersion(lineageInput.messages),
       ...(lineageInput.planIntakePatch === null
         ? {}
         : { planIntakePatch: lineageInput.planIntakePatch }),

@@ -44,10 +44,13 @@ import {
   type StoredProfileSnapshot,
 } from "@enduragent/core";
 import {
+  createAttachmentCapabilityResolver,
   createCoachEngine,
+  transportForProvider,
   type CreateCoachEngineInput,
   type EngineConfig,
   type EngineHostPorts,
+  type ChatAttachmentTurnPort,
   type ModelTransportDecorator,
   type PlanFtpSourceValue,
   type ReferenceStateSnapshot,
@@ -59,6 +62,8 @@ import {
 } from "@enduragent/kernel/anchors";
 import {
   createAnchorRepository,
+  createChatPlanOutboxRepository,
+  createChatAttachmentRepository,
   createAnalyticsCurveStateReader,
   createCanonicalActivityReader,
   createIntervalsSourceRepository,
@@ -67,9 +72,15 @@ import {
   type AnchorRepository,
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
+import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
+import {
+  createManagedActivityReader,
+  createManagedChatAttachmentStore,
+  createManagedDocumentReader,
+  createManagedMediaReader,
+} from "@enduragent/kernel-node/chat-attachments";
 import { createVerifiedSnapshotReader } from "@enduragent/kernel-node/archive";
 import { nodeFileSystem } from "@enduragent/kernel-node/filesystem";
-import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import {
   createLegacyPlanRepository,
@@ -82,6 +93,8 @@ import {
 } from "@enduragent/kernel/planning";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
+  CHAT_ATTACHMENT_LIMITS,
+  type ChatAttachmentReference,
   type CoachEngine,
   type CoachOperations,
   type ConfigureRuntimeRpcParams,
@@ -93,6 +106,9 @@ import {
   type ListArchivedConversationsRpcParams,
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
+  type PlanningReadOperations,
+  type CreatePlanningRequestPayload,
+  type PlanningRequestOperations,
   type PlanningOperations,
   type VerifyIntervalsCredentialRpcParams,
   type VerifyIntervalsCredentialRpcResult,
@@ -169,6 +185,27 @@ import { createCyclingPlanDraftBuilder } from "./cycling-plan-draft-builder.js";
 import { createPlanMirrorCalendarAdapter } from "./planning-calendar.js";
 import { createNodePlanRaceCourseAdapter } from "./planning-race-course.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
+import { createManagedChatAttachmentOperations } from "./attachment-operations.js";
+import { observeChatAttachment, type AttachmentObservation } from "./attachment-observability.js";
+import { createActivityAttachmentOperations } from "./activity-attachment-operations.js";
+import { createWorkoutAttachmentOperations } from "./workout-attachment-operations.js";
+import { createManagedWorkoutReader } from "@enduragent/sport-cycling/workout-import";
+import { createPersistentOpenRouterModelMetadataCache } from "./openrouter-model-metadata-cache.js";
+import { createDocumentMediaAttachmentOperations } from "./document-media-attachment-operations.js";
+import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
+import { createPlanningReadService } from "./planning-read-service.js";
+import { createPlanningRequestDeliveryService } from "./planning-request-delivery.js";
+import { createPlanningRequestSourceCleanup } from "./planning-request-source-cleanup.js";
+import {
+  createPlanConversationRepository,
+  createPlanningRequestIntakeRepository,
+  createPlanningRequestRepository,
+  createPlanRepository,
+} from "@enduragent/kernel/planning";
+import {
+  createPlanningRequestIntakeService,
+  createPlanningRequestPremiseReader,
+} from "./planning-request-intake.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -181,7 +218,10 @@ interface OAuthCredential extends StoredProfile {
 
 export interface LocalCoachComposition {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations & PlanningOperations;
+  readonly operations: CoachOperations &
+    PlanningReadOperations &
+    PlanningRequestOperations &
+    PlanningOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   startInitialRefresh(): Promise<void>;
@@ -998,7 +1038,193 @@ export async function createLocalCoachComposition(
         schedulerStarted = true;
       }
     }
+    const logger = createSubsystemLogger("agent", input.home.root);
+    const observeAttachment = (observation: AttachmentObservation): void => {
+      observeChatAttachment(logger, observation);
+    };
+    let cleanupPlanningRequestSources: ((conversationId: string) => Promise<void>) | undefined;
+    const attachmentRepository = createChatAttachmentRepository(input.context.store);
+    const attachmentObjects = createManagedChatAttachmentStore({
+      archiveDir: input.home.archiveDir,
+      kindByteLimits: {
+        document: CHAT_ATTACHMENT_LIMITS.documentBytes,
+        activity: CHAT_ATTACHMENT_LIMITS.activityBytes,
+        workout: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+        image: CHAT_ATTACHMENT_LIMITS.imageBytes,
+      },
+      ...(dependencies.platform === undefined ? {} : { platform: dependencies.platform }),
+      now,
+    });
+    const activityAttachmentOperations = createActivityAttachmentOperations({
+      repository: attachmentRepository,
+      reader: createManagedActivityReader({
+        objects: attachmentObjects,
+        limits: {
+          activityBytes: CHAT_ATTACHMENT_LIMITS.activityBytes,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+          sessions: 256,
+        },
+      }),
+      importer: createNodeImportRuntime({
+        archiveDir: input.home.archiveDir,
+        store: input.context.store,
+      }),
+      store: input.context.store,
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+    });
+    const workoutLimits = {
+      candidates: CHAT_ATTACHMENT_LIMITS.workoutCandidates,
+      segmentsPerWorkout: CHAT_ATTACHMENT_LIMITS.workoutSegments,
+      durationSeconds: CHAT_ATTACHMENT_LIMITS.workoutDurationSeconds,
+      diagnostics: CHAT_ATTACHMENT_LIMITS.workoutDiagnostics,
+      diagnosticChars: CHAT_ATTACHMENT_LIMITS.workoutDiagnosticChars,
+      titleChars: CHAT_ATTACHMENT_LIMITS.workoutTitleChars,
+      purposeChars: CHAT_ATTACHMENT_LIMITS.workoutPurposeChars,
+    } as const;
+    const workoutAttachmentOperations = createWorkoutAttachmentOperations({
+      repository: attachmentRepository,
+      reader: createManagedWorkoutReader({
+        objects: attachmentObjects,
+        limits: {
+          ...workoutLimits,
+          workoutBytes: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      limits: workoutLimits,
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+    });
+    const documentMediaAttachmentOperations = createDocumentMediaAttachmentOperations({
+      repository: attachmentRepository,
+      documents: createManagedDocumentReader({
+        objects: attachmentObjects,
+        limits: {
+          documentBytes: CHAT_ATTACHMENT_LIMITS.documentBytes,
+          extractedTextChars: CHAT_ATTACHMENT_LIMITS.extractedTextChars,
+          pdfPages: CHAT_ATTACHMENT_LIMITS.pdfPages,
+          pdfVisualPages: CHAT_ATTACHMENT_LIMITS.pdfVisualPages,
+          pdfUsefulTextCharsPerPage: CHAT_ATTACHMENT_LIMITS.pdfUsefulTextCharsPerPage,
+          docxEntries: CHAT_ATTACHMENT_LIMITS.docxEntries,
+          docxExpandedBytes: CHAT_ATTACHMENT_LIMITS.docxExpandedBytes,
+          docxCompressionRatio: CHAT_ATTACHMENT_LIMITS.docxCompressionRatio,
+          csvRows: CHAT_ATTACHMENT_LIMITS.csvRows,
+          csvColumns: CHAT_ATTACHMENT_LIMITS.csvColumns,
+          csvRecordChars: CHAT_ATTACHMENT_LIMITS.csvRecordChars,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      media: createManagedMediaReader({
+        objects: attachmentObjects,
+        limits: {
+          imageBytes: CHAT_ATTACHMENT_LIMITS.imageBytes,
+          imageDimension: CHAT_ATTACHMENT_LIMITS.imageDimension,
+          imagePixels: CHAT_ATTACHMENT_LIMITS.imagePixels,
+          documentBytes: CHAT_ATTACHMENT_LIMITS.documentBytes,
+          pdfPages: CHAT_ATTACHMENT_LIMITS.pdfPages,
+          pdfVisualPages: CHAT_ATTACHMENT_LIMITS.pdfVisualPages,
+          pdfVisualPixels: CHAT_ATTACHMENT_LIMITS.pdfVisualPixels,
+          pdfPageDimension: CHAT_ATTACHMENT_LIMITS.pdfPageDimension,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+    });
+    const attachmentOperations = createManagedChatAttachmentOperations({
+      repository: attachmentRepository,
+      objects: attachmentObjects,
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+      observe: observeAttachment,
+      beforeConversationCleanup: async (conversationId) => {
+        if (cleanupPlanningRequestSources === undefined) {
+          throw new Error("Planning request source cleanup is unavailable.");
+        }
+        await cleanupPlanningRequestSources(conversationId);
+      },
+      onAdmitted: async (admitted) => {
+        observeAttachment({
+          operation: "admission",
+          kind: admitted.attachment.kind,
+          result: "accepted",
+          byteSize: admitted.attachment.byte_size,
+          durationMs: Math.max(0, now() - admitted.attachment.created_at_ms),
+          count: 1,
+        });
+        const startedAt = now();
+        try {
+          await documentMediaAttachmentOperations.preprocessAdmitted(admitted);
+          await activityAttachmentOperations.preprocessAdmitted(admitted);
+          await workoutAttachmentOperations.preprocessAdmitted(admitted);
+          const current = await attachmentRepository.readAttachment(admitted.attachment.id);
+          let parserVersion: string | undefined;
+          if (current?.state_json !== null && current?.state_json !== undefined) {
+            try {
+              const state = JSON.parse(current.state_json) as Record<string, unknown>;
+              const candidate = state.parserVersion ?? state.readerVersion;
+              if (typeof candidate === "string") parserVersion = candidate;
+            } catch {
+              parserVersion = undefined;
+            }
+          }
+          observeAttachment({
+            operation: "preprocess",
+            kind: admitted.attachment.kind,
+            result:
+              current?.status === "ready"
+                ? "ready"
+                : current?.status === "blocked"
+                  ? "blocked"
+                  : "failed",
+            byteSize: admitted.attachment.byte_size,
+            durationMs: now() - startedAt,
+            count: 1,
+            ...(parserVersion === undefined ? {} : { parserVersion }),
+          });
+        } catch (error) {
+          observeAttachment({
+            operation: "preprocess",
+            kind: admitted.attachment.kind,
+            result: "failed",
+            byteSize: admitted.attachment.byte_size,
+            durationMs: now() - startedAt,
+            count: 1,
+          });
+          throw error;
+        }
+      },
+    });
+    await attachmentOperations.reconcile();
     const getAccessToken = createAccessTokenReader(input.home.configDir);
+    const openRouterModelMetadata = createPersistentOpenRouterModelMetadataCache(
+      input.home.configDir,
+    );
+    const resolveAttachmentCapabilities = () => {
+      const config = engineConfigFromConfig(approvedConfig());
+      return createAttachmentCapabilityResolver({
+        openRouterCache: openRouterModelMetadata,
+        metadataMaxAgeMs: CHAT_ATTACHMENT_LIMITS.capabilityMetadataMaxAgeMs,
+        now,
+      }).resolve({
+        provider: config.llm.provider,
+        model: config.llm.model,
+        transport: transportForProvider(config.llm.provider),
+        ...(config.llm.apiKey.length === 0 ? {} : { apiKey: config.llm.apiKey }),
+      });
+    };
+    const attachmentComposerOperations = createAttachmentComposerOperations({
+      repository: attachmentRepository,
+      attachments: attachmentOperations,
+      activities: activityAttachmentOperations,
+      workouts: workoutAttachmentOperations,
+      capabilities: resolveAttachmentCapabilities,
+    });
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
     );
@@ -1037,7 +1263,17 @@ export async function createLocalCoachComposition(
         config.session.resetArchiveRetentionDays,
         { platform: dependencies.platform },
       );
+      const planningReadService = createPlanningReadService({
+        store: input.context.store,
+        timezone,
+        now,
+      });
       const projectedConfig = engineConfigFromConfig(effectiveConfig);
+      const attachmentCapabilityResolver = createAttachmentCapabilityResolver({
+        openRouterCache: openRouterModelMetadata,
+        metadataMaxAgeMs: CHAT_ATTACHMENT_LIMITS.capabilityMetadataMaxAgeMs,
+        now,
+      });
       const legacyClient =
         config.intervals.apiKey.length === 0
           ? null
@@ -1046,12 +1282,102 @@ export async function createLocalCoachComposition(
               athleteId: config.intervals.athleteId,
             });
       const confirmations = new ConfirmationGate(now);
+      const chatAttachments: ChatAttachmentTurnPort = {
+        acceptQueuedMessage: async (request) => {
+          await attachmentRepository.linkMessage({
+            conversationId: request.chatId,
+            messageId: request.messageId,
+            attachmentIds: request.attachmentIds,
+            createdAtMs: now(),
+          });
+        },
+        prepareQueuedTurn: async (request) => {
+          const importStartedAt = now();
+          let activity: Awaited<
+            ReturnType<typeof activityAttachmentOperations.turnPort.prepareQueuedTurn>
+          >;
+          try {
+            activity = await activityAttachmentOperations.turnPort.prepareQueuedTurn(request);
+            if (activity.activities.length > 0) {
+              observeAttachment({
+                operation: "import",
+                kind: "activity",
+                result: "succeeded",
+                durationMs: now() - importStartedAt,
+                count: activity.activities.length,
+              });
+            }
+          } catch (error) {
+            observeAttachment({
+              operation: "import",
+              kind: "activity",
+              result: "failed",
+              durationMs: now() - importStartedAt,
+            });
+            throw error;
+          }
+          const documentMedia = await documentMediaAttachmentOperations.prepareLinkedTurn(request);
+          const workout = await workoutAttachmentOperations.prepareLinkedTurn(request);
+          const attachmentContext = [documentMedia.attachmentContext, workout.attachmentContext]
+            .filter((value): value is string => value !== undefined)
+            .join("\n");
+          const untrustedAttachmentText = [
+            documentMedia.untrustedAttachmentText,
+            workout.untrustedAttachmentText,
+          ]
+            .filter((value): value is string => value !== undefined)
+            .join("\n");
+          const attachments: ChatAttachmentReference[] = [];
+          for (const message of request.messages) {
+            for (const attachment of await attachmentRepository.listMessageAttachments(
+              message.messageId,
+            )) {
+              attachments.push({
+                attachmentId: attachment.id,
+                displayName: attachment.display_name,
+                kind: attachment.kind,
+                extension: attachment.extension as ChatAttachmentReference["extension"],
+              });
+            }
+          }
+          return {
+            ...activity,
+            attachments,
+            nativeMedia: documentMedia.nativeMedia,
+            ...(attachmentContext.length === 0 ? {} : { attachmentContext }),
+            ...(untrustedAttachmentText.length === 0 ? {} : { untrustedAttachmentText }),
+          };
+        },
+        completeQueuedTurn: async (request) => {
+          await activityAttachmentOperations.turnPort.completeQueuedTurn(request);
+          await documentMediaAttachmentOperations.completeLinkedTurn(request);
+          await workoutAttachmentOperations.completeLinkedTurn(request);
+        },
+      };
       const ports: EngineHostPorts = {
         config: projectedConfig,
         memory,
         chatStore: conversationStore,
+        chatAttachments,
+        attachmentCapabilities: {
+          resolve: (signal) =>
+            attachmentCapabilityResolver.resolve(
+              {
+                provider: projectedConfig.llm.provider,
+                model: projectedConfig.llm.model,
+                transport: transportForProvider(projectedConfig.llm.provider),
+                ...(projectedConfig.llm.apiKey.length === 0
+                  ? {}
+                  : { apiKey: projectedConfig.llm.apiKey }),
+              },
+              signal,
+            ),
+        },
         transcriptWriter: conversationStore,
         coachDecisions: conversationStore,
+        planningRead: {
+          getPlanningReadModel: () => planningReadService.getPlanningReadModel({}),
+        },
         secrets: { resolve: resolveSecretRef },
         platform: {
           legacyClient,
@@ -1668,6 +1994,30 @@ export async function createLocalCoachComposition(
         await coachOperations.sync({});
       },
     };
+    const planRepository = createPlanRepository(input.context.store);
+    const planningRequestRepository = createPlanningRequestRepository(
+      input.context.store,
+      analysisCrypto,
+    );
+    const chatPlanOutboxRepository = createChatPlanOutboxRepository(
+      input.context.store,
+      analysisCrypto,
+    );
+    cleanupPlanningRequestSources = createPlanningRequestSourceCleanup({
+      outbox: chatPlanOutboxRepository,
+      requests: planningRequestRepository,
+      identity: planningIdentity,
+    });
+    const planConversationRepository = createPlanConversationRepository(input.context.store);
+    const planningRequestIntake = createPlanningRequestIntakeService({
+      requests: planningRequestRepository,
+      intake: createPlanningRequestIntakeRepository(input.context.store),
+      plans: planRepository,
+      conversations: planConversationRepository,
+      identity: planningIdentity,
+      workoutLimits,
+      todayDateKey: planningDateKey,
+    });
     const planIntakes = createPlanIntakeRepository(input.context.store);
     const planDraftBuilds = createPlanDraftBuildRepository(input.context.store);
     const planningOperations = createPlanningOperations(
@@ -1692,15 +2042,157 @@ export async function createLocalCoachComposition(
         calendar: planCalendar,
         workoutDriftCalendar: planCalendar,
         readiness,
+        requests: planningRequestRepository,
+        proposalPremiseReader: createPlanningRequestPremiseReader(planningRequestRepository),
+      },
+    );
+    const planningRequestOperations = createPlanningRequestDeliveryService(
+      {
+        outbox: chatPlanOutboxRepository,
+        requests: planningRequestRepository,
+        identity: planningIdentity,
+        async resolveTarget() {
+          const latest = await planRepository.readLatest();
+          if (latest?.status === "active") return "active_plan";
+          if (latest?.status === "draft") return "draft";
+          return "plan_creation";
+        },
+        async resolveWorkoutSource({ chatId, attachmentId }) {
+          const attachment = await attachmentRepository.readAttachment(attachmentId);
+          if (
+            attachment === undefined ||
+            attachment.conversation_id !== chatId ||
+            attachment.kind !== "workout" ||
+            (attachment.status !== "ready" && attachment.status !== "sent")
+          ) {
+            throw new TypeError("Workout attachment is unavailable.");
+          }
+          const set = await workoutAttachmentOperations.readWorkoutSet(attachmentId);
+          const workout = set.workouts.find(
+            (candidate) => candidate.workoutId === set.selectedWorkoutId,
+          );
+          if (workout === undefined) throw new TypeError("Workout selection is unavailable.");
+          return {
+            attachment: {
+              attachmentId: attachment.id,
+              displayName: attachment.display_name,
+              extension: set.sourceFormat,
+            },
+            selectedWorkout: {
+              setId: set.setId,
+              workoutId: workout.workoutId,
+              workout: JSON.parse(JSON.stringify(workout)) as NonNullable<
+                CreatePlanningRequestPayload["sourceSnapshot"]["selectedWorkout"]
+              >["workout"],
+            },
+          };
+        },
+      },
+      {
+        afterPlanningAccepted: async (request) => {
+          await planningRequestIntake(request);
+        },
       },
     );
     const operations = {
       ...coachOperations,
+      admitChatAttachment: async (request) => {
+        const startedAt = now();
+        const result = await attachmentOperations.admit(request);
+        if (result.status !== "accepted") {
+          observeAttachment({
+            operation: "admission",
+            kind: "unknown",
+            result:
+              result.status === "rejected"
+                ? result.reason
+                : result.status === "storage_failed"
+                  ? result.failureCode
+                  : "failed",
+            durationMs: now() - startedAt,
+            count: 1,
+          });
+        }
+        return result;
+      },
+      admitPastedChatAttachment: async (request) => {
+        const startedAt = now();
+        const bytes = Buffer.from(request.dataBase64, "base64");
+        if (
+          bytes.byteLength === 0 ||
+          bytes.toString("base64") !== request.dataBase64 ||
+          bytes.byteLength > CHAT_ATTACHMENT_LIMITS.imageBytes
+        ) {
+          observeAttachment({
+            operation: "admission",
+            kind: "unknown",
+            result: "validation_failed",
+            byteSize: bytes.byteLength,
+            durationMs: now() - startedAt,
+            count: 1,
+          });
+          return {
+            selectionId: request.selectionId,
+            displayName: request.displayName,
+            status: "rejected" as const,
+            reason:
+              bytes.byteLength > CHAT_ATTACHMENT_LIMITS.imageBytes
+                ? ("file_too_large" as const)
+                : ("validation_failed" as const),
+          };
+        }
+        const result = await attachmentOperations.admitPasted({
+          chatId: request.chatId,
+          selectionId: request.selectionId,
+          displayName: request.displayName,
+          bytes,
+        });
+        if (result.status !== "accepted") {
+          observeAttachment({
+            operation: "admission",
+            kind: "image",
+            result:
+              result.status === "rejected"
+                ? result.reason
+                : result.status === "storage_failed"
+                  ? result.failureCode
+                  : "failed",
+            byteSize: bytes.byteLength,
+            durationMs: now() - startedAt,
+            count: 1,
+          });
+        }
+        return result;
+      },
+      getChatAttachmentComposer: (request) => attachmentComposerOperations.read(request.chatId),
+      saveChatAttachmentDraftText: (request) =>
+        attachmentComposerOperations.saveText(request.chatId, request.text),
+      removeChatAttachment: (request) =>
+        attachmentComposerOperations.remove(request.chatId, request.attachmentId),
+      retryChatAttachment: (request) =>
+        attachmentComposerOperations.retry(request.chatId, request.attachmentId),
+      selectChatAttachmentWorkout: (request) =>
+        attachmentComposerOperations.selectWorkout(
+          request.chatId,
+          request.attachmentId,
+          request.workoutId,
+        ),
+      clearChatAttachmentDraft: (request) => attachmentComposerOperations.clear(request.chatId),
+      getPlanningReadModel: (request) =>
+        createPlanningReadService({
+          store: input.context.store,
+          timezone: activeTimezone,
+          now,
+        }).getPlanningReadModel(request),
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
+      ...planningRequestOperations,
       ...planningOperations,
-    } satisfies CoachOperations & PlanningOperations;
+    } satisfies CoachOperations &
+      PlanningReadOperations &
+      PlanningRequestOperations &
+      PlanningOperations;
     return {
       engine: reconfigurable.engine,
       operations,

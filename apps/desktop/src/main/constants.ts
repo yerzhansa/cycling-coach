@@ -13,11 +13,15 @@ export const DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL =
   "desktop:list-archived-conversations" as const;
 export const DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL =
   "desktop:get-archived-transcript-page" as const;
+export const DESKTOP_PLANNING_READ_CHANNEL = "desktop:planning:read" as const;
 export const DESKTOP_PLAN_STATE_CHANNEL = "desktop:plan:get-state" as const;
 export const DESKTOP_PLAN_TRANSITION_CHANNEL = "desktop:plan:execute-transition" as const;
 export const DESKTOP_PLAN_PROGRESS_CHANNEL = "desktop:plan:progress" as const;
 export const DESKTOP_PLAN_COURSE_FILE_CHANNEL = "desktop:plan:choose-course-file" as const;
 export const DESKTOP_TRAINING_EXPORT_CHANNEL = "desktop:training:export" as const;
+export const DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL = "desktop:chat-attachment:pick" as const;
+export const DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL = "desktop:chat-attachment:drop" as const;
+export const DESKTOP_CHAT_ATTACHMENT_PASTE_CHANNEL = "desktop:chat-attachment:paste" as const;
 export const DESKTOP_UPDATE_GET_CHANNEL = "desktop:update:get" as const;
 export const DESKTOP_UPDATE_CHECK_CHANNEL = "desktop:update:check" as const;
 export const DESKTOP_UPDATE_RESTART_CHANNEL = "desktop:update:restart" as const;

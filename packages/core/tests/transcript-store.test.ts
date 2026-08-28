@@ -410,6 +410,118 @@ describe("TranscriptStore append and corruption handling", () => {
     ]);
   });
 
+  it("round-trips only safe sent-attachment references for relaunch hydration", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = {
+      ...turn("chat-attachments", "turn-1", "Review this", "Reviewed"),
+      attachments: [
+        {
+          attachmentId: "attachment-1",
+          displayName: "training-notes.txt",
+          kind: "document" as const,
+          extension: "txt" as const,
+        },
+      ],
+    };
+
+    store.appendCompletedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-completed", ...input },
+    ]);
+    const page = store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 });
+    expect(page).toMatchObject({
+      status: "page",
+      turns: [{ turnId: "turn-1", attachments: input.attachments }],
+    });
+    expect(readFileSync(transcriptPath(dataDir, input.chatId), "utf8")).not.toContain(
+      "private/source/path",
+    );
+  });
+
+  it("rejects attachment transcript fields outside the strict safe reference shape", () => {
+    const store = new TranscriptStore(makeDataDir());
+    expect(() =>
+      store.appendCompletedTurn({
+        ...turn("chat-attachments-invalid", "turn-1"),
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "ride.fit",
+            kind: "activity",
+            extension: "fit",
+            sourcePath: "/private/ride.fit",
+          },
+        ],
+      } as never),
+    ).toThrow("Completed transcript turn is invalid");
+  });
+
+  it("round-trips one typed Plan reference for relaunch hydration", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = {
+      ...turn("chat-plan-reference", "turn-1", "Show Tuesday", "Tempo builder"),
+      planReference: {
+        kind: "workout_detail" as const,
+        planId: "plan-1",
+        workoutId: "workout-1",
+      },
+    };
+
+    store.appendCompletedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-completed", ...input },
+    ]);
+    expect(
+      store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 }),
+    ).toMatchObject({
+      status: "page",
+      turns: [{ turnId: "turn-1", planReference: input.planReference }],
+    });
+  });
+
+  it("round-trips one typed Plan handoff for relaunch hydration", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = {
+      ...turn("chat-plan-handoff", "turn-1", "Can we move Friday?", "Review it in Plan."),
+      planHandoff: {
+        kind: "plan_change" as const,
+        title: "Review a lighter Friday",
+        intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+      },
+    };
+
+    store.appendCompletedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-completed", ...input },
+    ]);
+    expect(
+      store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 }),
+    ).toMatchObject({
+      status: "page",
+      turns: [{ turnId: "turn-1", planHandoff: input.planHandoff }],
+    });
+  });
+
+  it("rejects arbitrary Plan-card markup in transcript records", () => {
+    const store = new TranscriptStore(makeDataDir());
+    expect(() =>
+      store.appendCompletedTurn({
+        ...turn("chat-plan-reference-invalid", "turn-1"),
+        planReference: {
+          kind: "active_plan_summary",
+          planId: "plan-1",
+          markup: "<button>Apply</button>",
+        },
+      } as never),
+    ).toThrow("Completed transcript turn is invalid");
+  });
+
   it("round-trips an interrupted turn and projects its delivery on transcript pages", () => {
     const dataDir = makeDataDir();
     const store = new TranscriptStore(dataDir);

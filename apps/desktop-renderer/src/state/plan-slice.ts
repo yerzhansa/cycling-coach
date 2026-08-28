@@ -2,9 +2,11 @@ import type {
   CoachDecisionAnswer,
   PlanError,
   PlanHydrationState,
+  PlanNavigationTarget,
   PlanProgressEvent,
   PlanReadModel,
   PlanTransitionId,
+  PlanningReadModel,
 } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { EnduragentState } from "./store.js";
@@ -44,6 +46,18 @@ export interface PlanSurfaceState {
     readonly setting: "auto-apply" | "weekly-review";
     readonly value: boolean;
   } | null;
+}
+
+export type PlanReadSurfaceState =
+  | { readonly status: "loading"; readonly value: null }
+  | { readonly status: "ready"; readonly value: PlanningReadModel }
+  | { readonly status: "unavailable"; readonly value: PlanningReadModel | null };
+
+export interface PlanningReadActions {
+  refresh(): void;
+  openFromChat(target: PlanNavigationTarget): void;
+  backToChat(): void;
+  returnToChatRequest(requestId: string): void;
 }
 
 export interface PlanActions {
@@ -101,6 +115,12 @@ export interface PlanActions {
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
+  resolvePlanningRequestDate(
+    requestId: string,
+    resolution:
+      | { readonly kind: "use-date"; readonly date: string }
+      | { readonly kind: "replace-workout"; readonly workoutId: string },
+  ): void;
   openHistory(): void;
   closeHistory(): void;
   undoPlanChange(ledgerId: string): void;
@@ -123,7 +143,13 @@ export interface PlanActions {
 
 export interface PlanSlice {
   readonly plan: PlanSurfaceState;
+  readonly planSurface: PlanReadSurfaceState;
+  readonly planFocus: PlanNavigationTarget | null;
+  readonly planReturnToChat: boolean;
   readonly planActions: PlanActions | null;
+  readonly planningReadActions: PlanningReadActions | null;
+  setPlanSurface: (value: PlanReadSurfaceState) => void;
+  setPlanFocus: (value: PlanNavigationTarget | null, returnToChat: boolean) => void;
   setPlanHydration: (next: PlanHydrationState) => void;
   setPlanTransition: (next: PlanTransitionState) => void;
   setPlanCoach: (next: ChatSurfaceState) => void;
@@ -133,6 +159,7 @@ export interface PlanSlice {
   setPlanDatePicker: (open: boolean) => void;
   setPlanSettingPending: (next: PlanSurfaceState["settingPending"]) => void;
   bindPlanActions: (actions: PlanActions | null) => void;
+  bindPlanningReadActions: (actions: PlanningReadActions | null) => void;
 }
 
 export const EMPTY_PLAN_SURFACE: PlanSurfaceState = Object.freeze({
@@ -160,7 +187,17 @@ export function planAttentionCount(plan: PlanSurfaceState): number {
 
 export const createPlanSlice: StateCreator<EnduragentState, [], [], PlanSlice> = (set) => ({
   plan: EMPTY_PLAN_SURFACE,
+  planSurface: { status: "loading", value: null },
+  planFocus: null,
+  planReturnToChat: false,
   planActions: null,
+  planningReadActions: null,
+  setPlanSurface(value) {
+    set({ planSurface: value });
+  },
+  setPlanFocus(value, returnToChat) {
+    set({ planFocus: value, planReturnToChat: returnToChat });
+  },
   setPlanHydration(next) {
     set((current) => {
       const lastReady =
@@ -195,5 +232,8 @@ export const createPlanSlice: StateCreator<EnduragentState, [], [], PlanSlice> =
   },
   bindPlanActions(actions) {
     set({ planActions: actions });
+  },
+  bindPlanningReadActions(actions) {
+    set({ planningReadActions: actions });
   },
 });

@@ -34,6 +34,8 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId?: string,
+    attachmentIds?: readonly string[],
   ): ChatQueueSnapshot;
   removeQueuedChatMessage(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
   claimChatQueue(
@@ -46,6 +48,10 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
   requireChatQueueRetry(chatId: string, claimId: string): ChatQueueSnapshot;
   retryChatQueueClaim(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
   clearChatQueue(chatId: string): ChatQueueSnapshot;
+  getCompletedChatQueueClaim(chatId: string): {
+    readonly turnId: string;
+    readonly messageIds: readonly string[];
+  } | null;
   appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel;
   answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel;
   skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel;
@@ -232,9 +238,18 @@ export class ConversationStore implements ConversationStorePort {
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId = queuedMessageId,
+    attachmentIds: readonly string[] = [],
   ): ChatQueueSnapshot {
     this.recoverBeforeAccess(chatId);
-    return this.queueStore().enqueue(chatId, submissionId, text, queuedMessageId);
+    return this.queueStore().enqueue(
+      chatId,
+      submissionId,
+      text,
+      queuedMessageId,
+      messageId,
+      attachmentIds,
+    );
   }
 
   removeQueuedChatMessage(chatId: string, queuedMessageId: string): ChatQueueSnapshot {
@@ -278,6 +293,14 @@ export class ConversationStore implements ConversationStorePort {
 
   reconcileChatQueue(chatId: string): ChatQueueSnapshot {
     return this.queueStore().reconcile(chatId, this.transcriptStore.getTerminalTurnIds(chatId));
+  }
+
+  getCompletedChatQueueClaim(chatId: string) {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().getCompletedClaim(
+      chatId,
+      this.transcriptStore.getTerminalTurnIds(chatId),
+    );
   }
 
   private queueStore(): ChatQueueStore {

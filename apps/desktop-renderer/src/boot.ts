@@ -55,6 +55,7 @@ import {
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 import { createTrainingExportController } from "./training-export/controller.js";
 import { settleInitialSetupStatus } from "./initial-setup-status.js";
+import { createPlanController } from "./plan/controller.js";
 
 export type Disposer = () => void;
 
@@ -128,9 +129,17 @@ export function bootRenderer(): Disposer {
     clients,
     view: trainingAdapter.view,
   });
+  const planController = createPlanController({
+    read: () => window.enduragentAuth.getPlanningReadModel(),
+    render: (next) => store.getState().setPlanSurface(next),
+    navigate: (view) => store.getState().setActiveView(view),
+    focus: (target, returnToChat) => store.getState().setPlanFocus(target, returnToChat),
+  });
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
-    refreshTrainingContext: () => trainingContextController.refresh(),
+    refreshTrainingContext: async () => {
+      await Promise.all([trainingContextController.refresh(), planController.refresh()]);
+    },
   });
   const syncAdapter = createManualSyncViewAdapter({
     publish: (next) =>
@@ -160,16 +169,32 @@ export function bootRenderer(): Disposer {
         store.getState().setChatSurface(next);
       }),
   });
+  let activePlanAdapter: ReturnType<typeof createPlanViewAdapter> | null = null;
   const chatController = createChatController({
     clients,
     view: chatAdapter.view,
-    refreshTrainingContext: () => trainingContextController.refresh(),
+    refreshTrainingContext: async () => {
+      await Promise.all([trainingContextController.refresh(), planController.refresh()]);
+    },
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
     canChat: () => setupReady(store.getState()),
+    nativeAttachments: {
+      choose: () => window.enduragentAuth.chooseChatAttachments(),
+      paste: () => window.enduragentAuth.pasteChatAttachment(),
+    },
+    openPlanningRequest: (chatId, requestId) => {
+      store.getState().setActiveView("plan");
+      activePlanAdapter?.openChatRequest(chatId, requestId);
+    },
   });
   const disposeSetupReadiness = store.subscribe((state, previousState) => {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
+  });
+  const disposePlanToChatRefresh = store.subscribe((state, previousState) => {
+    if (previousState.activeView === "plan" && state.activeView === "chat") {
+      chatController.refreshPlanningRequests();
+    }
   });
 
   const planAdapter = createPlanViewAdapter({
@@ -184,6 +209,22 @@ export function bootRenderer(): Disposer {
     publishCoursePicker: (open) => store.getState().setPlanCoursePicker(open),
     publishDatePicker: (open) => store.getState().setPlanDatePicker(open),
     publishSettingPending: (next) => store.getState().setPlanSettingPending(next),
+  });
+  activePlanAdapter = planAdapter;
+  store.getState().bindPlanningReadActions({
+    refresh: () => void planController.refresh(),
+    openFromChat: (target) => {
+      planController.openFromChat(target);
+      planAdapter.open();
+      if (target.focus === "workout" && target.entityId !== null) {
+        planAdapter.openWorkout(target.entityId);
+      }
+    },
+    backToChat: () => planController.backToChat(),
+    returnToChatRequest: (requestId) => {
+      chatController.focusPlanningRequest(requestId);
+      planController.backToChat();
+    },
   });
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
@@ -244,6 +285,8 @@ export function bootRenderer(): Disposer {
     approveProposal: (proposalId, expectedRevision) =>
       planAdapter.approveProposal(proposalId, expectedRevision),
     rejectProposal: (proposalId) => planAdapter.rejectProposal(proposalId),
+    resolvePlanningRequestDate: (requestId, resolution) =>
+      planAdapter.resolvePlanningRequestDate(requestId, resolution),
     openHistory: () => planAdapter.openHistory(),
     closeHistory: () => planAdapter.closeHistory(),
     undoPlanChange: (ledgerId) => planAdapter.undoPlanChange(ledgerId),
@@ -289,7 +332,22 @@ export function bootRenderer(): Disposer {
     }).render,
   });
   store.getState().bindChatActions({
-    submit: (message) => chatController.submit(message),
+    submit: (message, attachmentIds) => chatController.submit(message, attachmentIds),
+    chooseAttachments: () => chatController.chooseAttachments(),
+    pasteAttachment: () => chatController.pasteAttachment(),
+    receiveAttachmentAdmissions: (results) => chatController.receiveAttachmentAdmissions(results),
+    saveAttachmentDraftText: (text) => chatController.saveAttachmentDraftText(text),
+    removeAttachment: (attachmentId) => chatController.removeAttachment(attachmentId),
+    retryAttachment: (attachmentId) => chatController.retryAttachment(attachmentId),
+    selectAttachmentWorkout: (attachmentId, workoutId) =>
+      chatController.selectAttachmentWorkout(attachmentId, workoutId),
+    reviewAttachmentInPlan: (attachmentId) => chatController.reviewAttachmentInPlan(attachmentId),
+    continueMessageInPlan: (messageId, suggestion) =>
+      chatController.continueMessageInPlan(messageId, suggestion),
+    openPlanningRequest: (requestId) => chatController.openPlanningRequest(requestId),
+    retryPlanningRequest: (requestId) => chatController.retryPlanningRequest(requestId),
+    retryPlanningRequestLoad: () => chatController.retryPlanningRequestLoad(),
+    clearPlanningRequestFocus: () => chatController.clearPlanningRequestFocus(),
     stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
     runQueuedCommand: (id) => void chatController.runQueuedCommand(id),
@@ -514,8 +572,12 @@ export function bootRenderer(): Disposer {
       importDroppedFiles: (paths) => void rideImports.importPaths("resident", paths),
     },
   });
+  const disposeDroppedChatAttachments = window.enduragentAuth.onDroppedChatAttachments((results) =>
+    chatController.receiveAttachmentAdmissions(results),
+  );
 
   void trainingContextController.start();
+  void planController.start();
   spendController.start();
   void telegramSettingsController.activate();
   void chatController.start();
@@ -542,15 +604,17 @@ export function bootRenderer(): Disposer {
     disposed = true;
     store.getState().bindChatActions(null);
     store.getState().bindArchiveActions(null);
+    store.getState().bindPlanningReadActions(null);
+    store.getState().bindPlanActions(null);
     store.getState().bindSettingsPorts(null);
     store.getState().bindSyncActions(null);
     store.getState().bindRideImportActions(null);
     store.getState().bindRideAnalysisActions(null);
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
-    store.getState().bindPlanActions(null);
     disposeRideAnalysisSelection();
     disposeSetupReadiness();
+    disposePlanToChatRefresh();
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     desktopUpdateController.dispose();
@@ -560,6 +624,7 @@ export function bootRenderer(): Disposer {
     sessionSettingsController.dispose();
     telegramSettingsController.dispose();
     disposeDroppedRideImports();
+    disposeDroppedChatAttachments();
     onboarding.dispose();
     onboardingAdapter.dispose();
     rideImportAdapter.dispose();
@@ -571,6 +636,7 @@ export function bootRenderer(): Disposer {
     planAdapter.dispose();
     spendController.dispose();
     trainingContextController.dispose();
+    planController.dispose();
     rideAnalysisController.dispose();
     void clients.close();
   };

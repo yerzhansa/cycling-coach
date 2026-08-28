@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Node host adapter for the pure kernel — node:sqlite / node:fs / WebCrypto drivers behind the kernel's ports (scaffold, no content yet).",
-  "type": "module",
+  "license": "MIT",
   "files": [
     "dist"
   ],
+  "type": "module",
   "exports": {
     "./sqlite": "./dist/sqlite.js",
     "./archive": "./dist/archive/index.js",
+    "./chat-attachments": "./dist/chat-attachments/index.js",
     "./lock": "./dist/lock/index.js",
     "./store-export": "./dist/store-export/index.js",
     "./home": "./dist/home/index.js",
@@ -20,9 +22,6 @@
     "./coach-dev": "./dist/coach-dev.js",
     "./planning": "./dist/planning/index.js"
   },
-  "engines": {
-    "node": ">=24"
-  },
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
@@ -30,14 +29,24 @@
   },
   "dependencies": {
     "@enduragent/kernel": "workspace:*",
+    "clawpdf": "0.3.0",
+    "csv-parse": "7.0.2",
+    "file-type": "22.0.2",
     "fit-file-parser": "3.0.2",
+    "mammoth": "1.12.1",
+    "yauzl": "3.4.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "docx": "9.7.1",
+    "jszip": "3.10.1",
+    "pdf-lib": "1.17.1",
     "tsup": "^8.4.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"
   },
-  "license": "MIT"
+  "engines": {
+    "node": ">=24"
+  }
 }

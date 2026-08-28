@@ -49,6 +49,11 @@ import {
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopAppearanceIpc } from "./appearance-ipc.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
+import {
+  createConnectionChatAttachmentClient,
+  installDesktopChatAttachmentIpc,
+  type DesktopChatAttachmentClient,
+} from "./chat-attachment-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import { isDesktopRendererUrl } from "./renderer-navigation.js";
 import {
@@ -180,6 +185,11 @@ import {
   installDesktopTrainingExportIpc,
   type DesktopTrainingExporter,
 } from "./training-export-ipc.js";
+import {
+  createConnectionPlanningReader,
+  installDesktopPlanningReadIpc,
+  type DesktopPlanningReader,
+} from "./planning-read-ipc.js";
 
 bindDesktopAppUserModelId(app);
 bindWindowsUserData(app);
@@ -322,6 +332,8 @@ async function runDesktop(): Promise<void> {
   let protocolInstalled = false;
   let connectionIpc: DesktopConnectionIpcController | undefined;
   let disposeTranscriptIpc: (() => void) | undefined;
+  let disposePlanningReadIpc: (() => void) | undefined;
+  let disposeChatAttachmentIpc: (() => void) | undefined;
   let disposePlanningIpc: (() => void) | undefined;
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
@@ -388,6 +400,10 @@ async function runDesktop(): Promise<void> {
       connectionIpc = undefined;
       disposeTranscriptIpc?.();
       disposeTranscriptIpc = undefined;
+      disposePlanningReadIpc?.();
+      disposePlanningReadIpc = undefined;
+      disposeChatAttachmentIpc?.();
+      disposeChatAttachmentIpc = undefined;
       disposePlanningIpc?.();
       disposePlanningIpc = undefined;
       disposeTrainingExportIpc?.();
@@ -596,7 +612,9 @@ async function runDesktop(): Promise<void> {
       readonly credentials: CredentialRuntimeApplication;
       readonly transcript: DesktopTranscriptReader;
       readonly planning: DesktopPlanningClient;
+      readonly planningRead: DesktopPlanningReader;
       readonly trainingExporter: DesktopTrainingExporter;
+      readonly chatAttachments: DesktopChatAttachmentClient;
     };
     let activeRuntimeBinding: RuntimeBinding | undefined;
     const preparedRuntimeBindings = new Map<
@@ -749,7 +767,9 @@ async function runDesktop(): Promise<void> {
         authority,
         transcript: createConnectionTranscriptReader(boundConnection),
         planning: createConnectionPlanningClient(boundConnection),
+        planningRead: createConnectionPlanningReader(boundConnection),
         trainingExporter: createConnectionTrainingExporter(boundConnection),
+        chatAttachments: createConnectionChatAttachmentClient(boundConnection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
           clearRuntimeCredential: authority.clearCredential,
@@ -801,6 +821,21 @@ async function runDesktop(): Promise<void> {
         throw new TypeError();
       }
       return page;
+    };
+    const readActivePlanning = async () => {
+      const binding = activeRuntimeBinding;
+      const lifecycleState = daemonLifecycle?.snapshot();
+      if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
+      const value = await binding.planningRead.getPlanningReadModel();
+      const currentLifecycleState = daemonLifecycle?.snapshot();
+      if (
+        activeRuntimeBinding !== binding ||
+        currentLifecycleState?.status !== "ready" ||
+        currentLifecycleState.generation !== lifecycleState.generation
+      ) {
+        throw new TypeError();
+      }
+      return value;
     };
     const useActivePlanning = async <T>(
       use: (planning: DesktopPlanningClient, isCurrent: () => boolean) => Promise<T>,
@@ -1240,6 +1275,11 @@ async function runDesktop(): Promise<void> {
       readArchivedPage: (request) =>
         readActiveTranscript((reader) => reader.getArchivedTranscriptPage(request)),
     });
+    disposePlanningReadIpc = installDesktopPlanningReadIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      read: readActivePlanning,
+    });
     disposePlanningIpc = installDesktopPlanningIpc({
       ipcMain,
       dialog,
@@ -1250,7 +1290,7 @@ async function runDesktop(): Promise<void> {
           planning.executePlanTransition(request, (event) => {
             if (isCurrent()) onEvent(event);
           }),
-        ),
+         ),
     });
     disposeTrainingExportIpc = installDesktopTrainingExportIpc({
       ipcMain,
@@ -1261,6 +1301,19 @@ async function runDesktop(): Promise<void> {
         const lifecycleState = daemonLifecycle?.snapshot();
         return binding !== undefined && lifecycleState?.status === "ready"
           ? binding.trainingExporter
+          : undefined;
+      },
+    });
+    disposeChatAttachmentIpc = installDesktopChatAttachmentIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      dialog,
+      clipboard,
+      client: () => {
+        const binding = activeRuntimeBinding;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        return binding !== undefined && lifecycleState?.status === "ready"
+          ? binding.chatAttachments
           : undefined;
       },
     });

@@ -118,7 +118,9 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
   let queueRevision = 0;
   let queueItems: Array<{
     queuedMessageId: string;
+    messageId: string;
     submissionId: string;
+    attachmentIds: string[];
     text: string;
     kind: "ordinary" | "slash-command";
     position: number;
@@ -173,7 +175,9 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           queueRevision += 1;
           queueItems.push({
             queuedMessageId: `queued-${queueRevision}`,
+            messageId: `message-${queueRevision}`,
             submissionId: params.submissionId,
+            attachmentIds: [],
             text: params.text,
             kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
             position: queueItems.length,
@@ -335,15 +339,15 @@ async function launch(initial: "reached" | "complete" = "reached") {
     if (document.querySelector("[data-setup-host]") !== null) {
       throw new Error("ready fixture unexpectedly requires setup");
     }
-    const chatDeadline = Date.now() + 10000;
-    const chatReady = () => {
-      const composer = document.querySelector("textarea#message");
-      return composer instanceof HTMLTextAreaElement && !composer.disabled;
-    };
-    while (!chatReady() && Date.now() < chatDeadline) {
+    const composerDeadline = Date.now() + 10000;
+    let composer = document.querySelector("textarea#message");
+    while (
+      (!(composer instanceof HTMLTextAreaElement) || composer.disabled) &&
+      Date.now() < composerDeadline
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 20));
+      composer = document.querySelector("textarea#message");
     }
-    const composer = document.querySelector("textarea#message");
     if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
       throw new Error("ready fixture did not enable chat");
     }
@@ -456,6 +460,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "chatgptLogin",
       "chatgptStatus",
       "checkForUpdates",
+      "chooseChatAttachments",
       "chooseImportFiles",
       "choosePlanRaceCourseFile",
       "claudeCliRecheck",
@@ -470,6 +475,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "getArchivedTranscriptPage",
       "getDaemonConnection",
       "getPlanState",
+      "getPlanningReadModel",
       "getTranscriptPage",
       "getUpdateState",
       "initialSetupStatusSettled",
@@ -477,9 +483,11 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "listTelegramAllowedSenders",
       "llmConfiguration",
       "onChatgptLoginProgress",
+      "onDroppedChatAttachments",
       "onDroppedImportFiles",
       "onPlanProgress",
       "onUpdateState",
+      "pasteChatAttachment",
       "pasteIntervalsApiKeyFromClipboard",
       "pasteTelegramTokenFromClipboard",
       "platform",

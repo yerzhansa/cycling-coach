@@ -4,6 +4,7 @@ import { addCivilDays } from "./date-keys.js";
 import type { PlanWorkoutOrigin, PlanWorkoutRecord } from "./repository.js";
 
 export type PlanAdaptationKind = "proposal-applied" | "drift-adopted" | "undo";
+export type PlanAdaptationOperation = "update" | "add" | "remove";
 
 export interface PlanAdaptationWorkoutSnapshot {
   readonly dateKey: number;
@@ -18,12 +19,13 @@ export interface PlanAdaptationLedgerRecord {
   readonly id: string;
   readonly planId: string;
   readonly targetWorkoutId: string;
+  readonly operation: PlanAdaptationOperation;
   readonly kind: PlanAdaptationKind;
   readonly sourceId: string;
   readonly reversalOfId: string | null;
   readonly label: string;
-  readonly beforeJson: string;
-  readonly afterJson: string;
+  readonly beforeJson: string | null;
+  readonly afterJson: string | null;
   readonly weekLoadBefore: number | null;
   readonly weekLoadAfter: number | null;
   readonly occurredAtMs: number;
@@ -42,7 +44,7 @@ export interface PlanAdaptationLedgerRepository {
     readonly expectedPlanHlcPhysicalMs: number;
     readonly expectedPlanHlcCounter: number;
     readonly expectedWorkout: PlanWorkoutRecord;
-    readonly nextWorkout: PlanWorkoutRecord;
+    readonly nextWorkout: PlanWorkoutRecord | null;
     readonly undo: PlanAdaptationLedgerRecord;
     readonly mirrorJob: {
       readonly id: string;
@@ -66,6 +68,7 @@ export class PlanAdaptationLedgerValidationError extends Error {
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const KINDS = new Set<unknown>(["proposal-applied", "drift-adopted", "undo"]);
+const OPERATIONS = new Set<unknown>(["update", "add", "remove"]);
 const ORIGINS = new Set<unknown>(["coach", "athlete"]);
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -179,6 +182,7 @@ function validate(record: PlanAdaptationLedgerRecord): void {
     !ULID.test(record.id) ||
     !ULID.test(record.planId) ||
     !ULID.test(record.targetWorkoutId) ||
+    !OPERATIONS.has(record.operation) ||
     !KINDS.has(record.kind) ||
     record.sourceId.length === 0 ||
     (record.kind === "undo") !== (record.reversalOfId !== null) ||
@@ -199,11 +203,18 @@ function validate(record: PlanAdaptationLedgerRecord): void {
   ) {
     throw new PlanAdaptationLedgerValidationError("invalid-ledger");
   }
-  parsePlanAdaptationWorkoutSnapshot(record.beforeJson);
-  parsePlanAdaptationWorkoutSnapshot(record.afterJson);
+  if (
+    (record.operation === "update" && (record.beforeJson === null || record.afterJson === null)) ||
+    (record.operation === "add" && (record.beforeJson !== null || record.afterJson === null)) ||
+    (record.operation === "remove" && (record.beforeJson === null || record.afterJson !== null))
+  ) {
+    throw new PlanAdaptationLedgerValidationError("invalid-ledger");
+  }
+  if (record.beforeJson !== null) parsePlanAdaptationWorkoutSnapshot(record.beforeJson);
+  if (record.afterJson !== null) parsePlanAdaptationWorkoutSnapshot(record.afterJson);
 }
 
-const COLUMNS = `id, plan_id, target_workout_id, kind, source_id, reversal_of_id, label,
+const COLUMNS = `id, plan_id, target_workout_id, operation, kind, source_id, reversal_of_id, label,
 before_json, after_json, week_load_before, week_load_after, occurred_at_ms, device_id,
 hlc_physical_ms, hlc_counter`;
 
@@ -220,12 +231,13 @@ function fromRow(row: Row): PlanAdaptationLedgerRecord {
     id: text(row, "id"),
     planId: text(row, "plan_id"),
     targetWorkoutId: text(row, "target_workout_id"),
+    operation: text(row, "operation") as PlanAdaptationOperation,
     kind: text(row, "kind") as PlanAdaptationKind,
     sourceId: text(row, "source_id"),
     reversalOfId: nullableText(row, "reversal_of_id"),
     label: text(row, "label"),
-    beforeJson: text(row, "before_json"),
-    afterJson: text(row, "after_json"),
+    beforeJson: nullableText(row, "before_json"),
+    afterJson: nullableText(row, "after_json"),
     weekLoadBefore: nullableNumber(row, "week_load_before"),
     weekLoadAfter: nullableNumber(row, "week_load_after"),
     occurredAtMs: integer(row, "occurred_at_ms"),
@@ -244,11 +256,12 @@ export async function insertPlanAdaptationLedgerRecord(
   validate(record);
   await store.run(
     `INSERT INTO plan_adaptation_ledger (${COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       record.id,
       record.planId,
       record.targetWorkoutId,
+      record.operation,
       record.kind,
       record.sourceId,
       record.reversalOfId,
@@ -363,8 +376,15 @@ device_id, hlc_physical_ms, hlc_counter FROM plan_workout WHERE id=? AND plan_id
           encodePlanAdaptationWorkoutSnapshot(
             planAdaptationWorkoutSnapshot(input.expectedWorkout),
           ) !== latest.afterJson ||
-          encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(input.nextWorkout)) !==
-            latest.beforeJson ||
+          (latest.operation === "update" &&
+            (input.nextWorkout === null ||
+              input.undo.operation !== "update" ||
+              encodePlanAdaptationWorkoutSnapshot(
+                planAdaptationWorkoutSnapshot(input.nextWorkout),
+              ) !== latest.beforeJson)) ||
+          (latest.operation === "add" &&
+            (input.nextWorkout !== null || input.undo.operation !== "remove")) ||
+          (latest.operation !== "update" && latest.operation !== "add") ||
           input.undo.beforeJson !== latest.afterJson ||
           input.undo.afterJson !== latest.beforeJson ||
           input.undo.weekLoadBefore !== latest.weekLoadAfter ||
@@ -372,23 +392,30 @@ device_id, hlc_physical_ms, hlc_counter FROM plan_workout WHERE id=? AND plan_id
         ) {
           throw new PlanAdaptationLedgerValidationError("stale-base");
         }
-        await store.run(
-          `UPDATE plan_workout SET date_key=?, sport=?, name=?, duration_s=?, structure_json=?,
+        if (input.nextWorkout === null) {
+          await store.run("DELETE FROM plan_workout WHERE id=? AND plan_id=?", [
+            input.expectedWorkout.id,
+            input.expectedWorkout.planId,
+          ]);
+        } else {
+          await store.run(
+            `UPDATE plan_workout SET date_key=?, sport=?, name=?, duration_s=?, structure_json=?,
 origin=?, device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND plan_id=?`,
-          [
-            input.nextWorkout.dateKey,
-            input.nextWorkout.sport,
-            input.nextWorkout.name,
-            input.nextWorkout.durationS,
-            input.nextWorkout.structureJson,
-            input.nextWorkout.origin,
-            input.nextWorkout.deviceId,
-            input.nextWorkout.hlcPhysicalMs,
-            input.nextWorkout.hlcCounter,
-            input.nextWorkout.id,
-            input.nextWorkout.planId,
-          ],
-        );
+            [
+              input.nextWorkout.dateKey,
+              input.nextWorkout.sport,
+              input.nextWorkout.name,
+              input.nextWorkout.durationS,
+              input.nextWorkout.structureJson,
+              input.nextWorkout.origin,
+              input.nextWorkout.deviceId,
+              input.nextWorkout.hlcPhysicalMs,
+              input.nextWorkout.hlcCounter,
+              input.nextWorkout.id,
+              input.nextWorkout.planId,
+            ],
+          );
+        }
         await store.run(
           `UPDATE plan SET updated_at_ms=?, device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=?`,
           [

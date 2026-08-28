@@ -13,6 +13,7 @@ import {
   createPlanWeeklyReviewRepository,
   createPlanWorkoutMatchRepository,
   createPlanProposalRepository,
+  createPlanningRequestRepository,
   createRaceCourseSnapshot,
   createPlanReplacementRepository,
   createPlanRaceOutcomeRepository,
@@ -28,6 +29,7 @@ import {
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
+import { createNodeCrypto } from "@enduragent/kernel-node/ingest";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   planMirrorExternalId,
@@ -341,6 +343,180 @@ describe("Plan operations", () => {
             { role: "coach", text: "I found your rides." },
           ],
         },
+      },
+    });
+  });
+
+  it("opens a terminal Chat-originated result and validates its exact return source", async () => {
+    const authored = identity();
+    const planId = `${"0".repeat(25)}P`;
+    const activePlan = {
+      ...plan(planId, 20),
+      startDateKey: 19980709,
+      targetDateKey: 19980930,
+      status: "active" as const,
+    };
+    await createPlanRepository(store).replace(activePlan, []);
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
+    const created = await requests.createOrGet({
+      payload: {
+        requestId: "request-1",
+        kind: "workout_review",
+        intent: "Add Tempo 3 × 12 to Wednesday.",
+        source: {
+          chatId: "chat-1",
+          messageId: "message-1",
+          attachmentId: "attachment-1",
+        },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: {
+            attachmentId: "attachment-1",
+            displayName: "tempo-3x12.mrc",
+            extension: "mrc",
+          },
+          selectedWorkout: {
+            setId: "set-1",
+            workoutId: "workout-1",
+            workout: {
+              title: "Tempo 3 × 12",
+              sport: "cycling",
+              durationSeconds: 3_840,
+            },
+          },
+        },
+        requestedDate: "1998-08-26",
+      },
+      target: "active_plan",
+      createdAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    });
+    await requests.complete({
+      requestId: created.request.requestId,
+      expectedRevision: created.request.revision,
+      result: {
+        kind: "applied",
+        resultId: "result-1",
+        completedAtMs: 40,
+        title: "Workout added",
+        detail: "Tempo 3 × 12 is scheduled for Wednesday.",
+        workoutRef: { setId: "set-1", workoutId: "workout-1" },
+        planRevisionId: "revision-1",
+      },
+      resolvedDateKey: 19980826,
+      updatedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    });
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { requests, todayDateKey: () => 19980824 },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T36",
+        commandId: "command-open-request",
+        sourceConversationId: "chat-1",
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S099",
+        data: {
+          returnTarget: { destination: "chat", chatId: "chat-1", messageId: "message-1" },
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T37",
+        commandId: "command-return-wrong-source",
+        sourceConversationId: "chat-2",
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T37",
+        commandId: "command-return-source",
+        sourceConversationId: "chat-1",
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S099" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-stay-in-plan",
+        action: "done",
+        sourceScenarioId: "PL-S099",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "request-1",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S004" } });
+  });
+
+  it("reopens the exact Plan conversation bound to an unresolved Chat request", async () => {
+    const authored = identity();
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { requests },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-start-plan",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    const created = await requests.createOrGet({
+      payload: {
+        requestId: "request-open",
+        kind: "plan_creation",
+        intent: "Build a Plan for my autumn event.",
+        source: { chatId: "chat-open", messageId: "message-open" },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: null,
+          selectedWorkout: null,
+        },
+      },
+      target: "plan_creation",
+      createdAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    });
+    await requests.reviseOpen({
+      requestId: created.request.requestId,
+      expectedRevision: created.request.revision,
+      planConversationId: conversationId,
+      proposalId: null,
+      attention: "none",
+      resolvedDateKey: null,
+      updatedAtMs: 31,
+      deviceId: "device-1",
+      hlcPhysicalMs: 31,
+      hlcCounter: 0,
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T36",
+        commandId: "command-open-plan-request",
+        sourceConversationId: "chat-open",
+        requestId: "request-open",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S017",
+        data: { conversationId, sourceConversationId: "chat-open" },
       },
     });
   });
@@ -2678,6 +2854,527 @@ describe("Plan operations", () => {
         returnFocusId: ledgerId,
       }),
     ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S005" } });
+  });
+
+  it("projects and undoes a reviewed Workout addition through Plan operations", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const existingWorkoutId = `${"0".repeat(25)}B`;
+    const addedWorkoutId = `${"0".repeat(25)}C`;
+    const proposalId = `${"0".repeat(25)}D`;
+    const activePlan: PlanRecord = {
+      ...plan(planId, 10),
+      status: "active",
+      updatedAtMs: 10,
+      hlcPhysicalMs: 10,
+    };
+    const existingWorkout: PlanWorkoutRecord = {
+      id: existingWorkoutId,
+      planId,
+      dateKey: 20260830,
+      sport: "cycling",
+      name: "Endurance",
+      durationS: 5_400,
+      structureJson: "{}",
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    };
+    const plans = createPlanRepository(store);
+    const proposals = createPlanProposalRepository(store);
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
+    await plans.replace(activePlan, [existingWorkout]);
+    await proposals.save(
+      {
+        id: proposalId,
+        planId,
+        parentProposalId: null,
+        revision: 1,
+        status: "proposed",
+        title: "Add Tempo 3 × 12",
+        rationale: "Review the selected workout before adding it to the active Plan.",
+        confidence: "High",
+        mutationJson: encodePlanProposalMutation({
+          schemaVersion: 1,
+          changes: [
+            {
+              workoutId: addedWorkoutId,
+              before: null,
+              after: {
+                dateKey: 20260831,
+                sport: "cycling",
+                name: "Tempo 3 × 12",
+                durationS: 3_840,
+                structureJson: JSON.stringify({
+                  intervals: [{ repetitions: 3, durationS: 720 }],
+                }),
+              },
+            },
+          ],
+          weekLoad: { before: 420, after: 480 },
+        }),
+        baseSnapshotJson: encodePlanProposalBase(
+          capturePlanProposalBase(activePlan, [existingWorkout]),
+        ),
+        refusalReason: null,
+        createdAtMs: 20,
+        updatedAtMs: 20,
+        resolvedAtMs: null,
+        deviceId: "device-1",
+        hlcPhysicalMs: 20,
+        hlcCounter: 0,
+      },
+      [
+        {
+          id: `${"0".repeat(25)}E`,
+          proposalId,
+          sourceType: "chat-workout",
+          sourceId: "workout-selection",
+          sourceLabel: "Tempo 3 × 12 · MRC",
+          sourceDateKey: null,
+          confidence: "High",
+          snapshotJson: '{"workoutId":"tempo-3x12"}',
+          createdAtMs: 20,
+          deviceId: "device-1",
+          hlcPhysicalMs: 20,
+          hlcCounter: 0,
+        },
+      ],
+    );
+    const request = await requests.createOrGet({
+      payload: {
+        requestId: "request-add-workout",
+        kind: "workout_review",
+        intent: "Add Tempo 3 × 12 to Monday.",
+        source: {
+          chatId: "chat-1",
+          messageId: "message-1",
+          attachmentId: "attachment-1",
+        },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: {
+            attachmentId: "attachment-1",
+            displayName: "tempo-3x12.mrc",
+            extension: "mrc",
+          },
+          selectedWorkout: {
+            setId: "set-1",
+            workoutId: "workout-1",
+            workout: {
+              title: "Tempo 3 × 12",
+              sport: "cycling",
+              durationSeconds: 3_840,
+            },
+          },
+        },
+        requestedDate: "2026-08-31",
+      },
+      target: "active_plan",
+      createdAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    });
+    await requests.reviseOpen({
+      requestId: request.request.requestId,
+      expectedRevision: request.request.revision,
+      planConversationId: null,
+      proposalId,
+      attention: "needs_review",
+      resolvedDateKey: 20260831,
+      updatedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    });
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        proposals,
+        requests,
+        todayDateKey: () => 20260826,
+        proposalLoadCalculator: (workouts) => (workouts.length === 1 ? 420 : 480),
+        proposalPremiseReader: {
+          async read() {
+            return '{"workoutId":"tempo-3x12"}';
+          },
+        },
+      },
+    );
+
+    const applied = await operations.executePlanTransition?.({
+      transitionId: "PL-T19",
+      commandId: "command-add-workout",
+      proposalId,
+      expectedRevision: 1,
+    });
+    expect(applied).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S008",
+        data: {
+          history: [
+            expect.objectContaining({
+              kind: "proposal-applied",
+              before: null,
+              after: expect.objectContaining({ name: "Tempo 3 × 12", durationS: 3_840 }),
+              undoStatus: "eligible",
+            }),
+            expect.objectContaining({ kind: "activation" }),
+          ],
+        },
+      },
+    });
+    if (applied?.status !== "completed") throw new TypeError("Workout addition did not apply.");
+    const ledgerId = String(applied.state.data.selectedHistoryId);
+    await expect(plans.readWorkouts(planId)).resolves.toHaveLength(2);
+    await expect(requests.read("request-add-workout")).resolves.toMatchObject({
+      request: {
+        lifecycle: "applied",
+        attention: "none",
+        terminalResult: {
+          kind: "applied",
+          title: "Added to Plan",
+          detail: "Tempo 3 × 12 is scheduled for 2026-08-31.",
+          planRevisionId: ledgerId,
+        },
+      },
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T21",
+        commandId: "command-undo-workout-addition",
+        planId,
+        ledgerId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S027",
+        data: {
+          history: expect.arrayContaining([
+            expect.objectContaining({ kind: "undo", after: null }),
+            expect.objectContaining({ id: ledgerId, undoStatus: "undone" }),
+          ]),
+        },
+      },
+    });
+    await expect(plans.readWorkouts(planId)).resolves.toEqual([existingWorkout]);
+  });
+
+  it("resolves Chat date conflicts without replacing protected Workouts", async () => {
+    const planId = `${"0".repeat(25)}P`;
+    const coachWorkoutId = `${"0".repeat(25)}W`;
+    const athleteWorkoutId = `${"0".repeat(25)}X`;
+    const importedWorkoutId = `${"0".repeat(25)}Y`;
+    const activePlan: PlanRecord = { ...plan(planId, 10), status: "active" };
+    const coachWorkout: PlanWorkoutRecord = {
+      id: coachWorkoutId,
+      planId,
+      dateKey: 20260831,
+      sport: "cycling",
+      name: "Easy endurance",
+      durationS: 3_000,
+      structureJson: "{}",
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    };
+    const athleteWorkout: PlanWorkoutRecord = {
+      ...coachWorkout,
+      id: athleteWorkoutId,
+      name: "Club ride",
+      origin: "athlete",
+    };
+    const plans = createPlanRepository(store);
+    const proposals = createPlanProposalRepository(store);
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
+    await plans.replace(activePlan, [coachWorkout, athleteWorkout]);
+    const seed = async (input: {
+      readonly requestId: string;
+      readonly proposalId: string;
+      readonly premiseId: string;
+      readonly chatId: string;
+      readonly messageId: string;
+      readonly timestamp: number;
+    }): Promise<void> => {
+      await proposals.save(
+        {
+          id: input.proposalId,
+          planId,
+          parentProposalId: null,
+          revision: 1,
+          status: "proposed",
+          title: "Add Tempo 3 × 12",
+          rationale: "Review the selected Workout before changing the active Plan.",
+          confidence: "High",
+          mutationJson: encodePlanProposalMutation({
+            schemaVersion: 1,
+            changes: [
+              {
+                workoutId: importedWorkoutId,
+                before: null,
+                after: {
+                  dateKey: 20260831,
+                  sport: "cycling",
+                  name: "Tempo 3 × 12",
+                  durationS: 3_840,
+                  structureJson: "{}",
+                },
+              },
+            ],
+            weekLoad: null,
+          }),
+          baseSnapshotJson: encodePlanProposalBase(
+            capturePlanProposalBase(activePlan, [coachWorkout, athleteWorkout]),
+          ),
+          refusalReason: null,
+          createdAtMs: input.timestamp,
+          updatedAtMs: input.timestamp,
+          resolvedAtMs: null,
+          deviceId: "device-1",
+          hlcPhysicalMs: input.timestamp,
+          hlcCounter: 0,
+        },
+        [
+          {
+            id: input.premiseId,
+            proposalId: input.proposalId,
+            sourceType: "chat-workout",
+            sourceId: "workout-selection",
+            sourceLabel: "Tempo 3 × 12 · MRC",
+            sourceDateKey: null,
+            confidence: "High",
+            snapshotJson: '{"workoutId":"tempo-3x12"}',
+            createdAtMs: input.timestamp,
+            deviceId: "device-1",
+            hlcPhysicalMs: input.timestamp,
+            hlcCounter: 0,
+          },
+        ],
+      );
+      const request = await requests.createOrGet({
+        payload: {
+          requestId: input.requestId,
+          kind: "workout_review",
+          intent: "Add Tempo 3 × 12 to Monday.",
+          source: {
+            chatId: input.chatId,
+            messageId: input.messageId,
+            attachmentId: `${input.requestId}-attachment`,
+          },
+          sourceSnapshot: {
+            capturedAt: "1998-08-24T08:00:00.000Z",
+            attachment: {
+              attachmentId: `${input.requestId}-attachment`,
+              displayName: "tempo-3x12.mrc",
+              extension: "mrc",
+            },
+            selectedWorkout: {
+              setId: `${input.requestId}-set`,
+              workoutId: `${input.requestId}-workout`,
+              workout: { title: "Tempo 3 × 12", sport: "cycling", durationSeconds: 3_840 },
+            },
+          },
+          requestedDate: "2026-08-31",
+        },
+        target: "active_plan",
+        createdAtMs: input.timestamp + 1,
+        deviceId: "device-1",
+        hlcPhysicalMs: input.timestamp + 1,
+        hlcCounter: 0,
+      });
+      await requests.reviseOpen({
+        requestId: input.requestId,
+        expectedRevision: request.request.revision,
+        planConversationId: null,
+        proposalId: input.proposalId,
+        attention: "date_conflict",
+        resolvedDateKey: null,
+        updatedAtMs: input.timestamp + 2,
+        deviceId: "device-1",
+        hlcPhysicalMs: input.timestamp + 2,
+        hlcCounter: 0,
+      });
+    };
+    await seed({
+      requestId: "request-date",
+      proposalId: `${"0".repeat(25)}M`,
+      premiseId: `${"0".repeat(25)}R`,
+      chatId: "chat-date",
+      messageId: "message-date",
+      timestamp: 20,
+    });
+    const authored = identity();
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { plans, proposals, requests, todayDateKey: () => 20260826 },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T36",
+        commandId: "command-open-date-conflict",
+        sourceConversationId: "chat-date",
+        requestId: "request-date",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S007",
+        data: {
+          selectedPlanningRequest: {
+            dateConflict: {
+              recommendedDate: "2026-09-01",
+              workouts: expect.arrayContaining([
+                expect.objectContaining({ workoutId: coachWorkoutId, replaceable: true }),
+                expect.objectContaining({ workoutId: athleteWorkoutId, replaceable: false }),
+              ]),
+            },
+          },
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T40",
+        commandId: "command-protected-date-conflict",
+        requestId: "request-date",
+        resolution: { kind: "replace-workout", workoutId: athleteWorkoutId },
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "conflict", retryable: false },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T40",
+        commandId: "command-use-recommended-date",
+        requestId: "request-date",
+        resolution: { kind: "use-date", date: "2026-09-01" },
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S007",
+        data: {
+          selectedPlanningRequest: {
+            request: { attention: "needs_review", resolvedDateKey: 20260901 },
+            dateConflict: null,
+          },
+        },
+      },
+    });
+    const dateRequest = await requests.read("request-date");
+    expect(dateRequest?.request).toMatchObject({
+      attention: "needs_review",
+      resolvedDateKey: 20260901,
+    });
+    const dateProposal =
+      dateRequest?.request.proposalId === null || dateRequest === undefined
+        ? undefined
+        : await proposals.read(dateRequest.request.proposalId);
+    expect(JSON.parse(dateProposal?.mutationJson ?? "{}")).toMatchObject({
+      changes: [{ after: { dateKey: 20260901 } }],
+    });
+
+    await seed({
+      requestId: "request-replace",
+      proposalId: `${"0".repeat(25)}N`,
+      premiseId: `${"0".repeat(25)}S`,
+      chatId: "chat-replace",
+      messageId: "message-replace",
+      timestamp: 50,
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T40",
+        commandId: "command-replace-coach-workout",
+        requestId: "request-replace",
+        resolution: { kind: "replace-workout", workoutId: coachWorkoutId },
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S007" } });
+    const replaceRequest = await requests.read("request-replace");
+    const replaceProposal =
+      replaceRequest?.request.proposalId === null || replaceRequest === undefined
+        ? undefined
+        : await proposals.read(replaceRequest.request.proposalId);
+    expect(JSON.parse(replaceProposal?.mutationJson ?? "{}")).toMatchObject({
+      changes: [
+        {
+          workoutId: coachWorkoutId,
+          before: { name: "Easy endurance" },
+          after: { name: "Tempo 3 × 12", dateKey: 20260831 },
+        },
+      ],
+    });
+
+    if (dateProposal === undefined) throw new TypeError("Resolved date Proposal missing.");
+    const beforeFailedApply = await plans.readWorkouts(planId);
+    const failingOperations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      {
+        plans,
+        proposals: {
+          ...proposals,
+          apply: async () => {
+            throw new TypeError("synthetic local save failure");
+          },
+        },
+        requests,
+        todayDateKey: () => 20260826,
+        proposalPremiseReader: { read: async () => '{"workoutId":"tempo-3x12"}' },
+      },
+    );
+    await expect(
+      failingOperations.executePlanTransition?.({
+        transitionId: "PL-T19",
+        commandId: "command-failed-date-apply",
+        proposalId: dateProposal.id,
+        expectedRevision: dateProposal.revision,
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "persistence-failed", retryable: true },
+      state: {
+        scenarioId: "PL-S007",
+        data: {
+          selectedPlanningRequest: {
+            request: { attention: "apply_failed" },
+          },
+        },
+      },
+    });
+    await expect(plans.readWorkouts(planId)).resolves.toEqual(beforeFailedApply);
+    await expect(requests.read("request-date")).resolves.toMatchObject({
+      request: { lifecycle: "open", attention: "apply_failed" },
+    });
+
+    const recoveringOperations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      {
+        plans,
+        proposals,
+        requests,
+        todayDateKey: () => 20260826,
+        proposalPremiseReader: { read: async () => '{"workoutId":"tempo-3x12"}' },
+      },
+    );
+    await expect(
+      recoveringOperations.executePlanTransition?.({
+        transitionId: "PL-T19",
+        commandId: "command-retry-date-apply",
+        proposalId: dateProposal.id,
+        expectedRevision: dateProposal.revision,
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S008" } });
+    await expect(requests.read("request-date")).resolves.toMatchObject({
+      request: { lifecycle: "applied", attention: "none" },
+    });
   });
 
   it("opens Season and Race week without mutating persisted Plan facts", async () => {

@@ -10,10 +10,16 @@ import {
   CoachClientProtocolError,
 } from "@enduragent/coach-client";
 import type {
+  AttachmentAdmissionReadModel,
+  ChatAttachmentComposerReadModel,
   CoachDecisionAnswer,
   CoachDecisionReadModel,
   ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
+  CreatePlanningRequestRpcParams,
+  CreateWorkoutPlanningRequestRpcParams,
+  PlanHandoffSuggestion,
+  PlanningRequestDelivery,
   TranscriptPageEntry,
   TurnEvent,
 } from "@enduragent/coach-contract";
@@ -24,6 +30,7 @@ import {
   hasClearableConversation,
   nextDrainGroup,
   reduceChatState,
+  type ChatSentAttachment,
   type ChatState,
 } from "../turn-state.js";
 import {
@@ -51,6 +58,12 @@ export const CHAT_DECISION_LOAD_FAILURE_COPY =
 export const CHAT_QUEUE_LOAD_FAILURE_COPY =
   "We couldn’t check your saved messages. Reconnect and try again.";
 export const CHAT_QUEUE_REMOVE_FAILURE_COPY = "We couldn’t remove that saved message. Try again.";
+export const CHAT_ATTACHMENT_FAILURE_COPY =
+  "We couldn’t update that attachment. Your message draft is preserved.";
+export const CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY =
+  "We couldn’t check saved Plan requests. Reconnect and try again.";
+export const CHAT_PLANNING_REQUEST_FAILURE_COPY =
+  "Plan couldn’t receive this request. Your request is preserved and nothing changed in Plan.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -71,6 +84,19 @@ export interface ChatViewControls {
   readonly decisionLoadError?: string | null;
   readonly queueLoadError?: string | null;
   readonly queueMutationError?: string | null;
+  readonly attachments?: {
+    readonly value: ChatAttachmentComposerReadModel | null;
+    readonly admissions: readonly AttachmentAdmissionReadModel[];
+    readonly busy: boolean;
+    readonly error: string | null;
+  };
+  readonly planningRequests?: {
+    readonly value: readonly PlanningRequestDelivery[];
+    readonly loaded: boolean;
+    readonly busyId: string | null;
+    readonly error: string | null;
+    readonly focusId: string | null;
+  };
   readonly appendDelta?: ChatAppendDelta;
   readonly hydration?: {
     readonly status: TranscriptHydrationStatus;
@@ -94,7 +120,22 @@ export interface ChatView {
 export interface ChatController {
   start(): Promise<void>;
   resume(): Promise<void>;
-  submit(message: string): Promise<boolean>;
+  submit(message: string, attachmentIds?: readonly string[]): Promise<boolean>;
+  chooseAttachments(): Promise<void>;
+  pasteAttachment(): Promise<void>;
+  receiveAttachmentAdmissions(results: readonly AttachmentAdmissionReadModel[]): void;
+  saveAttachmentDraftText(text: string): void;
+  removeAttachment(attachmentId: string): void;
+  retryAttachment(attachmentId: string): void;
+  selectAttachmentWorkout(attachmentId: string, workoutId: string): void;
+  reviewAttachmentInPlan(attachmentId: string): void;
+  continueMessageInPlan(messageId: string, suggestion: PlanHandoffSuggestion): void;
+  openPlanningRequest(requestId: string): void;
+  retryPlanningRequest(requestId: string): void;
+  retryPlanningRequestLoad(): void;
+  refreshPlanningRequests(): void;
+  focusPlanningRequest(requestId: string): void;
+  clearPlanningRequestFocus(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): Promise<void>;
@@ -127,6 +168,16 @@ interface ActiveStopRequest {
   request(): void;
 }
 
+type PendingPlanningRequestCreate =
+  | {
+      readonly kind: "generic";
+      readonly request: CreatePlanningRequestRpcParams;
+    }
+  | {
+      readonly kind: "workout";
+      readonly request: CreateWorkoutPlanningRequestRpcParams;
+    };
+
 export function createChatController(input: {
   readonly clients: DesktopCoachClientProvider;
   readonly view: ChatView;
@@ -138,6 +189,11 @@ export function createChatController(input: {
   }) => Promise<TranscriptPage>;
   readonly canChat?: () => boolean;
   readonly initialQueueSnapshot?: ChatQueueSnapshot;
+  readonly nativeAttachments?: {
+    readonly choose: () => Promise<readonly AttachmentAdmissionReadModel[]>;
+    readonly paste: () => Promise<readonly AttachmentAdmissionReadModel[]>;
+  };
+  readonly openPlanningRequest?: (chatId: string, requestId: string) => void;
 }): ChatController {
   let state =
     input.initialQueueSnapshot === undefined
@@ -168,6 +224,19 @@ export function createChatController(input: {
   let queueLoaded = input.initialQueueSnapshot !== undefined;
   let queueLoadError: string | null = null;
   let queueMutationError: string | null = null;
+  let attachmentSurface: ChatAttachmentComposerReadModel | null = null;
+  let attachmentAdmissions: readonly AttachmentAdmissionReadModel[] = [];
+  let attachmentBusy = false;
+  let attachmentError: string | null = null;
+  let attachmentTextRevision = 0;
+  let attachmentTextSaveTask: Promise<void> = Promise.resolve();
+  const attachmentSummaries = new Map<string, ChatSentAttachment>();
+  let planningRequests: readonly PlanningRequestDelivery[] = [];
+  let planningRequestsLoaded = false;
+  let planningRequestBusyId: string | null = null;
+  let planningRequestError: string | null = null;
+  let planningRequestFocusId: string | null = null;
+  let pendingPlanningRequestCreate: PendingPlanningRequestCreate | null = null;
   let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
@@ -185,7 +254,8 @@ export function createChatController(input: {
     !disposed &&
     (hasClearableConversation(state) ||
       hydration.turns.length > 0 ||
-      hydration.entries.length > 0) &&
+      hydration.entries.length > 0 ||
+      attachmentSurface?.draft != null) &&
     state.session.resetPhase === "idle" &&
     state.status !== "streaming" &&
     state.queued.length === 0 &&
@@ -211,6 +281,19 @@ export function createChatController(input: {
           decisionLoadError,
           queueLoadError,
           queueMutationError,
+          attachments: {
+            value: attachmentSurface,
+            admissions: attachmentAdmissions,
+            busy: attachmentBusy,
+            error: attachmentError,
+          },
+          planningRequests: {
+            value: planningRequests,
+            loaded: planningRequestsLoaded,
+            busyId: planningRequestBusyId,
+            error: planningRequestError,
+            focusId: planningRequestFocusId,
+          },
           ...(appendDelta === undefined ? {} : { appendDelta }),
           hydration: {
             status: hydration.status,
@@ -283,6 +366,7 @@ export function createChatController(input: {
           readonly queuedMessageIds: readonly string[];
         }
       | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
+    attachments: readonly ChatSentAttachment[] = [],
   ): ChatRun => {
     epoch += 1;
     const requestKey = Number(nextId("request").slice("request-".length));
@@ -296,6 +380,7 @@ export function createChatController(input: {
       userMessageId,
       assistantMessageId,
       includeUser,
+      attachments,
     });
     let callStarted = false;
     const task = (async () => {
@@ -619,7 +704,11 @@ export function createChatController(input: {
       | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
     includeUser = true,
   ): Promise<void> => {
-    const chatRun = run(userMessage, includeUser, false, queueCall);
+    const attachments = queueCall.queuedMessageIds
+      .flatMap((id) => state.queued.find((message) => message.id === id)?.attachmentIds ?? [])
+      .map((id) => attachmentSummaries.get(id))
+      .filter((attachment): attachment is ChatSentAttachment => attachment !== undefined);
+    const chatRun = run(userMessage, includeUser, false, queueCall, attachments);
     return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
   };
 
@@ -659,6 +748,211 @@ export function createChatController(input: {
     queueLoaded = true;
     queueLoadError = null;
     render();
+  };
+
+  const refreshAttachments = async (client?: CoachClient): Promise<void> => {
+    const activeClient = client ?? (await input.clients.getClient());
+    const surface = await activeClient.call("getChatAttachmentComposer", {
+      chatId: DESKTOP_CHAT_ID,
+    });
+    if (disposed) return;
+    attachmentSurface = surface;
+    attachmentError = null;
+    render();
+  };
+
+  const replacePlanningRequest = (delivery: PlanningRequestDelivery): void => {
+    planningRequests = [
+      ...planningRequests.filter((item) => item.requestId !== delivery.requestId),
+      delivery,
+    ].sort(
+      (left, right) =>
+        left.createdAtMs - right.createdAtMs || left.requestId.localeCompare(right.requestId),
+    );
+  };
+
+  const loadPlanningRequests = async (client?: CoachClient): Promise<void> => {
+    const activeClient = client ?? (await input.clients.getClient());
+    const result = await activeClient.call("listPlanningRequests", { chatId: DESKTOP_CHAT_ID });
+    if (disposed) return;
+    planningRequests = result.deliveries;
+    planningRequestsLoaded = true;
+    planningRequestError = null;
+    render();
+  };
+
+  const recoverPlanningRequests = async (): Promise<void> => {
+    const client = await input.clients.getClient();
+    let recoveryFailed = false;
+    try {
+      await client.call("resumePlanningRequests", {});
+    } catch {
+      recoveryFailed = true;
+    }
+    await loadPlanningRequests(client);
+    if (recoveryFailed) throw new Error("Planning request recovery failed.");
+  };
+
+  const routeToPlanningRequest = (requestId: string): void => {
+    const delivery = planningRequests.find((item) => item.requestId === requestId);
+    if (delivery?.state !== "delivered") return;
+    input.openPlanningRequest?.(DESKTOP_CHAT_ID, requestId);
+  };
+
+  const retrySavedPlanningRequest = (requestId: string): void => {
+    const delivery = planningRequests.find((item) => item.requestId === requestId);
+    if (
+      disposed ||
+      planningRequestBusyId !== null ||
+      delivery?.state !== "failed" ||
+      !delivery.retryable
+    ) {
+      return;
+    }
+    planningRequestBusyId = requestId;
+    planningRequestError = null;
+    render();
+    void input.clients
+      .getClient()
+      .then((client) => client.call("retryPlanningRequest", { requestId }))
+      .then((result) => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        if (result.status === "missing") {
+          planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+          render();
+          return;
+        }
+        replacePlanningRequest(result.delivery);
+        planningRequestError = null;
+        render();
+        routeToPlanningRequest(requestId);
+      })
+      .catch(() => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+        render();
+      });
+  };
+
+  const deliverWorkoutPlanningRequest = (request: CreateWorkoutPlanningRequestRpcParams): void => {
+    if (disposed || planningRequestBusyId !== null) return;
+    pendingPlanningRequestCreate = { kind: "workout", request };
+    planningRequestBusyId = request.requestId;
+    planningRequestError = null;
+    render();
+    void input.clients
+      .getClient()
+      .then((client) => client.call("createWorkoutPlanningRequest", request))
+      .then((result) => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        if (result.status === "rejected") {
+          pendingPlanningRequestCreate = null;
+          planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+          render();
+          return;
+        }
+        pendingPlanningRequestCreate = null;
+        replacePlanningRequest(result.delivery);
+        planningRequestError = null;
+        render();
+        routeToPlanningRequest(request.requestId);
+      })
+      .catch(() => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+        render();
+      });
+  };
+
+  const deliverPlanningRequest = (request: CreatePlanningRequestRpcParams): void => {
+    if (disposed || planningRequestBusyId !== null) return;
+    pendingPlanningRequestCreate = { kind: "generic", request };
+    planningRequestBusyId = request.payload.requestId;
+    planningRequestError = null;
+    render();
+    void input.clients
+      .getClient()
+      .then((client) => client.call("createPlanningRequest", request))
+      .then((result) => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        if (result.status === "rejected") {
+          pendingPlanningRequestCreate = null;
+          planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+          render();
+          return;
+        }
+        pendingPlanningRequestCreate = null;
+        replacePlanningRequest(result.delivery);
+        planningRequestError = null;
+        render();
+        routeToPlanningRequest(request.payload.requestId);
+      })
+      .catch(() => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+        render();
+      });
+  };
+
+  const receiveAdmissions = (results: readonly AttachmentAdmissionReadModel[]): void => {
+    if (disposed) return;
+    attachmentAdmissions = results.filter((result) => result.status !== "accepted");
+    attachmentError = null;
+    render();
+    void refreshAttachments().catch(() => {
+      if (disposed) return;
+      attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+      render();
+    });
+  };
+
+  const runNativeAttachmentAction = async (
+    operation: (() => Promise<readonly AttachmentAdmissionReadModel[]>) | undefined,
+  ): Promise<void> => {
+    if (operation === undefined || disposed || attachmentBusy || resetBlocksWork()) return;
+    attachmentBusy = true;
+    attachmentError = null;
+    render();
+    try {
+      receiveAdmissions(await operation());
+    } catch {
+      if (!disposed) attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+    } finally {
+      if (!disposed) {
+        attachmentBusy = false;
+        render();
+      }
+    }
+  };
+
+  const mutateAttachment = async (
+    operation: (client: CoachClient) => Promise<ChatAttachmentComposerReadModel>,
+  ): Promise<void> => {
+    if (disposed || resetBlocksWork()) return;
+    attachmentBusy = true;
+    attachmentError = null;
+    render();
+    try {
+      const client = await input.clients.getClient();
+      const surface = await operation(client);
+      if (!disposed) {
+        attachmentSurface = surface;
+        attachmentError = null;
+      }
+    } catch {
+      if (!disposed) attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+    } finally {
+      if (!disposed) {
+        attachmentBusy = false;
+        render();
+      }
+    }
   };
 
   const continueDecision = (
@@ -1014,11 +1308,29 @@ export function createChatController(input: {
         render();
       }
     })();
-    const task = Promise.all([transcriptLoadTask, sessionProbeTask, loadTask, queueLoadTask]).then(
-      async () => {
-        if (!decisionBlocksWork()) await drain();
-      },
-    );
+    const attachmentLoadTask = refreshAttachments().catch(() => {
+      if (!disposed) {
+        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+        render();
+      }
+    });
+    const planningRequestLoadTask = recoverPlanningRequests().catch(() => {
+      if (!disposed) {
+        planningRequestsLoaded = false;
+        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+        render();
+      }
+    });
+    const task = Promise.all([
+      transcriptLoadTask,
+      sessionProbeTask,
+      loadTask,
+      queueLoadTask,
+      attachmentLoadTask,
+      planningRequestLoadTask,
+    ]).then(async () => {
+      if (!decisionBlocksWork()) await drain();
+    });
     probeTask = task;
     return task;
   };
@@ -1031,11 +1343,12 @@ export function createChatController(input: {
     resume() {
       return start().then(() => drain());
     },
-    submit(message) {
+    submit(message, attachmentIds = []) {
       if (
         !canChat() ||
         !queueLoaded ||
-        !/\S/u.test(message) ||
+        (!/\S/u.test(message) && attachmentIds.length === 0) ||
+        (/^\s*\//u.test(message) && attachmentIds.length > 0) ||
         disposed ||
         resetBlocksWork() ||
         decisionBlocksWork()
@@ -1043,17 +1356,215 @@ export function createChatController(input: {
         return Promise.resolve(false);
       }
       const submissionId = globalThis.crypto.randomUUID();
+      const submittedAttachments = (attachmentSurface?.draft?.attachments ?? [])
+        .filter((attachment) => attachmentIds.includes(attachment.attachmentId))
+        .map(({ attachmentId, displayName, kind, extension }) => ({
+          attachmentId,
+          displayName,
+          kind,
+          extension,
+        }));
       return input.clients.getClient().then(async (client) => {
+        await attachmentTextSaveTask;
         const acknowledged = await client.call("enqueueChatMessage", {
           chatId: DESKTOP_CHAT_ID,
           submissionId,
           text: message,
+          ...(attachmentIds.length === 0 ? {} : { attachmentIds: [...attachmentIds] }),
         });
         if (disposed) return false;
+        for (const attachment of submittedAttachments) {
+          attachmentSummaries.set(attachment.attachmentId, attachment);
+        }
+        attachmentAdmissions = [];
+        attachmentSurface =
+          attachmentSurface === null ? null : { ...attachmentSurface, draft: null };
         applyQueueSnapshot(acknowledged);
         void drain();
+        void refreshAttachments(client).catch(() => {});
         return true;
       });
+    },
+    chooseAttachments() {
+      return runNativeAttachmentAction(input.nativeAttachments?.choose);
+    },
+    pasteAttachment() {
+      return runNativeAttachmentAction(input.nativeAttachments?.paste);
+    },
+    receiveAttachmentAdmissions(results) {
+      receiveAdmissions(results);
+    },
+    saveAttachmentDraftText(text) {
+      if (disposed || resetBlocksWork()) return;
+      const revision = ++attachmentTextRevision;
+      const task = attachmentTextSaveTask.then(async () => {
+        try {
+          const client = await input.clients.getClient();
+          const surface = await client.call("saveChatAttachmentDraftText", {
+            chatId: DESKTOP_CHAT_ID,
+            text,
+          });
+          if (disposed || revision !== attachmentTextRevision) return;
+          attachmentSurface = surface;
+          attachmentError = null;
+          render();
+        } catch {
+          if (disposed || revision !== attachmentTextRevision) return;
+          attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+          render();
+        }
+      });
+      attachmentTextSaveTask = task;
+    },
+    removeAttachment(attachmentId) {
+      void mutateAttachment((client) =>
+        client.call("removeChatAttachment", { chatId: DESKTOP_CHAT_ID, attachmentId }),
+      );
+    },
+    retryAttachment(attachmentId) {
+      void mutateAttachment((client) =>
+        client.call("retryChatAttachment", { chatId: DESKTOP_CHAT_ID, attachmentId }),
+      );
+    },
+    selectAttachmentWorkout(attachmentId, workoutId) {
+      void mutateAttachment((client) =>
+        client.call("selectChatAttachmentWorkout", {
+          chatId: DESKTOP_CHAT_ID,
+          attachmentId,
+          workoutId,
+        }),
+      );
+    },
+    reviewAttachmentInPlan(attachmentId) {
+      if (
+        disposed ||
+        resetBlocksWork() ||
+        !planningRequestsLoaded ||
+        planningRequestBusyId !== null
+      ) {
+        return;
+      }
+      const attachment = attachmentSurface?.draft?.attachments.find(
+        (item) => item.attachmentId === attachmentId,
+      );
+      if (
+        attachment?.status !== "ready" ||
+        attachment.preview.kind !== "workout" ||
+        attachment.preview.selectedWorkoutId === null
+      ) {
+        return;
+      }
+      const existing = planningRequests.find(
+        (delivery) =>
+          delivery.source?.attachmentId === attachmentId &&
+          (delivery.state !== "delivered" || delivery.planningRequest?.lifecycle === "open"),
+      );
+      if (existing !== undefined) {
+        if (existing.state === "failed" && existing.retryable) {
+          retrySavedPlanningRequest(existing.requestId);
+        } else {
+          routeToPlanningRequest(existing.requestId);
+        }
+        return;
+      }
+      const preview = attachment.preview;
+      const selected = preview.workouts.find(
+        (workout) => workout.workoutId === preview.selectedWorkoutId,
+      );
+      if (selected === undefined) return;
+      const requestId = globalThis.crypto.randomUUID();
+      deliverWorkoutPlanningRequest({
+        requestId,
+        intent: `Review ${selected.title} in Plan.`,
+        source: {
+          chatId: DESKTOP_CHAT_ID,
+          messageId: globalThis.crypto.randomUUID(),
+          attachmentId,
+        },
+      });
+    },
+    continueMessageInPlan(messageId, suggestion) {
+      if (
+        disposed ||
+        resetBlocksWork() ||
+        !planningRequestsLoaded ||
+        planningRequestBusyId !== null
+      ) {
+        return;
+      }
+      const existing = planningRequests.find(
+        (delivery) => delivery.source?.messageId === messageId && delivery.state !== "cancelled",
+      );
+      if (existing !== undefined) {
+        if (existing.state === "failed" && existing.retryable) {
+          retrySavedPlanningRequest(existing.requestId);
+        } else {
+          routeToPlanningRequest(existing.requestId);
+        }
+        return;
+      }
+      const requestId = globalThis.crypto.randomUUID();
+      deliverPlanningRequest({
+        payload: {
+          requestId,
+          kind: suggestion.kind,
+          intent: suggestion.intent,
+          source: { chatId: DESKTOP_CHAT_ID, messageId },
+          sourceSnapshot: {
+            capturedAt: new Date().toISOString(),
+            attachment: null,
+            selectedWorkout: null,
+          },
+          ...(suggestion.requestedDate === undefined
+            ? {}
+            : { requestedDate: suggestion.requestedDate }),
+        },
+      });
+    },
+    openPlanningRequest(requestId) {
+      if (disposed) return;
+      routeToPlanningRequest(requestId);
+    },
+    retryPlanningRequest(requestId) {
+      retrySavedPlanningRequest(requestId);
+    },
+    retryPlanningRequestLoad() {
+      if (disposed || planningRequestBusyId !== null) return;
+      if (pendingPlanningRequestCreate !== null) {
+        if (pendingPlanningRequestCreate.kind === "generic") {
+          deliverPlanningRequest(pendingPlanningRequestCreate.request);
+        } else {
+          deliverWorkoutPlanningRequest(pendingPlanningRequestCreate.request);
+        }
+        return;
+      }
+      planningRequestError = null;
+      render();
+      void recoverPlanningRequests().catch(() => {
+        if (disposed) return;
+        planningRequestsLoaded = false;
+        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+        render();
+      });
+    },
+    refreshPlanningRequests() {
+      if (disposed || planningRequestBusyId !== null) return;
+      void loadPlanningRequests().catch(() => {
+        if (disposed) return;
+        planningRequestsLoaded = false;
+        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+        render();
+      });
+    },
+    focusPlanningRequest(requestId) {
+      if (disposed) return;
+      planningRequestFocusId = requestId;
+      render();
+    },
+    clearPlanningRequestFocus() {
+      if (disposed || planningRequestFocusId === null) return;
+      planningRequestFocusId = null;
+      render();
     },
     stop() {
       if (disposed || state.status !== "streaming" || state.activeTurn === null) return;
@@ -1233,6 +1744,15 @@ export function createChatController(input: {
           const client = await input.clients.getClient();
           const result = await client.call("resetSession", { chatId: DESKTOP_CHAT_ID });
           if (disposed || epoch !== resetEpoch) return;
+          try {
+            attachmentSurface = await client.call("clearChatAttachmentDraft", {
+              chatId: DESKTOP_CHAT_ID,
+            });
+            attachmentAdmissions = [];
+            attachmentError = null;
+          } catch {
+            attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+          }
           sequence += 1;
           retryClient = undefined;
           queuedRetry = undefined;
@@ -1242,6 +1762,7 @@ export function createChatController(input: {
           decisionPhase = "idle";
           decisionAnswerLabel = null;
           decisionError = null;
+          attachmentSummaries.clear();
           updateReset(() => hydrator.resetSucceeded(), {
             type: "reset-succeeded",
             announcement: result.memoryFlushed

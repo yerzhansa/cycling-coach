@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createCoachEngine } from "../src/index.js";
 import type { EngineHostPorts, ModelTransportRequest } from "../src/host-ports.js";
+import type { AttachmentCapabilitiesPort, ChatAttachmentTurnPort } from "../src/host-ports.js";
 import type { GenerateResult, Sport } from "../src/sport.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
@@ -29,6 +30,8 @@ function setup(
   root = mkdtempSync(join(tmpdir(), "engine-chat-queue-")),
   generate: (request: ModelTransportRequest) => Promise<GenerateResult> = async () =>
     generated("Done"),
+  chatAttachments?: ChatAttachmentTurnPort,
+  attachmentCapabilities?: AttachmentCapabilitiesPort,
 ) {
   if (!roots.includes(root)) roots.push(root);
   const base = baseAgentConfig(root);
@@ -38,6 +41,8 @@ function setup(
     transcriptWriter: base.chatStore as unknown as EngineHostPorts["transcriptWriter"],
     randomId: () => `id-${++sequence}`,
     modelTransportDecorator: () => ({ generate }),
+    ...(chatAttachments === undefined ? {} : { chatAttachments }),
+    ...(attachmentCapabilities === undefined ? {} : { attachmentCapabilities }),
   };
   return {
     root,
@@ -47,6 +52,292 @@ function setup(
 }
 
 describe("engine durable chat queue", () => {
+  it("assigns host-owned Message identities and preserves ordinary attachment references", async () => {
+    const { engine } = setup();
+    const queued = await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-1",
+      text: "Review this activity",
+      attachmentIds: ["attachment-1"],
+    });
+    expect(queued.items[0]).toMatchObject({
+      queuedMessageId: "id-1",
+      messageId: "id-2",
+      attachmentIds: ["attachment-1"],
+    });
+    await expect(
+      engine.enqueueChatMessage!({
+        chatId: "desktop",
+        submissionId: "submission-2",
+        text: "/review",
+        attachmentIds: ["attachment-2"],
+      }),
+    ).rejects.toThrow(/text-only/u);
+  });
+
+  it("links admitted attachments to the stable queued Message or rolls the queue item back", async () => {
+    const acceptQueuedMessage = vi.fn(async () => {});
+    const linked = setup(undefined, undefined, {
+      acceptQueuedMessage,
+      prepareQueuedTurn: async () => ({ activities: [] }),
+      completeQueuedTurn: async () => {},
+    });
+    await expect(
+      linked.engine.enqueueChatMessage!({
+        chatId: "desktop",
+        submissionId: "submission-linked",
+        text: "",
+        attachmentIds: ["attachment-1"],
+      }),
+    ).resolves.toMatchObject({ items: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }] });
+    expect(acceptQueuedMessage).toHaveBeenCalledWith({
+      chatId: "desktop",
+      messageId: "id-2",
+      attachmentIds: ["attachment-1"],
+    });
+
+    const failed = setup(undefined, undefined, {
+      acceptQueuedMessage: async () => {
+        throw new Error("link failed");
+      },
+      prepareQueuedTurn: async () => ({ activities: [] }),
+      completeQueuedTurn: async () => {},
+    });
+    await expect(
+      failed.engine.enqueueChatMessage!({
+        chatId: "desktop",
+        submissionId: "submission-failed",
+        text: "Review",
+        attachmentIds: ["attachment-1"],
+      }),
+    ).rejects.toThrow("link failed");
+    await expect(failed.engine.getChatQueue!({ chatId: "desktop" })).resolves.toMatchObject({
+      items: [],
+    });
+  });
+
+  it("imports queued attachments before Coach and exposes only normalized canonical activity fields", async () => {
+    const order: string[] = [];
+    const prepareQueuedTurn = vi.fn(async () => {
+      order.push("prepared");
+      return {
+        activities: [
+          {
+            attachmentId: "attachment-1",
+            messageId: "id-2",
+            activityIds: ["activity-1"],
+            sessions: [
+              {
+                activityId: "activity-1",
+                sport: "cycling",
+                startUtc: 1_777_000_000,
+                elapsedSeconds: 3_600,
+                distanceMeters: 40_000,
+              },
+            ],
+          },
+        ],
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "morning-ride.fit",
+            kind: "activity" as const,
+            extension: "fit" as const,
+          },
+        ],
+      };
+    });
+    const completeQueuedTurn = vi.fn(async () => {
+      order.push("completed");
+    });
+    const requests: ModelTransportRequest[] = [];
+    const value = setup(
+      undefined,
+      async (request) => {
+        order.push("coach");
+        requests.push(request);
+        return generated("Reviewed");
+      },
+      { prepareQueuedTurn, completeQueuedTurn },
+    );
+    const transcriptAppend = vi.spyOn(value.ports.transcriptWriter, "appendCompletedTurn");
+    await value.engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-1",
+      text: "Review the ride",
+      attachmentIds: ["attachment-1"],
+    });
+    await expect(value.engine.resumeChatQueue!({ chatId: "desktop" })).resolves.toMatchObject({
+      response: { text: "Reviewed" },
+      snapshot: { items: [] },
+    });
+    expect(prepareQueuedTurn).toHaveBeenCalledWith({
+      chatId: "desktop",
+      messages: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }],
+    });
+    expect(completeQueuedTurn).toHaveBeenCalledWith({
+      chatId: "desktop",
+      messageIds: ["id-2"],
+    });
+    expect(order).toEqual(["prepared", "coach", "completed"]);
+    const providerMessages = JSON.stringify(requests[0]?.options.messages);
+    expect(providerMessages).toContain("Canonical Training activities imported");
+    expect(providerMessages).toContain("activity-1");
+    expect(providerMessages).not.toContain("raw-fit-private-bytes");
+    expect(transcriptAppend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "morning-ride.fit",
+            kind: "activity",
+            extension: "fit",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("leaves the stable queue claim retryable when attachment preparation fails before Coach", async () => {
+    const generate = vi.fn(async () => generated("Unexpected"));
+    const { engine } = setup(undefined, generate, {
+      prepareQueuedTurn: async () => {
+        throw new Error("import interrupted");
+      },
+      completeQueuedTurn: async () => {},
+    });
+    await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-1",
+      text: "Review the ride",
+      attachmentIds: ["attachment-1"],
+    });
+    await expect(engine.resumeChatQueue!({ chatId: "desktop" })).rejects.toThrow(
+      "import interrupted",
+    );
+    expect(generate).not.toHaveBeenCalled();
+    expect(await engine.getChatQueue!({ chatId: "desktop" })).toMatchObject({
+      items: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }],
+      retryRequired: { queuedMessageIds: ["id-1"] },
+    });
+  });
+
+  it("recovers attachment completion after restart without sending a completed turn twice", async () => {
+    const generate = vi.fn(async () => generated("Reviewed once"));
+    const completeQueuedTurn = vi
+      .fn<ChatAttachmentTurnPort["completeQueuedTurn"]>()
+      .mockRejectedValueOnce(new Error("completion interrupted"))
+      .mockResolvedValue(undefined);
+    const chatAttachments: ChatAttachmentTurnPort = {
+      prepareQueuedTurn: async () => ({
+        activities: [],
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "ride.fit",
+            kind: "activity",
+            extension: "fit",
+          },
+        ],
+      }),
+      completeQueuedTurn,
+    };
+    const first = setup(undefined, generate, chatAttachments);
+    const queued = await first.engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-recovery",
+      text: "Review the ride",
+      attachmentIds: ["attachment-1"],
+    });
+
+    await expect(first.engine.resumeChatQueue!({ chatId: "desktop" })).rejects.toThrow(
+      "completion interrupted",
+    );
+
+    const restored = setup(first.root, generate, chatAttachments);
+    const recovered = await restored.engine.getChatQueue!({ chatId: "desktop" });
+    expect(recovered.items).toEqual([]);
+    expect(recovered).not.toHaveProperty("retryRequired");
+    expect(completeQueuedTurn).toHaveBeenNthCalledWith(2, {
+      chatId: "desktop",
+      messageIds: [queued.items[0]!.messageId],
+    });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates capability before Send and keeps provider image bytes out of history", async () => {
+    const order: string[] = [];
+    const capabilities: Awaited<ReturnType<AttachmentCapabilitiesPort["resolve"]>> = {
+      schemaVersion: 1,
+      active: { provider: "openai", model: "gpt-5.6-sol", transport: "ai-sdk" },
+      documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+      completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+      plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+      images: {
+        enabled: true,
+        mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+        reason: "supported",
+        source: "maintained_catalogue",
+        checkedAt: "2026-08-26T00:00:00.000Z",
+      },
+    };
+    const mediaBytes = new Uint8Array([137, 80, 78, 71]);
+    const prepareQueuedTurn = vi.fn(async (request) => {
+      order.push("prepared");
+      expect(request.capabilities).toEqual(capabilities);
+      return {
+        activities: [],
+        nativeMedia: [
+          {
+            attachmentId: "attachment-1",
+            mediaType: "image/png" as const,
+            bytes: mediaBytes,
+            width: 1,
+            height: 1,
+          },
+        ],
+      };
+    });
+    const requests: ModelTransportRequest[] = [];
+    const value = setup(
+      undefined,
+      async (request) => {
+        order.push("coach");
+        requests.push(request);
+        return generated("Reviewed image");
+      },
+      { prepareQueuedTurn, completeQueuedTurn: async () => {} },
+      {
+        resolve: async () => {
+          order.push("capability");
+          return capabilities;
+        },
+      },
+    );
+    await value.engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-image",
+      text: "Review this image",
+      attachmentIds: ["attachment-1"],
+    });
+    await value.engine.resumeChatQueue!({ chatId: "desktop" });
+    expect(order).toEqual(["capability", "prepared", "coach"]);
+    const providerUser = requests[0]?.options.messages?.at(-1);
+    expect(providerUser).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: expect.stringContaining("Review this image") },
+        { type: "image", image: mediaBytes, mediaType: "image/png" },
+      ],
+    });
+    const history = value.ports.chatStore.load("desktop").messages;
+    expect(history).toMatchObject([
+      { role: "user", content: "Review this image" },
+      { role: "assistant", content: "Reviewed image" },
+    ]);
+    expect(JSON.stringify(history)).not.toContain("137,80,78,71");
+  });
+
   it("groups consecutive ordinary messages and stops at a command barrier", async () => {
     const requests: ModelTransportRequest[] = [];
     const { engine } = setup(undefined, async (request) => {
@@ -192,9 +483,13 @@ describe("engine durable chat queue", () => {
     const { engine } = setup(undefined, generate);
     await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s1", text: "First" });
     await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s2", text: "/review" });
-    const running = engine.resumeChatQueue!({ chatId: "desktop" }).catch(() => undefined);
+    let activeTurnId: string | undefined;
+    const running = engine.resumeChatQueue!({ chatId: "desktop" }, (event) => {
+      if (event.type === "turn-start") activeTurnId = event.turnId;
+    }).catch(() => undefined);
     await active;
-    await engine.stopChat!({ chatId: "desktop", turnId: "id-4" });
+    if (activeTurnId === undefined) throw new Error("active turn was not announced");
+    await engine.stopChat!({ chatId: "desktop", turnId: activeTurnId });
     await running;
 
     const snapshot = await engine.getChatQueue!({ chatId: "desktop" });
