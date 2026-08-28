@@ -211,11 +211,11 @@ describe("001_init migration", () => {
       { version: 21, name: "021_plan_replacement" },
       { version: 22, name: "022_plan_weekly_review" },
       { version: 23, name: "023_plan_race_outcome" },
-      { version: 24, name: "024_chat_attachments" },
-      { version: 25, name: "025_planning_requests" },
-      { version: 26, name: "026_chat_plan_outbox" },
-      { version: 27, name: "027_plan_workout_additions" },
-      { version: 28, name: "028_plan_intake" },
+      { version: 24, name: "024_plan_intake" },
+      { version: 25, name: "025_chat_attachments" },
+      { version: 26, name: "026_planning_requests" },
+      { version: 27, name: "027_chat_plan_outbox" },
+      { version: 28, name: "028_plan_workout_additions" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
