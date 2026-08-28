@@ -57,6 +57,31 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 28 });
   });
 
+  it("upgrades the released Plan version 24 schema through the Chat migrations", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 24));
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 24 });
+    expect(
+      await store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='plan_intake'"),
+    ).toEqual({ name: "plan_intake" });
+
+    await expect(runMigrations(store, MIGRATIONS)).resolves.toEqual({
+      fromVersion: 24,
+      toVersion: 28,
+      applied: [25, 26, 27, 28],
+    });
+    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 28 });
+    await expect(
+      store.all(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('chat_attachment','planning_request','chat_plan_outbox') ORDER BY name",
+      ),
+    ).resolves.toEqual([
+      { name: "chat_attachment" },
+      { name: "chat_plan_outbox" },
+      { name: "planning_request" },
+    ]);
+    await expect(store.all("PRAGMA foreign_key_check")).resolves.toEqual([]);
+  });
+
   it("produces a deterministic INV-2 dump of a fixed state", async () => {
     await runMigrations(store, MIGRATIONS);
     const repo = createAnchorRepository(store);
@@ -168,7 +193,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(result).toEqual({
       fromVersion: 6,
       toVersion: 28,
-      applied: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+      applied: [
+        7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+      ],
     });
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 28 });
     expect(
@@ -274,7 +301,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     ).resolves.toEqual(tablesBefore);
   });
 
-  it("rolls back a failed migration 24 to the complete Plan schema", async () => {
+  it("rolls back a failed migration 24 without partial Plan intake storage", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 23));
     const tablesBefore = await store.all(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -288,7 +315,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 23 });
     await expect(
       store.all(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'chat_attachment%' ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('plan_intake','plan_draft_build_checkpoint') ORDER BY name",
       ),
     ).resolves.toEqual([]);
     await expect(
@@ -301,8 +328,54 @@ describe("migrator end-to-end over node:sqlite", () => {
     ).resolves.toEqual(tablesBefore);
   });
 
-  it("upgrades migration 24 to 25 without changing attachment storage", async () => {
+  it("upgrades released Plan migration 24 to attachment migration 25", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 24));
+
+    await expect(runMigrations(store, MIGRATIONS.slice(0, 25))).resolves.toEqual({
+      fromVersion: 24,
+      toVersion: 25,
+      applied: [25],
+    });
+    await expect(
+      store.all(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'chat_attachment%' ORDER BY name",
+      ),
+    ).resolves.toEqual([
+      { name: "chat_attachment" },
+      { name: "chat_attachment_draft" },
+      { name: "chat_attachment_draft_ref" },
+      { name: "chat_attachment_object" },
+    ]);
+    await expect(
+      store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='plan_intake'"),
+    ).resolves.toEqual({ name: "plan_intake" });
+    await expect(store.all("PRAGMA foreign_key_check")).resolves.toEqual([]);
+  });
+
+  it("rolls back a failed migration 25 without partial attachment storage", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 24));
+    const tablesBefore = await store.all(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    );
+    const broken = {
+      ...MIGRATIONS[24]!,
+      sql: `${MIGRATIONS[24]!.sql}\nINSERT INTO missing_table VALUES (1);`,
+    };
+
+    await expect(runMigrations(store, [...MIGRATIONS.slice(0, 24), broken])).rejects.toThrow();
+    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 24 });
+    await expect(
+      store.all(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'chat_attachment%' ORDER BY name",
+      ),
+    ).resolves.toEqual([]);
+    await expect(
+      store.all("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"),
+    ).resolves.toEqual(tablesBefore);
+  });
+
+  it("upgrades attachment migration 25 to Planning request migration 26", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 25));
     await store.run(
       `INSERT INTO chat_attachment_object (
   id, conversation_id, conversation_key, sha256, byte_size, relative_path,
@@ -322,10 +395,10 @@ describe("migrator end-to-end over node:sqlite", () => {
       ],
     );
 
-    await expect(runMigrations(store, MIGRATIONS.slice(0, 25))).resolves.toEqual({
-      fromVersion: 24,
-      toVersion: 25,
-      applied: [25],
+    await expect(runMigrations(store, MIGRATIONS.slice(0, 26))).resolves.toEqual({
+      fromVersion: 25,
+      toVersion: 26,
+      applied: [26],
     });
     await expect(store.get("SELECT id FROM chat_attachment_object")).resolves.toEqual({
       id: "object-1",
@@ -342,57 +415,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     await expect(store.all("PRAGMA foreign_key_check")).resolves.toEqual([]);
   });
 
-  it("rolls back a failed migration 25 without partial Planning request storage", async () => {
-    await runMigrations(store, MIGRATIONS.slice(0, 24));
-    const tablesBefore = await store.all(
-      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-    );
-    const broken = {
-      ...MIGRATIONS[24]!,
-      sql: `${MIGRATIONS[24]!.sql}\nINSERT INTO missing_table VALUES (1);`,
-    };
-
-    await expect(runMigrations(store, [...MIGRATIONS.slice(0, 24), broken])).rejects.toThrow();
-    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 24 });
-    await expect(
-      store.all(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'planning_request%' ORDER BY name",
-      ),
-    ).resolves.toEqual([]);
-    await expect(
-      store.all("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"),
-    ).resolves.toEqual(tablesBefore);
-  });
-
-  it("upgrades migration 25 to 26 without changing Planning request storage", async () => {
-    await runMigrations(store, MIGRATIONS.slice(0, 25));
-    await store.run(
-      `INSERT INTO planning_request (
-  request_id, kind, target, intent, payload_hash, payload_json, source_status,
-  source_chat_id, source_message_id, source_attachment_id, provenance_json,
-  plan_conversation_id, proposal_id, requested_date_key, resolved_date_key,
-  lifecycle, attention, revision, created_at_ms, updated_at_ms,
-  device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, 'plan_question', 'active_plan', ?, ?, ?, 'linked', ?, ?, NULL, NULL,
-  NULL, NULL, NULL, NULL, 'open', 'none', 1, 1, 1, 'device-1', 1, 0)`,
-      ["request-1", "Review next week.", "a".repeat(64), "{}", "chat-1", "message-1"],
-    );
-
-    await expect(runMigrations(store, MIGRATIONS.slice(0, 26))).resolves.toEqual({
-      fromVersion: 25,
-      toVersion: 26,
-      applied: [26],
-    });
-    await expect(store.get("SELECT request_id FROM planning_request")).resolves.toEqual({
-      request_id: "request-1",
-    });
-    await expect(
-      store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_plan_outbox'"),
-    ).resolves.toEqual({ name: "chat_plan_outbox" });
-    await expect(store.all("PRAGMA foreign_key_check")).resolves.toEqual([]);
-  });
-
-  it("rolls back a failed migration 26 without partial Chat outbox storage", async () => {
+  it("rolls back a failed migration 26 without partial Planning request storage", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 25));
     const tablesBefore = await store.all(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -405,15 +428,45 @@ describe("migrator end-to-end over node:sqlite", () => {
     await expect(runMigrations(store, [...MIGRATIONS.slice(0, 25), broken])).rejects.toThrow();
     await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 25 });
     await expect(
-      store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_plan_outbox'"),
-    ).resolves.toBeUndefined();
+      store.all(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'planning_request%' ORDER BY name",
+      ),
+    ).resolves.toEqual([]);
     await expect(
       store.all("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"),
     ).resolves.toEqual(tablesBefore);
   });
 
-  it("upgrades migration 26 to 27 with reversible Plan Workout addition columns", async () => {
+  it("upgrades Planning request migration 26 to Chat outbox migration 27", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 26));
+    await store.run(
+      `INSERT INTO planning_request (
+  request_id, kind, target, intent, payload_hash, payload_json, source_status,
+  source_chat_id, source_message_id, source_attachment_id, provenance_json,
+  plan_conversation_id, proposal_id, requested_date_key, resolved_date_key,
+  lifecycle, attention, revision, created_at_ms, updated_at_ms,
+  device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, 'plan_question', 'active_plan', ?, ?, ?, 'linked', ?, ?, NULL, NULL,
+  NULL, NULL, NULL, NULL, 'open', 'none', 1, 1, 1, 'device-1', 1, 0)`,
+      ["request-1", "Review next week.", "a".repeat(64), "{}", "chat-1", "message-1"],
+    );
+
+    await expect(runMigrations(store, MIGRATIONS.slice(0, 27))).resolves.toEqual({
+      fromVersion: 26,
+      toVersion: 27,
+      applied: [27],
+    });
+    await expect(store.get("SELECT request_id FROM planning_request")).resolves.toEqual({
+      request_id: "request-1",
+    });
+    await expect(
+      store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_plan_outbox'"),
+    ).resolves.toEqual({ name: "chat_plan_outbox" });
+    await expect(store.all("PRAGMA foreign_key_check")).resolves.toEqual([]);
+  });
+
+  it("upgrades migration 27 to 28 with reversible Plan Workout addition columns", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 27));
     const planId = `${"0".repeat(25)}1`;
     const workoutId = `${"0".repeat(25)}2`;
     await createPlanRepository(store).replace(
@@ -476,10 +529,10 @@ describe("migrator end-to-end over node:sqlite", () => {
       ],
     );
 
-    await expect(runMigrations(store, MIGRATIONS.slice(0, 27))).resolves.toEqual({
-      fromVersion: 26,
-      toVersion: 27,
-      applied: [27],
+    await expect(runMigrations(store, MIGRATIONS.slice(0, 28))).resolves.toEqual({
+      fromVersion: 27,
+      toVersion: 28,
+      applied: [28],
     });
     const columns = await store.all("PRAGMA table_info(plan_adaptation_ledger)");
     await expect(columns.find((column) => column.name === "operation")).toMatchObject({
@@ -499,9 +552,11 @@ describe("migrator end-to-end over node:sqlite", () => {
     await expect(store.all("PRAGMA foreign_key_check")).resolves.toEqual([]);
   });
 
-  it("rolls back a failed migration 27 without replacing the adaptation ledger", async () => {
+  it("rolls back a failed migration 27 without partial Chat outbox storage", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 26));
-    const columnsBefore = await store.all("PRAGMA table_info(plan_adaptation_ledger)");
+    const tablesBefore = await store.all(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    );
     const broken = {
       ...MIGRATIONS[26]!,
       sql: `${MIGRATIONS[26]!.sql}\nINSERT INTO missing_table VALUES (1);`,
@@ -509,6 +564,24 @@ describe("migrator end-to-end over node:sqlite", () => {
 
     await expect(runMigrations(store, [...MIGRATIONS.slice(0, 26), broken])).rejects.toThrow();
     await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 26 });
+    await expect(
+      store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_plan_outbox'"),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.all("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"),
+    ).resolves.toEqual(tablesBefore);
+  });
+
+  it("rolls back a failed migration 28 without replacing the adaptation ledger", async () => {
+    await runMigrations(store, MIGRATIONS.slice(0, 27));
+    const columnsBefore = await store.all("PRAGMA table_info(plan_adaptation_ledger)");
+    const broken = {
+      ...MIGRATIONS[27]!,
+      sql: `${MIGRATIONS[27]!.sql}\nINSERT INTO missing_table VALUES (1);`,
+    };
+
+    await expect(runMigrations(store, [...MIGRATIONS.slice(0, 27), broken])).rejects.toThrow();
+    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 27 });
     await expect(store.all("PRAGMA table_info(plan_adaptation_ledger)")).resolves.toEqual(
       columnsBefore,
     );
@@ -517,32 +590,6 @@ describe("migrator end-to-end over node:sqlite", () => {
         "SELECT name FROM sqlite_master WHERE type='table' AND name='plan_adaptation_ledger_v26'",
       ),
     ).resolves.toBeUndefined();
-  });
-
-  it("rolls back a failed migration 28 without partial Plan intake storage", async () => {
-    await runMigrations(store, MIGRATIONS.slice(0, 27));
-    const tablesBefore = await store.all(
-      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-    );
-    const conversationColumnsBefore = await store.all("PRAGMA table_info(plan_conversation)");
-    const broken = {
-      ...MIGRATIONS[27]!,
-      sql: `${MIGRATIONS[27]!.sql}\nINSERT INTO missing_table VALUES (1);`,
-    };
-
-    await expect(runMigrations(store, [...MIGRATIONS.slice(0, 27), broken])).rejects.toThrow();
-    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 27 });
-    await expect(
-      store.all(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('plan_intake','plan_draft_build_checkpoint') ORDER BY name",
-      ),
-    ).resolves.toEqual([]);
-    await expect(store.all("PRAGMA table_info(plan_conversation)")).resolves.toEqual(
-      conversationColumnsBefore,
-    );
-    await expect(
-      store.all("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"),
-    ).resolves.toEqual(tablesBefore);
   });
 
   it("preserves an existing cursor and leaves its store owner unset", async () => {
