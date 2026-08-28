@@ -613,6 +613,7 @@ async function launch(input: {
   readonly width: number;
   readonly height: number;
   readonly reducedMotion: boolean;
+  readonly colorScheme?: "light" | "dark";
   readonly syncOutcome?: SyncOutcome;
   readonly transcriptHistory?: boolean;
 }): Promise<{ readonly fixture: RunningDesktopFixture; readonly calls: ScriptRequest[] }> {
@@ -622,7 +623,7 @@ async function launch(input: {
     token,
     width: input.width,
     height: input.height,
-    colorScheme: "light",
+    colorScheme: input.colorScheme ?? "light",
     reducedMotion: input.reducedMotion,
   });
   fixtures.push(fixture);
@@ -2079,6 +2080,79 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(
       calls.slice(syncCallIndex + 1).filter((call) => call.method === "getAthleteState"),
     ).toHaveLength(1);
+    expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
+    fixtures.splice(fixtures.indexOf(fixture), 1);
+  }, 90_000);
+
+  it("keeps the dark Reading room usable at wide and compact viewports", async () => {
+    const { fixture } = await launch({
+      width: 1440,
+      height: 900,
+      reducedMotion: false,
+      colorScheme: "dark",
+    });
+    expect(
+      await fixture.evaluate<{
+        readonly theme: string | undefined;
+        readonly colorScheme: string;
+        readonly overflow: boolean;
+        readonly composerOpaque: boolean;
+        readonly disclaimerCentered: boolean;
+        readonly contextVisible: boolean;
+      }>(`
+        const composer = document.querySelector(".composer-wrap");
+        const disclaimer = document.querySelector(".composer-wrap > p:last-child");
+        return {
+          theme: document.documentElement.dataset.theme,
+          colorScheme: getComputedStyle(document.documentElement).colorScheme,
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
+          disclaimerCentered: getComputedStyle(disclaimer).textAlign === "center",
+          contextVisible: document.querySelector(".training-context") !== null,
+        };
+      `),
+    ).toEqual({
+      theme: "dark",
+      colorScheme: "dark",
+      overflow: false,
+      composerOpaque: true,
+      disclaimerCentered: true,
+      contextVisible: true,
+    });
+
+    await fixture.setViewport(720, 800);
+    expect(
+      await fixture.evaluate<{
+        readonly overflow: boolean;
+        readonly contextDrawerOpened: boolean;
+        readonly composerVisible: boolean;
+        readonly disclaimerCentered: boolean;
+      }>(`
+        const compactDeadline = Date.now() + 5000;
+        while (
+          document.querySelector('[aria-label="Show training context"]') === null &&
+          Date.now() < compactDeadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        document.querySelector('[aria-label="Show training context"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const composer = document.querySelector(".composer-wrap").getBoundingClientRect();
+        const disclaimer = document.querySelector(".composer-wrap > p:last-child");
+        return {
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          contextDrawerOpened:
+            document.querySelector('[data-slot="dialog-content"] .training-context') !== null,
+          composerVisible: composer.top >= 0 && composer.bottom <= window.innerHeight,
+          disclaimerCentered: getComputedStyle(disclaimer).textAlign === "center",
+        };
+      `),
+    ).toEqual({
+      overflow: false,
+      contextDrawerOpened: true,
+      composerVisible: true,
+      disclaimerCentered: true,
+    });
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
   }, 90_000);
