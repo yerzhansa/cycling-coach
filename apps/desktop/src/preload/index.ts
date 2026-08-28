@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { PlatformAbsolutePathSchema } from "@enduragent/coach-contract";
+import {
+  ExecutePlanTransitionRpcParamsSchema,
+  ExecutePlanTransitionRpcResultSchema,
+  GetPlanStateRpcResultSchema,
+  PlanProgressEventSchema,
+  PlanRaceCourseFileSelectionSchema,
+  PlatformAbsolutePathSchema,
+  type PlanProgressEvent,
+} from "@enduragent/coach-contract";
 import { parseDesktopAppearance } from "../main/appearance.js";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
 import { desktopRendererNavigationToken } from "../main/renderer-navigation.js";
@@ -11,6 +19,10 @@ import {
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
+  DESKTOP_PLAN_PROGRESS_CHANNEL,
+  DESKTOP_PLAN_COURSE_FILE_CHANNEL,
+  DESKTOP_PLAN_STATE_CHANNEL,
+  DESKTOP_PLAN_TRANSITION_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
@@ -1346,6 +1358,7 @@ async function invokeTelegramSenders(): Promise<unknown> {
 let dropDisposer: (() => void) | undefined;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 const chatGptLoginProgressListeners = new Set<(progress: PreloadChatGptLoginProgress) => void>();
+const planProgressListeners = new Set<(progress: PlanProgressEvent) => void>();
 const desktopDocumentNavigationToken = desktopRendererNavigationToken(window.location.href);
 if (desktopDocumentNavigationToken === undefined) throw new TypeError();
 
@@ -1408,6 +1421,16 @@ ipcRenderer.on(DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL, (_event, value: unknown) 
   }
 });
 
+ipcRenderer.on(DESKTOP_PLAN_PROGRESS_CHANNEL, (_event, value: unknown) => {
+  const parsed = PlanProgressEventSchema.safeParse(value);
+  if (!parsed.success) return;
+  for (const listener of planProgressListeners) {
+    try {
+      listener(PlanProgressEventSchema.parse(parsed.data));
+    } catch {}
+  }
+});
+
 if (
   ipcRenderer.sendSync(DESKTOP_DOCUMENT_REGISTRATION_CHANNEL, {
     navigationToken: desktopDocumentNavigationToken,
@@ -1462,6 +1485,43 @@ contextBridge.exposeInMainWorld(
         await ipcRenderer.invoke(DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL, request),
         archivedTranscriptCursor,
       );
+    },
+    getPlanState: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      const parsed = GetPlanStateRpcResultSchema.safeParse(
+        await ipcRenderer.invoke(DESKTOP_PLAN_STATE_CHANNEL),
+      );
+      if (!parsed.success) throw new TypeError();
+      return parsed.data;
+    },
+    choosePlanRaceCourseFile: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      const parsed = PlanRaceCourseFileSelectionSchema.safeParse(
+        await ipcRenderer.invoke(DESKTOP_PLAN_COURSE_FILE_CHANNEL),
+      );
+      if (!parsed.success) throw new TypeError();
+      return parsed.data;
+    },
+    executePlanTransition: async (input: unknown, ...args: unknown[]) => {
+      requireZeroArguments(args);
+      const request = ExecutePlanTransitionRpcParamsSchema.safeParse(input);
+      if (!request.success) throw new TypeError();
+      const result = ExecutePlanTransitionRpcResultSchema.safeParse(
+        await ipcRenderer.invoke(DESKTOP_PLAN_TRANSITION_CHANNEL, request.data),
+      );
+      if (!result.success) throw new TypeError();
+      return result.data;
+    },
+    onPlanProgress: (listener: unknown) => {
+      if (typeof listener !== "function") throw new TypeError();
+      const typedListener = listener as (progress: PlanProgressEvent) => void;
+      planProgressListeners.add(typedListener);
+      let active = true;
+      return (): void => {
+        if (!active) return;
+        active = false;
+        planProgressListeners.delete(typedListener);
+      };
     },
     credentialStatuses: async () =>
       parseStatuses(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL)),

@@ -7,12 +7,17 @@ import {
   type CoachClient,
   type CoachClientCallOptions,
 } from "@enduragent/coach-client";
-import type { CoachTurnEventNotificationEnvelope, TurnEvent } from "@enduragent/coach-contract";
+import type {
+  ChatQueueSnapshot,
+  CoachTurnEventNotificationEnvelope,
+  QueuedChatMessage,
+  TurnEvent,
+} from "@enduragent/coach-contract";
 import {
   CHAT_CONNECTION_INTERRUPTED_COPY,
   CHAT_EMPTY_RESPONSE_COPY,
-  CHAT_FAILURE_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
+  CHAT_RESPONSE_STOPPED_COPY,
   NEW_CONVERSATION_MEMORY_WARNING_COPY,
   NEW_CONVERSATION_SUCCESS_COPY,
   NEW_CONVERSATION_UNCERTAIN_COPY,
@@ -23,13 +28,17 @@ import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/c
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
 
-function envelope(event: TurnEvent, requestId = 1): CoachTurnEventNotificationEnvelope {
+function envelope(
+  event: TurnEvent,
+  requestId = 1,
+  requestMethod: CoachTurnEventNotificationEnvelope["params"]["requestMethod"] = "chat",
+): CoachTurnEventNotificationEnvelope {
   return {
     jsonrpc: "2.0",
     method: "coach.turnEvent",
     params: {
       requestId,
-      requestMethod: "chat",
+      requestMethod,
       turnId: event.turnId,
       event,
     },
@@ -53,7 +62,14 @@ function errorEvent(message = "Safe athlete message"): Extract<TurnEvent, { type
 }
 
 function deliver(options: CoachClientCallOptions<"chat"> | undefined, event: TurnEvent): void {
-  options?.onNotificationEnvelope?.(envelope(event));
+  const requestMethod = (
+    options as
+      | (CoachClientCallOptions<"chat"> & {
+          requestMethod?: CoachTurnEventNotificationEnvelope["params"]["requestMethod"];
+        })
+      | undefined
+  )?.requestMethod;
+  options?.onNotificationEnvelope?.(envelope(event, 1, requestMethod));
   options?.onEvent?.(event);
 }
 
@@ -78,27 +94,110 @@ function client(
   sessions: {
     readonly hasSession?: (request: { chatId: string }) => Promise<{ hasSession: boolean }>;
     readonly resetSession?: (request: { chatId: string }) => Promise<{ memoryFlushed: boolean }>;
+    readonly stopChat?: (request: {
+      chatId: string;
+      turnId: string;
+    }) => Promise<{ stopped: boolean }>;
   } = {},
 ): CoachClient {
+  let queueRevision = 0;
+  const queued: QueuedChatMessage[] = [];
+  const snapshot = (): ChatQueueSnapshot => ({
+    schemaVersion: 1,
+    revision: queueRevision,
+    items: queued.map((item, position) => ({ ...item, position })),
+  });
+  const acknowledge = (items: readonly QueuedChatMessage[]): void => {
+    const ids = new Set(items.map((item) => item.queuedMessageId));
+    for (let index = queued.length - 1; index >= 0; index -= 1) {
+      if (ids.has(queued[index]!.queuedMessageId)) queued.splice(index, 1);
+    }
+    queueRevision += 1;
+  };
+  const call = vi.fn((method, request, options) => {
+    const hideQueueCall = (): void => {
+      call.mock.calls.pop();
+    };
+    if (method === "getChatQueue") {
+      hideQueueCall();
+      return Promise.resolve(snapshot()) as never;
+    }
+    if (method === "enqueueChatMessage") {
+      hideQueueCall();
+      const value = request as { submissionId: string; text: string };
+      if (!queued.some((item) => item.submissionId === value.submissionId)) {
+        queued.push({
+          queuedMessageId: `queued-${value.submissionId}`,
+          submissionId: value.submissionId,
+          text: value.text,
+          kind: value.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+          position: queued.length,
+          restored: false,
+        });
+        queueRevision += 1;
+      }
+      return Promise.resolve(snapshot()) as never;
+    }
+    if (method === "removeQueuedChatMessage") {
+      hideQueueCall();
+      const value = request as { queuedMessageId: string };
+      acknowledge(queued.filter((item) => item.queuedMessageId === value.queuedMessageId));
+      return Promise.resolve(snapshot()) as never;
+    }
+    if (method === "resumeChatQueue" || method === "runQueuedCommand") {
+      hideQueueCall();
+      const head = queued[0];
+      if (head === undefined) return Promise.resolve({ snapshot: snapshot() }) as never;
+      const commandIndex = queued.findIndex((item) => item.kind === "slash-command");
+      const group =
+        head.kind === "slash-command"
+          ? [head]
+          : queued.slice(0, commandIndex === -1 ? queued.length : commandIndex);
+      const queueOptions = {
+        ...(options as CoachClientCallOptions<"chat">),
+        requestMethod: method,
+      };
+      const response = call(
+        "chat",
+        { chatId: "desktop", message: group.map((item) => item.text).join("\n\n") },
+        queueOptions,
+      ) as Promise<{ text: string }>;
+      return response.then(
+        (value) => {
+          acknowledge(group);
+          return { snapshot: snapshot(), response: value };
+        },
+        (error: unknown) => {
+          acknowledge(group);
+          throw error;
+        },
+      ) as never;
+    }
+    if (method === "hasSession") {
+      return (sessions.hasSession ?? (async () => ({ hasSession: false })))(
+        request as { chatId: string },
+      ) as never;
+    }
+    if (method === "resetSession") {
+      return (sessions.resetSession ?? (async () => ({ memoryFlushed: true })))(
+        request as { chatId: string },
+      ) as never;
+    }
+    if (method === "stopChat") {
+      return (sessions.stopChat ?? (async () => ({ stopped: false })))(
+        request as { chatId: string; turnId: string },
+      ) as never;
+    }
+    if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
+    if (method !== "chat") throw new TypeError();
+    return implementation(
+      request as { chatId: string; message: string },
+      options as CoachClientCallOptions<"chat">,
+    ) as never;
+  });
   return {
     handshake: {} as CoachClient["handshake"],
-    call: vi.fn((method, request, options) => {
-      if (method === "hasSession") {
-        return (sessions.hasSession ?? (async () => ({ hasSession: false })))(
-          request as { chatId: string },
-        ) as never;
-      }
-      if (method === "resetSession") {
-        return (sessions.resetSession ?? (async () => ({ memoryFlushed: true })))(
-          request as { chatId: string },
-        ) as never;
-      }
-      if (method !== "chat") throw new TypeError();
-      return implementation(
-        request as { chatId: string; message: string },
-        options as CoachClientCallOptions<"chat">,
-      ) as never;
-    }),
+    call,
     close: vi.fn(async () => {}),
   };
 }
@@ -133,9 +232,11 @@ function subject(
   refreshImplementation: () => Promise<void> = async () => {},
   spendRefreshImplementation: () => Promise<void> = async () => {},
   canChat: () => boolean = () => true,
+  settleSubmissions = true,
 ) {
   const states: ChatState[] = [];
   const controls: ChatViewControls[] = [];
+  const settlements = new Set<{ remaining: number; resolve: () => void }>();
   const refresh = vi.fn(refreshImplementation);
   const refreshSpend = vi.fn(spendRefreshImplementation);
   const provider: DesktopCoachClientProvider = {
@@ -149,13 +250,47 @@ function subject(
       render: (state, nextControls) => {
         states.push(structuredClone(state));
         if (nextControls !== undefined) controls.push(structuredClone(nextControls));
+        if (state.status !== "streaming") {
+          for (const settlement of settlements) {
+            settlement.remaining -= 1;
+            if (settlement.remaining === 0) {
+              settlements.delete(settlement);
+              settlement.resolve();
+            }
+          }
+        }
       },
     },
     refreshTrainingContext: refresh,
     refreshSpend,
     canChat,
+    initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
   });
-  return { controller, provider, states, controls, refresh, refreshSpend };
+  const submittedController = {
+    ...controller,
+    async submit(message: string): Promise<boolean> {
+      const alreadyStreaming = states.at(-1)?.status === "streaming";
+      const acknowledged = await controller.submit(message);
+      if (
+        !settleSubmissions ||
+        !acknowledged ||
+        alreadyStreaming ||
+        states.at(-1)?.status !== "streaming"
+      ) {
+        return acknowledged;
+      }
+      await new Promise<void>((resolve) => settlements.add({ remaining: 2, resolve }));
+      return acknowledged;
+    },
+  };
+  return {
+    controller: submittedController,
+    provider,
+    states,
+    controls,
+    refresh,
+    refreshSpend,
+  };
 }
 
 describe("chat controller", () => {
@@ -172,6 +307,7 @@ describe("chat controller", () => {
       async () => {},
       async () => {},
       () => ready,
+      false,
     );
 
     await controller.submit("Blocked");
@@ -186,8 +322,9 @@ describe("chat controller", () => {
     release();
     await first;
 
-    expect(chatMessages(fake)).toEqual(["Allowed"]);
-    expect(states.at(-1)?.queued).toMatchObject([{ text: "Queued" }]);
+    expect(chatMessages(fake)).toEqual(["Allowed\n\nQueued"]);
+    await vi.waitFor(() => expect(states.at(-1)?.queued).toEqual([]));
+    expect(states.at(-1)?.queued).toEqual([]);
     expect(controller.openNewConversation()).toBe(false);
   });
 
@@ -204,6 +341,7 @@ describe("chat controller", () => {
       async () => {},
       async () => {},
       () => ready,
+      false,
     );
 
     const first = controller.submit("Allowed");
@@ -213,13 +351,14 @@ describe("chat controller", () => {
     release();
     await first;
 
-    expect(chatMessages(fake)).toEqual(["Allowed"]);
-    expect(states.at(-1)?.queued).toMatchObject([{ text: "Queued" }]);
+    expect(chatMessages(fake)).toEqual(["Allowed\n\nQueued"]);
+    await vi.waitFor(() => expect(states.at(-1)?.queued).toEqual([]));
+    expect(states.at(-1)?.queued).toEqual([]);
 
     ready = true;
     await Promise.all([controller.resume(), controller.resume(), controller.resume()]);
 
-    expect(chatMessages(fake)).toEqual(["Allowed", "Queued"]);
+    expect(chatMessages(fake)).toEqual(["Allowed\n\nQueued"]);
     expect(states.at(-1)?.queued).toEqual([]);
   });
 
@@ -281,7 +420,7 @@ describe("chat controller", () => {
       async () => {},
       () => gate,
     );
-    await expect(controller.submit("Continue")).resolves.toBeUndefined();
+    await expect(controller.submit("Continue")).resolves.toBe(true);
     expect(refreshSpend).toHaveBeenCalledTimes(1);
   });
 
@@ -300,17 +439,106 @@ describe("chat controller", () => {
 
     const submission = controller.submit("Continue");
 
-    expect(states.at(-1)).toMatchObject({
-      status: "streaming",
-      progress: CHAT_WORKING_COPY,
-      messages: [
-        { role: "athlete", text: "Continue" },
-        { role: "coach", text: "", delivery: "streaming" },
-      ],
-    });
+    await vi.waitFor(() =>
+      expect(states.at(-1)).toMatchObject({
+        status: "streaming",
+        progress: CHAT_WORKING_COPY,
+        messages: [
+          { role: "athlete", text: "Continue" },
+          { role: "coach", text: "", delivery: "streaming" },
+        ],
+      }),
+    );
 
     release();
     await submission;
+  });
+
+  it("stops only the active response and retries on the same connected client", async () => {
+    let firstOptions: CoachClientCallOptions<"chat"> | undefined;
+    let finishFirst!: (value: { text: string }) => void;
+    let callCount = 0;
+    const firstResult = new Promise<{ text: string }>((resolve) => {
+      finishFirst = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          firstOptions = options;
+          deliver(options, { type: "turn-start", turnId: "turn-1", chatId: "desktop" });
+          deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial response" });
+          return firstResult;
+        }
+        deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { text: "Recovered" },
+        });
+        return { text: "Recovered" };
+      },
+      {
+        stopChat: async () => {
+          deliver(firstOptions, {
+            type: "interrupted",
+            turnId: "turn-1",
+            chatId: "desktop",
+            text: "Partial response",
+          });
+          firstOptions?.onTerminalEnvelope?.({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { text: "Partial response" },
+          });
+          finishFirst({ text: "Partial response" });
+          return { stopped: true };
+        },
+      },
+    );
+    const { controller, provider, states } = subject(fake);
+
+    const submission = controller.submit("Stop this");
+    await vi.waitFor(() => expect(states.at(-1)?.messages.at(-1)?.text).toBe("Partial response"));
+    controller.stop();
+    await submission;
+
+    expect(vi.mocked(fake.call).mock.calls.map(([method]) => method)).toEqual(["chat", "stopChat"]);
+    expect(vi.mocked(fake.call).mock.calls[1]?.[1]).toEqual({
+      chatId: "desktop",
+      turnId: "turn-1",
+    });
+    expect(states.at(-1)).toMatchObject({
+      status: "interrupted",
+      progress: CHAT_RESPONSE_STOPPED_COPY,
+    });
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Partial response",
+      delivery: "interrupted",
+    });
+    expect(firstOptions?.signal?.aborted).toBe(false);
+
+    await controller.retryInterrupted();
+
+    expect(provider.reconnect).not.toHaveBeenCalled();
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Recovered",
+      delivery: "complete",
+    });
+  });
+
+  it("ignores Stop after a response has completed", async () => {
+    const fake = client(replies());
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+    controller.stop();
+
+    expect(states.at(-1)?.status).toBe("idle");
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Reply 1",
+      delivery: "complete",
+    });
   });
 
   it("clears only generic working feedback on the first substantive delta", async () => {
@@ -510,7 +738,7 @@ describe("chat controller", () => {
     await controller.submit("Help");
     expect(states.at(-1)?.messages.at(-1)?.text).toBe("Partial");
     expect(states.at(-1)?.activeTurn?.error?.athleteMessage).toBe("Safe athlete message");
-    expect(fake.call).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(fake.call).toHaveBeenCalledTimes(1));
   });
 
   it("reconciles a safe final after an error while retaining the subdued notice", async () => {
@@ -690,8 +918,10 @@ describe("chat controller", () => {
       view: { render: (state) => states.push(structuredClone(state)) },
       refreshTrainingContext: vi.fn(async () => {}),
       refreshSpend: vi.fn(async () => {}),
+      initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
     });
     await controller.submit("Same message");
+    await vi.waitFor(() => expect(states.at(-1)?.status).toBe("interrupted"));
     await controller.retryInterrupted();
     expect(provider.reconnect).not.toHaveBeenCalled();
     expect(recovered.call).toHaveBeenCalledTimes(1);
@@ -736,6 +966,7 @@ describe("chat controller", () => {
         if (refreshCalls === 1) await refreshGate;
       }),
       refreshSpend: vi.fn(async () => {}),
+      initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
     });
     const submission = controller.submit("Same message");
     await interruptedState;
@@ -750,112 +981,6 @@ describe("chat controller", () => {
     expect(second.call).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps queued retries owned by the interrupted request when a newer pre-call disconnects", async () => {
-    let releaseFirstRefresh!: () => void;
-    const firstRefreshGate = new Promise<void>((resolve) => {
-      releaseFirstRefresh = resolve;
-    });
-    let resolveReconnect!: (value: CoachClient) => void;
-    const reconnectGate = new Promise<CoachClient>((resolve) => {
-      resolveReconnect = resolve;
-    });
-    const first = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-a", delta: "Partial A" });
-      throw new CoachClientDisconnectedError(1006, "chat-a-disconnected");
-    });
-    const recovered = client(async (_request, options) => {
-      deliver(options, { type: "final-text", turnId: "turn-b-retry", text: "Recovered B" });
-      options?.onTerminalEnvelope?.({
-        jsonrpc: "2.0",
-        id: 3,
-        result: { text: "Recovered B" },
-      });
-      return { text: "Recovered B" };
-    });
-    let clientAcquisitions = 0;
-    const provider: DesktopCoachClientProvider = {
-      getClient: vi.fn(async () => {
-        clientAcquisitions += 1;
-        if (clientAcquisitions === 1) return first;
-        throw new CoachClientDisconnectedError(1006, "chat-b-pre-call-disconnected");
-      }),
-      reconnect: vi.fn(() => reconnectGate),
-      close: vi.fn(async () => {}),
-    };
-    const states: ChatState[] = [];
-    let renderCount = 0;
-    let releasedFirstRefresh = false;
-    let showSecondInterruption!: () => void;
-    const secondInterruption = new Promise<void>((resolve) => {
-      showSecondInterruption = resolve;
-    });
-    const refreshTrainingContext = vi.fn(async () => {
-      if (refreshTrainingContext.mock.calls.length === 1) await firstRefreshGate;
-    });
-    const refreshSpend = vi.fn(async () => {});
-    const controller = createChatController({
-      clients: provider,
-      view: {
-        render(state) {
-          states.push(structuredClone(state));
-          renderCount += 1;
-          if (
-            !releasedFirstRefresh &&
-            state.status === "interrupted" &&
-            state.activeTurn?.userMessage === "Chat B"
-          ) {
-            releasedFirstRefresh = true;
-            releaseFirstRefresh();
-            showSecondInterruption();
-          }
-        },
-      },
-      refreshTrainingContext,
-      refreshSpend,
-    });
-
-    const chatA = controller.submit("Chat A");
-    while (states.at(-1)?.status !== "interrupted") await Promise.resolve();
-    const retryA = controller.retryInterrupted();
-    const chatB = controller.submit("Chat B");
-    await secondInterruption;
-    const rendersAtSecondInterruption = renderCount;
-    const retryB = controller.retryInterrupted();
-    const duplicateB = controller.retryInterrupted();
-
-    expect(retryB).not.toBe(retryA);
-    expect(duplicateB).toBe(retryB);
-    await Promise.all([chatA, chatB, retryA]);
-    expect(provider.getClient).toHaveBeenCalledTimes(2);
-    expect(provider.reconnect).toHaveBeenCalledTimes(1);
-    expect(renderCount).toBe(rendersAtSecondInterruption + 5);
-    expect(first.call).toHaveBeenCalledTimes(1);
-    expect(recovered.call).not.toHaveBeenCalled();
-
-    resolveReconnect(recovered);
-    await Promise.all([retryB, duplicateB]);
-
-    expect(provider.getClient).toHaveBeenCalledTimes(2);
-    expect(provider.reconnect).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(first.call).mock.calls.map(([, request]) => request)).toEqual([
-      { chatId: "desktop", message: "Chat A" },
-    ]);
-    expect(vi.mocked(recovered.call).mock.calls.map(([, request]) => request)).toEqual([
-      { chatId: "desktop", message: "Chat B" },
-    ]);
-    expect(refreshTrainingContext).toHaveBeenCalledTimes(2);
-    expect(refreshSpend).toHaveBeenCalledTimes(2);
-    expect(
-      states.at(-1)?.messages.map(({ role, text, delivery }) => ({ role, text, delivery })),
-    ).toEqual([
-      { role: "athlete", text: "Chat A", delivery: "complete" },
-      { role: "coach", text: "Partial A", delivery: "interrupted" },
-      { role: "athlete", text: "Chat B", delivery: "complete" },
-      { role: "coach", text: "", delivery: "interrupted" },
-      { role: "coach", text: "Recovered B", delivery: "complete" },
-    ]);
-  });
-
   it("allows one in-flight call and treats client protocol rejection as explicit-retry state", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -868,8 +993,7 @@ describe("chat controller", () => {
     const { controller, states } = subject(fake);
     const first = controller.submit("One");
     const second = controller.submit("Two");
-    await Promise.resolve();
-    expect(fake.call).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(fake.call).toHaveBeenCalledTimes(1));
     release();
     await Promise.all([first, second]);
     expect(states.at(-1)?.progress).toBe(CHAT_PROTOCOL_FAILURE_COPY);
@@ -894,7 +1018,10 @@ describe("chat controller", () => {
 
     expect(duplicate).toBe(first);
     await first;
-    expect(vi.mocked(fake.call).mock.calls).toEqual([["hasSession", { chatId: "desktop" }]]);
+    expect(vi.mocked(fake.call).mock.calls).toEqual([
+      ["getCoachDecision", { chatId: "desktop" }],
+      ["hasSession", { chatId: "desktop" }],
+    ]);
     expect(states.at(-1)?.session.presence).toBe("present");
   });
 
@@ -914,12 +1041,14 @@ describe("chat controller", () => {
     await second.controller.start();
     expect(second.states.at(-1)?.session).toEqual(EMPTY_CHAT_STATE.session);
     expect(second.provider.reconnect).not.toHaveBeenCalled();
-    expect(vi.mocked(failed.call).mock.calls.filter(([method]) => method !== "hasSession")).toEqual(
-      [],
-    );
+    expect(
+      vi
+        .mocked(failed.call)
+        .mock.calls.filter(([method]) => method !== "hasSession" && method !== "getCoachDecision"),
+    ).toEqual([]);
   });
 
-  it("uses visible local content without promoting an absent session after pre-client failure", async () => {
+  it("does not project local content before durable admission succeeds", async () => {
     const fake = client(async () => ({ text: "unused" }));
     const { controller, provider, states, controls } = subject(fake);
     await controller.start();
@@ -932,39 +1061,21 @@ describe("chat controller", () => {
 
     const submission = controller.submit("Keep this visible");
     expect(states.at(-1)?.session.presence).toBe("absent");
-    expect(states.at(-1)?.messages).toMatchObject([
-      { role: "athlete", text: "Keep this visible" },
-      { role: "coach", text: "" },
-    ]);
+    expect(states.at(-1)?.messages).toEqual([]);
     expect(controls.at(-1)?.newConversationDisabled).toBe(true);
     expect(controller.openNewConversation()).toBe(false);
 
     rejectClient(new Error("synthetic pre-client failure"));
-    await submission;
+    await expect(submission).rejects.toThrow("synthetic pre-client failure");
 
     expect(states.at(-1)?.session.presence).toBe("absent");
-    expect(states.at(-1)?.messages).toMatchObject([
-      { role: "athlete", text: "Keep this visible", delivery: "complete" },
-      { role: "coach", text: "", delivery: "interrupted" },
-    ]);
-    expect(
-      controls.slice(-2).map(({ newConversationDisabled }) => newConversationDisabled),
-    ).toEqual([true, false]);
-    expect(controller.openNewConversation()).toBe(true);
-    expect(states.at(-1)?.session).toMatchObject({
-      presence: "absent",
-      resetPhase: "confirming",
-    });
-    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "chat")).toEqual([]);
-
-    await controller.confirmNewConversation();
     expect(states.at(-1)?.messages).toEqual([]);
-    expect(states.at(-1)?.session).toMatchObject({
-      presence: "absent",
-      resetPhase: "idle",
-    });
+    expect(controls.at(-1)?.newConversationDisabled).toBe(true);
+    expect(controller.openNewConversation()).toBe(false);
+    expect(states.at(-1)?.session).toMatchObject({ presence: "absent", resetPhase: "idle" });
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "chat")).toEqual([]);
     expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
-      [["resetSession", { chatId: "desktop" }]],
+      [],
     );
   });
 
@@ -981,9 +1092,10 @@ describe("chat controller", () => {
       },
       { hasSession: async () => probe },
     );
-    const { controller, states } = subject(fake);
+    const { controller, states, controls } = subject(fake);
 
     const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Continue");
     resolveProbe({ hasSession: false });
     await starting;
@@ -1008,9 +1120,10 @@ describe("chat controller", () => {
         resetSession: async () => ({ memoryFlushed: true }),
       },
     );
-    const { controller, states } = subject(fake);
+    const { controller, states, controls } = subject(fake);
 
     const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Continue");
     expect(controller.openNewConversation()).toBe(true);
     await controller.confirmNewConversation();
@@ -1072,7 +1185,7 @@ describe("chat controller", () => {
 
     vi.mocked(provider.getClient).mockRejectedValueOnce(new Error("synthetic admission failure"));
     const chatB = controller.submit("Chat B");
-    await chatB;
+    await expect(chatB).rejects.toThrow("synthetic admission failure");
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(controls.at(-1)?.newConversationDisabled).toBe(true);
@@ -1264,259 +1377,6 @@ describe("chat controller", () => {
     expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "chat")).toEqual([]);
   });
 
-  it("queues a message sent while the coach streams and dispatches it once the turn settles", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const fake = client(replies(() => gate));
-    const { controller, states } = subject(fake);
-
-    const submission = controller.submit("First question");
-    await expect(controller.submit("Second question")).resolves.toBeUndefined();
-
-    expect(chatMessages(fake)).toEqual(["First question"]);
-    expect(states.at(-1)?.queued).toMatchObject([{ text: "Second question", command: false }]);
-    expect(states.at(-1)?.status).toBe("streaming");
-
-    release();
-    await submission;
-
-    expect(chatMessages(fake)).toEqual(["First question", "Second question"]);
-    expect(states.at(-1)?.queued).toEqual([]);
-    expect(states.at(-1)?.status).toBe("idle");
-    expect(states.at(-1)?.messages.map((message) => message.text)).toEqual([
-      "First question",
-      "Reply 1",
-      "Second question",
-      "Reply 2",
-    ]);
-  });
-
-  it("coalesces queued free text into one turn and keeps each command on its own turn", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const fake = client(replies(() => gate));
-    const { controller } = subject(fake);
-
-    const submission = controller.submit("Opening");
-    await Promise.all([
-      controller.submit("One more thought"),
-      controller.submit("And another"),
-      controller.submit("/plan"),
-      controller.submit("Back to prose"),
-    ]);
-
-    release();
-    await submission;
-
-    expect(chatMessages(fake)).toEqual([
-      "Opening",
-      "One more thought\n\nAnd another",
-      "/plan",
-      "Back to prose",
-    ]);
-  });
-
-  it("holds the queue when the streaming turn is interrupted and drains after a successful retry", async () => {
-    const recovered = client(replies());
-    let current: CoachClient;
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const failing = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-      await gate;
-      throw new CoachClientDisconnectedError(1006, "synthetic");
-    });
-    current = failing;
-    const provider: DesktopCoachClientProvider = {
-      getClient: vi.fn(async () => current),
-      reconnect: vi.fn(async () => {
-        current = recovered;
-        return recovered;
-      }),
-      close: vi.fn(async () => {}),
-    };
-    const states: ChatState[] = [];
-    const controller = createChatController({
-      clients: provider,
-      view: { render: (state) => states.push(structuredClone(state)) },
-      refreshTrainingContext: vi.fn(async () => {}),
-      refreshSpend: vi.fn(async () => {}),
-    });
-
-    const submission = controller.submit("Original");
-    await controller.submit("Queued behind it");
-    release();
-    await submission;
-
-    expect(states.at(-1)?.status).toBe("interrupted");
-    expect(states.at(-1)?.queued).toMatchObject([{ text: "Queued behind it" }]);
-    expect(chatMessages(recovered)).toEqual([]);
-    expect(controller.openNewConversation()).toBe(false);
-
-    await controller.retryInterrupted();
-
-    expect(chatMessages(recovered)).toEqual(["Original", "Queued behind it"]);
-    expect(states.at(-1)?.queued).toEqual([]);
-  });
-
-  it("keeps a queued message un-drained after a failed turn and removes it on request", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const fake = client(async () => {
-      await gate;
-      throw new Error("private failure detail");
-    });
-    const { controller, states } = subject(fake);
-
-    const submission = controller.submit("Original");
-    await controller.submit("Queued behind it");
-    release();
-    await submission;
-
-    expect(states.at(-1)).toMatchObject({ status: "idle", progress: CHAT_FAILURE_COPY });
-    expect(chatMessages(fake)).toEqual(["Original"]);
-    const held = states.at(-1)?.queued.at(0)?.id;
-    expect(held).toBeDefined();
-    expect(controller.openNewConversation()).toBe(false);
-
-    controller.removeQueued(held ?? "");
-
-    expect(states.at(-1)?.queued).toEqual([]);
-    expect(chatMessages(fake)).toEqual(["Original"]);
-    expect(controller.openNewConversation()).toBe(true);
-  });
-
-  it("drains a queue left over from a paused turn when the athlete sends again", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let calls = 0;
-    const fake = client(async (request, options) => {
-      calls += 1;
-      if (calls === 1) {
-        await gate;
-        throw new Error("private failure detail");
-      }
-      return replies()(request, options);
-    });
-    const { controller, states } = subject(fake);
-
-    const submission = controller.submit("Original");
-    await controller.submit("Queued behind it");
-    release();
-    await submission;
-    expect(chatMessages(fake)).toEqual(["Original"]);
-
-    await controller.submit("Sent after the failure");
-
-    expect(chatMessages(fake)).toEqual(["Original", "Queued behind it\n\nSent after the failure"]);
-    expect(states.at(-1)?.queued).toEqual([]);
-  });
-
-  it("holds the queue when a drain lands while a newer turn is already streaming", async () => {
-    const releaseCall: Record<number, () => void> = {};
-    const callGates: Record<number, Promise<void>> = {};
-    for (const turnNumber of [1, 2]) {
-      callGates[turnNumber] = new Promise<void>((resolve) => {
-        releaseCall[turnNumber] = resolve;
-      });
-    }
-    let releaseRefresh!: () => void;
-    const refreshGate = new Promise<void>((resolve) => {
-      releaseRefresh = resolve;
-    });
-    let refreshes = 0;
-    let turn = 0;
-    const fake = client(async (_request, options) => {
-      turn += 1;
-      const gate = callGates[turn];
-      if (gate !== undefined) await gate;
-      const text = `Reply ${turn}`;
-      deliver(options, { type: "final-text", turnId: `turn-${turn}`, text });
-      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: turn, result: { text } });
-      return { text };
-    });
-    const { controller, states } = subject(fake, fake, () => {
-      refreshes += 1;
-      return refreshes === 1 ? refreshGate : Promise.resolve();
-    });
-
-    const submission = controller.submit("Original");
-    await controller.submit("Queued prose");
-    await controller.submit("/plan");
-
-    releaseCall[1]?.();
-    while (states.at(-1)?.status !== "idle") await Promise.resolve();
-
-    const late = controller.submit("Sent in the refresh window");
-    while (chatMessages(fake).length < 2) await Promise.resolve();
-
-    expect(states.at(-1)?.status).toBe("streaming");
-    expect(chatMessages(fake)).toEqual(["Original", "Queued prose"]);
-    expect(states.at(-1)?.queued).toMatchObject([
-      { text: "/plan" },
-      { text: "Sent in the refresh window" },
-    ]);
-
-    releaseRefresh();
-    await submission;
-
-    expect(chatMessages(fake)).toEqual(["Original", "Queued prose"]);
-    expect(states.at(-1)?.queued).toMatchObject([
-      { text: "/plan" },
-      { text: "Sent in the refresh window" },
-    ]);
-
-    releaseCall[2]?.();
-    await late;
-
-    expect(chatMessages(fake)).toEqual([
-      "Original",
-      "Queued prose",
-      "/plan",
-      "Sent in the refresh window",
-    ]);
-    expect(states.at(-1)?.queued).toEqual([]);
-    expect(states.at(-1)?.status).toBe("idle");
-    expect(
-      states
-        .at(-1)
-        ?.messages.filter((message) => message.role === "athlete")
-        .map((message) => message.text),
-    ).toEqual(["Original", "Queued prose", "/plan", "Sent in the refresh window"]);
-  });
-
-  it("never drains a queued message after dispose", async () => {
-    let release!: () => void;
-    const refreshGate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const fake = client(replies());
-    const { controller, provider, states } = subject(fake, fake, () => refreshGate);
-
-    const submission = controller.submit("Original");
-    await controller.submit("Queued behind it");
-    while (states.at(-1)?.status !== "idle") await Promise.resolve();
-    const renderCount = states.length;
-    controller.dispose();
-    release();
-    await submission;
-
-    expect(states).toHaveLength(renderCount);
-    expect(states.at(-1)?.queued).toMatchObject([{ text: "Queued behind it" }]);
-    expect(chatMessages(fake)).toEqual(["Original"]);
-    expect(provider.getClient).toHaveBeenCalledTimes(1);
-  });
-
   it("fences late probe and reset settlements after dispose without refreshing spend", async () => {
     let settleProbe!: (value: { hasSession: boolean }) => void;
     let settleReset!: (value: { memoryFlushed: boolean }) => void;
@@ -1537,8 +1397,9 @@ describe("chat controller", () => {
         resetSession: async () => resetGate,
       },
     );
-    const { controller, states, refreshSpend } = subject(fake);
+    const { controller, states, controls, refreshSpend } = subject(fake);
     const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Original");
     expect(controller.openNewConversation()).toBe(true);
     refreshSpend.mockClear();

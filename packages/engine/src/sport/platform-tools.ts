@@ -3,7 +3,12 @@ import { z } from "zod";
 import type { ApiError, IntervalsClient } from "intervals-icu-api";
 import type { IntervalsActivityType } from "../sport.js";
 import { downsampleStreams } from "./stream-downsample.js";
-import { guardDeletableEvent, toTypedError, type IntervalsEventRuntime } from "./event-guards.js";
+import {
+  guardDeletableEvent,
+  guardUpdatableEvent,
+  toTypedError,
+  type IntervalsEventRuntime,
+} from "./event-guards.js";
 import { buildCoachEventProvenance, isCoachOwnedEvent } from "./event-provenance.js";
 import {
   dateKeySchema,
@@ -254,13 +259,8 @@ export function createPureCoreIntervalsTools(
 
           intervals_delete_workout: tool({
             description:
-              "Delete a scheduled workout from the intervals.icu calendar by event ID. " +
-              "ALWAYS call intervals_list_events first, show the athlete the list, and " +
-              "confirm which workout to delete before calling this. Only deletes workouts " +
-              "this coach created (provenance-marked). Races, notes, plans, athlete-added " +
-              "workouts, and pre-marker coach workouts are refused — tell the athlete to " +
-              "remove those directly on intervals.icu. Past workouts (before today) are " +
-              "protected — the tool refuses without calling the server.",
+              "List and confirm first. Delete a today-or-future coach-owned workout by event " +
+              "ID. Non-workouts, unowned workouts, and past workouts are refused.",
             inputSchema: zodSchema(
               z.object({
                 eventId: z.number().int().describe("Event ID from intervals_list_events"),
@@ -275,6 +275,77 @@ export function createPureCoreIntervalsTools(
                 if (refusal) return refusal;
                 await selectedMutations.deleteEvent({ eventId: input.eventId });
                 return { deleted: true };
+              } catch (error) {
+                if ((error as { name?: unknown })?.name === "PlatformCredentialsRequiredError") {
+                  return CREDENTIALS_REQUIRED;
+                }
+                return platformFailure(error);
+              }
+            },
+          }),
+
+          intervals_update_workout: tool({
+            description:
+              "Update a today-or-future coach-owned workout by event ID. Non-workouts, " +
+              "unowned workouts, past workouts, and past target dates are refused.",
+            inputSchema: zodSchema(
+              z.object({
+                eventId: z.number().int().describe("Event ID from intervals_list_events"),
+                changes: z
+                  .object({
+                    date: dateKeySchema.optional().describe("New workout date (YYYY-MM-DD)"),
+                    name: z.string().min(1).max(120).optional(),
+                    description: z.string().max(4000).optional(),
+                    movingTime: z.number().int().positive().optional(),
+                    icuTrainingLoad: z.number().nonnegative().optional(),
+                    workoutDoc: z.record(z.string(), z.unknown()).optional(),
+                  })
+                  .refine((changes) => Object.values(changes).some((value) => value !== undefined), {
+                    message: "At least one workout field must change.",
+                  }),
+              }),
+            ),
+            execute: async (input: {
+              eventId: number;
+              changes: {
+                date?: string;
+                name?: string;
+                description?: string;
+                movingTime?: number;
+                icuTrainingLoad?: number;
+                workoutDoc?: Record<string, unknown>;
+              };
+            }) => {
+              if (input.changes.date !== undefined) {
+                const dateError = validateWorkoutCreationDate(input.changes.date, tz);
+                if (dateError?.error === "past_date_refused") {
+                  return {
+                    error: dateError.error,
+                    details: dateError.details.replace("create a workout dated", "move a workout to"),
+                  };
+                }
+                if (dateError) return dateError;
+              }
+              try {
+                const event = await selectedMutations.readEventForDelete({
+                  eventId: input.eventId,
+                });
+                const refusal = guardUpdatableEvent(
+                  event,
+                  tz,
+                  input.eventId,
+                  input.changes.date,
+                );
+                if (refusal) return refusal;
+                const { date, ...changes } = input.changes;
+                const updated = await selectedMutations.updateEvent({
+                  eventId: input.eventId,
+                  patch: {
+                    ...(date === undefined ? {} : { startDateLocal: `${date}T00:00:00` }),
+                    ...changes,
+                  },
+                });
+                return { updated: true, event: updated };
               } catch (error) {
                 if ((error as { name?: unknown })?.name === "PlatformCredentialsRequiredError") {
                   return CREDENTIALS_REQUIRED;

@@ -119,6 +119,7 @@ describe("coach agent streaming", () => {
 
     expect(response).toEqual({ text: "Hello, athlete" });
     expect(events).toEqual([
+      { type: "turn-start", turnId: "turn-stream-1", chatId: "stream-order" },
       { type: "text_delta", turnId: "turn-stream-1", delta: "Hello" },
       { type: "text_delta", turnId: "turn-stream-1", delta: ", " },
       { type: "text_delta", turnId: "turn-stream-1", delta: "athlete" },
@@ -163,6 +164,7 @@ describe("coach agent streaming", () => {
     expect(calls).toHaveLength(2);
     expect(calls.every((call) => call.options.caller === "chat")).toBe(true);
     expect(events).toEqual([
+      { type: "turn-start", turnId: "turn-stream-1", chatId: "recovery" },
       { type: "text_delta", turnId: "turn-stream-1", delta: "recovered reply" },
       { type: "final-text", turnId: "turn-stream-1", text: "recovered reply" },
     ]);
@@ -200,6 +202,11 @@ describe("coach agent streaming", () => {
       ).rejects.toBe(providerError);
       expect(generate).toHaveBeenCalledOnce();
       expect(events[0]).toEqual({
+        type: "turn-start",
+        turnId: "turn-stream-1",
+        chatId: `partial-${failure}`,
+      });
+      expect(events[1]).toEqual({
         type: "text_delta",
         turnId: "turn-stream-1",
         delta: "partial",

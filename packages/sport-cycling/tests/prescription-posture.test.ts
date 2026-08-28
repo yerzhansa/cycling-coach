@@ -96,6 +96,7 @@ const intervals = {} as IntervalsClient;
 const calendarMutations: PlatformCalendarMutationsPort = {
   createEvent: async () => ({}),
   readEventForDelete: async ({ eventId }) => ({ id: eventId, startDateLocal: "2000-01-01" }),
+  updateEvent: async () => ({}),
   deleteEvent: async () => ({}),
 };
 

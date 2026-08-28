@@ -10,6 +10,8 @@ import type {
   CoachOperations,
   SpendOperations,
   OperationProgressEvent,
+  PlanningOperations,
+  PlanProgressEvent,
   TelegramControlSnapshot,
   TurnEvent,
 } from "@enduragent/coach-contract";
@@ -165,6 +167,9 @@ export async function launchDesktopFixture(input: {
   readonly height: number;
   readonly colorScheme: "light" | "dark";
   readonly reducedMotion: boolean;
+  readonly executable?: string;
+  readonly applicationBundle?: string;
+  readonly hidden?: boolean;
   readonly seedConfig?: boolean;
   readonly sessionTimezonePinned?: false | "embedded" | "legacy";
   readonly extraEnv?: Readonly<Record<string, string>>;
@@ -237,6 +242,66 @@ export async function launchDesktopFixture(input: {
       }
       return finalFrame(frames) as Awaited<ReturnType<CoachEngine["chat"]>>;
     },
+    async stopChat(request) {
+      return finalFrame(await invoke("stopChat", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["stopChat"]>>
+      >;
+    },
+    async enqueueChatMessage(request) {
+      return finalFrame(await invoke("enqueueChatMessage", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["enqueueChatMessage"]>>
+      >;
+    },
+    async getChatQueue(request) {
+      return finalFrame(await invoke("getChatQueue", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["getChatQueue"]>>
+      >;
+    },
+    async removeQueuedChatMessage(request) {
+      return finalFrame(await invoke("removeQueuedChatMessage", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["removeQueuedChatMessage"]>>
+      >;
+    },
+    async resumeChatQueue(request, onEvent) {
+      const frames = await invoke("resumeChatQueue", request);
+      for (const event of eventFrames(frames)) {
+        onEvent?.(event as TurnEvent);
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
+      }
+      return finalFrame(frames) as Awaited<ReturnType<NonNullable<CoachEngine["resumeChatQueue"]>>>;
+    },
+    async runQueuedCommand(request, onEvent) {
+      const frames = await invoke("runQueuedCommand", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<
+        ReturnType<NonNullable<CoachEngine["runQueuedCommand"]>>
+      >;
+    },
+    async retryQueuedTurn(request, onEvent) {
+      const frames = await invoke("retryQueuedTurn", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<NonNullable<CoachEngine["retryQueuedTurn"]>>>;
+    },
+    async getCoachDecision(request) {
+      return finalFrame(await invoke("getCoachDecision", request)) as Awaited<
+        ReturnType<CoachEngine["getCoachDecision"]>
+      >;
+    },
+    async answerCoachDecision(request, onEvent) {
+      const frames = await invoke("answerCoachDecision", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["answerCoachDecision"]>>;
+    },
+    async skipCoachDecision(request) {
+      return finalFrame(await invoke("skipCoachDecision", request)) as Awaited<
+        ReturnType<CoachEngine["skipCoachDecision"]>
+      >;
+    },
+    async resumeCoachDecision(request, onEvent) {
+      const frames = await invoke("resumeCoachDecision", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["resumeCoachDecision"]>>;
+    },
     async resetSession(request) {
       return finalFrame(await invoke("resetSession", request)) as Awaited<
         ReturnType<CoachEngine["resetSession"]>
@@ -253,7 +318,7 @@ export async function launchDesktopFixture(input: {
       >;
     },
   };
-  const operations: CoachOperations = {
+  const operations: CoachOperations & PlanningOperations = {
     async importFiles(request, onEvent) {
       const frames = await invoke("importFiles", request);
       for (const event of eventFrames(frames)) onEvent?.(event as OperationProgressEvent);
@@ -316,6 +381,18 @@ export async function launchDesktopFixture(input: {
         source: "cycling";
       };
     },
+    async getPlanState(request) {
+      return finalFrame(await invoke("getPlanState", request)) as Awaited<
+        ReturnType<NonNullable<PlanningOperations["getPlanState"]>>
+      >;
+    },
+    async executePlanTransition(request, onEvent) {
+      const frames = await invoke("executePlanTransition", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as PlanProgressEvent);
+      return finalFrame(frames) as Awaited<
+        ReturnType<NonNullable<PlanningOperations["executePlanTransition"]>>
+      >;
+    },
   };
   const spend: SpendOperations = {
     async getSpendSummary(request) {
@@ -351,16 +428,25 @@ export async function launchDesktopFixture(input: {
     upgrade: rpc.handleUpgrade,
   });
   const debuggerPort = await reservePort();
-  const executable = require("electron") as string;
+  const executable =
+    input.applicationBundle === undefined
+      ? (input.executable ?? (require("electron") as string))
+      : "/usr/bin/open";
+  const applicationArgs =
+    input.applicationBundle === undefined
+      ? input.executable === undefined
+        ? [desktopRoot]
+        : []
+      : ["-n", "-W", input.applicationBundle, "--args"];
   const child = spawn(
     executable,
-    [desktopRoot, `--remote-debugging-port=${debuggerPort}`, `--user-data-dir=${userData}`],
+    [...applicationArgs, `--remote-debugging-port=${debuggerPort}`, `--user-data-dir=${userData}`],
     {
       env: {
         ...process.env,
         ...input.extraEnv,
         ENDURAGENT_HOME: athleteHome,
-        ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
+        ENDURAGENT_ACCEPTANCE_HIDDEN: input.hidden === false ? "0" : "1",
         ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND: "memory",
         FORCE_COLOR: undefined,
         NO_COLOR: undefined,
@@ -439,7 +525,7 @@ export async function launchDesktopFixture(input: {
     await binding.close().catch(() => {});
     await rpc.close().catch(() => {});
     await lock.release().catch(() => {});
-    await rm(scratch, { recursive: true, force: true });
+    await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     throw error;
   }
   return {
@@ -462,7 +548,9 @@ export async function launchDesktopFixture(input: {
         | undefined;
       if (exception !== undefined) {
         await refreshSurfaces();
-        throw new Error(String(exception.exception?.description ?? exception.text ?? "evaluation failed"));
+        throw new Error(
+          String(exception.exception?.description ?? exception.text ?? "evaluation failed"),
+        );
       }
       const remote = response.result as
         | { readonly value?: unknown; readonly description?: unknown }
@@ -508,7 +596,7 @@ export async function launchDesktopFixture(input: {
       await binding.close().catch(() => {});
       await rpc.close().catch(() => {});
       await lock.release().catch(() => {});
-      await rm(scratch, { recursive: true, force: true });
+      await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       const livePids = pid !== undefined && processAlive(pid) ? [pid] : [];
       return { livePids, listenerCount: 0 };
     },

@@ -7,10 +7,33 @@ import {
   HasSessionResponseSchema,
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
+  StopChatRequestSchema,
+  StopChatResponseSchema,
   type CoachEngine,
 } from "./engine.js";
-import { TurnEventSchema } from "./turn-event.js";
+import { TurnEventSchema, type TurnEvent } from "./turn-event.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
+import {
+  AnswerCoachDecisionRpcParamsSchema,
+  AnswerCoachDecisionRpcResultSchema,
+  GetCoachDecisionRpcParamsSchema,
+  GetCoachDecisionRpcResultSchema,
+  ResumeCoachDecisionRpcParamsSchema,
+  ResumeCoachDecisionRpcResultSchema,
+  SkipCoachDecisionRpcParamsSchema,
+  SkipCoachDecisionRpcResultSchema,
+  CoachDecisionAnswerSchema,
+  CoachDecisionContinuationLineageSchema,
+  CoachDecisionReadModelSchema,
+  type AnswerCoachDecisionRpcParams,
+  type AnswerCoachDecisionRpcResult,
+  type GetCoachDecisionRpcParams,
+  type GetCoachDecisionRpcResult,
+  type ResumeCoachDecisionRpcParams,
+  type ResumeCoachDecisionRpcResult,
+  type SkipCoachDecisionRpcParams,
+  type SkipCoachDecisionRpcResult,
+} from "./coach-decision.js";
 import {
   GetSpendSummaryRpcParamsSchema,
   SetDailySpendCapRpcParamsSchema,
@@ -56,6 +79,24 @@ import {
   type TelegramControlSnapshot,
   type TelegramCredentialInspection,
 } from "./telegram-control.js";
+import {
+  ExecutePlanTransitionRpcParamsSchema,
+  ExecutePlanTransitionRpcResultSchema,
+  GetPlanStateRpcParamsSchema,
+  GetPlanStateRpcResultSchema,
+  PlanProgressEventSchema,
+  type PlanningOperations,
+} from "./planning.js";
+import {
+  ChatQueueRunResultSchema,
+  ChatQueueSnapshotSchema,
+  EnqueueChatMessageRequestSchema,
+  GetChatQueueRequestSchema,
+  RemoveQueuedChatMessageRequestSchema,
+  ResumeChatQueueRequestSchema,
+  RetryQueuedTurnRequestSchema,
+  RunQueuedCommandRequestSchema,
+} from "./chat-queue.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -149,8 +190,19 @@ export type JsonRpcNotificationEnvelope = z.infer<typeof JsonRpcNotificationEnve
 
 export const COACH_RPC_METHOD_NAMES = [
   "chat",
+  "stopChat",
+  "enqueueChatMessage",
+  "getChatQueue",
+  "removeQueuedChatMessage",
+  "resumeChatQueue",
+  "runQueuedCommand",
+  "retryQueuedTurn",
   "resetSession",
   "hasSession",
+  "getCoachDecision",
+  "answerCoachDecision",
+  "skipCoachDecision",
+  "resumeCoachDecision",
   "getTranscriptPage",
   "listArchivedConversations",
   "getArchivedTranscriptPage",
@@ -187,6 +239,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "getSpendSummary",
   "setDailySpendCap",
   "selfTest",
+  "getPlanState",
+  "executePlanTransition",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -313,13 +367,82 @@ export const TranscriptPageTurnSchema = z
     completedAt: z.string().refine(canonicalTranscriptTimestamp),
     athleteText: z.string(),
     coachText: z.string(),
+    delivery: z.literal("interrupted").optional(),
   })
   .strict();
 export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;
 
+export const TranscriptPageEntrySchema = z.discriminatedUnion("kind", [
+  TranscriptPageTurnSchema.extend({ kind: z.literal("turn") }).strict(),
+  z
+    .object({
+      kind: z.literal("decision-requested"),
+      recordedAt: z.string().refine(canonicalTranscriptTimestamp),
+      athleteText: z.string(),
+      decision: CoachDecisionReadModelSchema,
+    })
+    .strict()
+    .superRefine((value, context) => {
+      if (value.decision.status !== "unanswered") {
+        context.addIssue({
+          code: "custom",
+          path: ["decision", "status"],
+          message: "decision request entry requires an unanswered decision",
+        });
+      }
+    }),
+  z
+    .object({
+      kind: z.literal("decision-answered"),
+      recordedAt: z.string().refine(canonicalTranscriptTimestamp),
+      decisionId: z.string().min(1),
+      answer: CoachDecisionAnswerSchema,
+      consequence: z.string().min(1).max(2_000),
+      continuationId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("decision-skipped"),
+      recordedAt: z.string().refine(canonicalTranscriptTimestamp),
+      decisionId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("decision-abandoned"),
+      recordedAt: z.string().refine(canonicalTranscriptTimestamp),
+      decisionId: z.string().min(1),
+      reason: z.literal("new_conversation"),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("decision-continuation-completed"),
+      recordedAt: z.string().refine(canonicalTranscriptTimestamp),
+      completedAt: z.string().refine(canonicalTranscriptTimestamp),
+      decisionId: z.string().min(1),
+      continuationId: z.string().min(1),
+      turnId: z.string().min(1),
+      coachText: z.string(),
+      lineage: CoachDecisionContinuationLineageSchema.optional(),
+    })
+    .strict()
+    .superRefine((value, context) => {
+      if (value.recordedAt !== value.completedAt) {
+        context.addIssue({
+          code: "custom",
+          path: ["completedAt"],
+          message: "continuation completion timestamps must match",
+        });
+      }
+    }),
+]);
+export type TranscriptPageEntry = z.infer<typeof TranscriptPageEntrySchema>;
+
 function transcriptPageResultSchema(cursorSchema: z.ZodType<string, string>) {
   return z
-    .discriminatedUnion("status", [
+    .union([
       z
         .object({
           schemaVersion: z.literal(1),
@@ -334,6 +457,35 @@ function transcriptPageResultSchema(cursorSchema: z.ZodType<string, string>) {
               code: "custom",
               path: ["nextCursor"],
               message: "empty transcript page cannot continue",
+            });
+          }
+        }),
+      z
+        .object({
+          schemaVersion: z.literal(2),
+          status: z.literal("page"),
+          turns: z.array(TranscriptPageTurnSchema).max(MAX_TRANSCRIPT_PAGE_TURNS),
+          entries: z.array(TranscriptPageEntrySchema).max(MAX_TRANSCRIPT_PAGE_TURNS),
+          nextCursor: cursorSchema.nullable(),
+        })
+        .strict()
+        .superRefine((value, context) => {
+          if (value.entries.length === 0 && value.nextCursor !== null) {
+            context.addIssue({
+              code: "custom",
+              path: ["nextCursor"],
+              message: "empty transcript page cannot continue",
+            });
+          }
+          const projectedTurns = value.entries.filter((entry) => entry.kind === "turn");
+          if (
+            JSON.stringify(projectedTurns.map(({ kind: _kind, ...turn }) => turn)) !==
+            JSON.stringify(value.turns)
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["turns"],
+              message: "turns must match turn entries",
             });
           }
         }),
@@ -710,7 +862,11 @@ const RuntimeIntervalsSchema = z
     api_key: z.string().min(1).max(16_384).optional(),
     clear_credential: z.literal(true).optional(),
     athlete_id: z.string().min(1).max(512).optional(),
-    verification_approval: z.string().length(64).regex(/^[0-9a-f]{64}$/).optional(),
+    verification_approval: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -978,6 +1134,16 @@ export interface CoachOperations {
   ): Promise<SyncRpcResult>;
   getSetupStatus?(request: GetSetupStatusRpcParams): Promise<GetSetupStatusRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
+  getCoachDecision?(request: GetCoachDecisionRpcParams): Promise<GetCoachDecisionRpcResult>;
+  answerCoachDecision?(
+    request: AnswerCoachDecisionRpcParams,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<AnswerCoachDecisionRpcResult>;
+  skipCoachDecision?(request: SkipCoachDecisionRpcParams): Promise<SkipCoachDecisionRpcResult>;
+  resumeCoachDecision?(
+    request: ResumeCoachDecisionRpcParams,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ResumeCoachDecisionRpcResult>;
   getTranscriptPage(request: GetTranscriptPageRpcParams): Promise<GetTranscriptPageRpcResult>;
   listArchivedConversations(
     request: ListArchivedConversationsRpcParams,
@@ -1035,7 +1201,8 @@ export type CoachRpcService = CoachEngine &
   CoachOperations &
   SpendOperations &
   CoachSelfTestOperations &
-  TelegramControlOperations;
+  TelegramControlOperations &
+  PlanningOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z
@@ -1044,6 +1211,62 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("chat"),
       params: ChatRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("stopChat"),
+      params: StopChatRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("enqueueChatMessage"),
+      params: EnqueueChatMessageRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getChatQueue"),
+      params: GetChatQueueRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("removeQueuedChatMessage"),
+      params: RemoveQueuedChatMessageRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resumeChatQueue"),
+      params: ResumeChatQueueRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("runQueuedCommand"),
+      params: RunQueuedCommandRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("retryQueuedTurn"),
+      params: RetryQueuedTurnRequestSchema,
     })
     .strict(),
   z
@@ -1060,6 +1283,38 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("hasSession"),
       params: HasSessionRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getCoachDecision"),
+      params: GetCoachDecisionRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("answerCoachDecision"),
+      params: AnswerCoachDecisionRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("skipCoachDecision"),
+      params: SkipCoachDecisionRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resumeCoachDecision"),
+      params: ResumeCoachDecisionRpcParamsSchema,
     })
     .strict(),
   z
@@ -1350,6 +1605,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: SelfTestRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getPlanState"),
+      params: GetPlanStateRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("executePlanTransition"),
+      params: ExecutePlanTransitionRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -1360,7 +1631,14 @@ export const CoachTurnEventNotificationEnvelopeSchema = z
     params: z
       .object({
         requestId: JsonRpcIdSchema,
-        requestMethod: z.literal("chat"),
+        requestMethod: z.enum([
+          "chat",
+          "resumeChatQueue",
+          "runQueuedCommand",
+          "retryQueuedTurn",
+          "answerCoachDecision",
+          "resumeCoachDecision",
+        ]),
         turnId: z.string().min(1),
         event: TurnEventSchema,
       })
@@ -1399,9 +1677,29 @@ export type CoachOperationProgressNotificationEnvelope = z.infer<
   typeof CoachOperationProgressNotificationEnvelopeSchema
 >;
 
+export const COACH_PLAN_PROGRESS_NOTIFICATION_METHOD = "coach.planProgress" as const;
+
+export const CoachPlanProgressNotificationEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    method: z.literal(COACH_PLAN_PROGRESS_NOTIFICATION_METHOD),
+    params: z
+      .object({
+        requestId: JsonRpcIdSchema,
+        requestMethod: z.literal("executePlanTransition"),
+        event: PlanProgressEventSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type CoachPlanProgressNotificationEnvelope = z.infer<
+  typeof CoachPlanProgressNotificationEnvelopeSchema
+>;
+
 export const CoachRpcNotificationEnvelopeSchema = z.union([
   CoachTurnEventNotificationEnvelopeSchema,
   CoachOperationProgressNotificationEnvelopeSchema,
+  CoachPlanProgressNotificationEnvelopeSchema,
 ]);
 export type CoachRpcNotificationEnvelope = z.infer<typeof CoachRpcNotificationEnvelopeSchema>;
 
@@ -1441,6 +1739,48 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: ChatResponseSchema,
     eventSchema: TurnEventSchema,
   },
+  stopChat: {
+    wireName: "stopChat",
+    requestSchema: StopChatRequestSchema,
+    responseSchema: StopChatResponseSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  enqueueChatMessage: {
+    wireName: "enqueueChatMessage",
+    requestSchema: EnqueueChatMessageRequestSchema,
+    responseSchema: ChatQueueSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getChatQueue: {
+    wireName: "getChatQueue",
+    requestSchema: GetChatQueueRequestSchema,
+    responseSchema: ChatQueueSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  removeQueuedChatMessage: {
+    wireName: "removeQueuedChatMessage",
+    requestSchema: RemoveQueuedChatMessageRequestSchema,
+    responseSchema: ChatQueueSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resumeChatQueue: {
+    wireName: "resumeChatQueue",
+    requestSchema: ResumeChatQueueRequestSchema,
+    responseSchema: ChatQueueRunResultSchema,
+    eventSchema: TurnEventSchema,
+  },
+  runQueuedCommand: {
+    wireName: "runQueuedCommand",
+    requestSchema: RunQueuedCommandRequestSchema,
+    responseSchema: ChatQueueRunResultSchema,
+    eventSchema: TurnEventSchema,
+  },
+  retryQueuedTurn: {
+    wireName: "retryQueuedTurn",
+    requestSchema: RetryQueuedTurnRequestSchema,
+    responseSchema: ChatQueueRunResultSchema,
+    eventSchema: TurnEventSchema,
+  },
   resetSession: {
     wireName: "resetSession",
     requestSchema: ResetSessionRequestSchema,
@@ -1452,6 +1792,30 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: HasSessionRequestSchema,
     responseSchema: HasSessionResponseSchema,
     eventSchema: NoRpcEventSchema,
+  },
+  getCoachDecision: {
+    wireName: "getCoachDecision",
+    requestSchema: GetCoachDecisionRpcParamsSchema,
+    responseSchema: GetCoachDecisionRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  answerCoachDecision: {
+    wireName: "answerCoachDecision",
+    requestSchema: AnswerCoachDecisionRpcParamsSchema,
+    responseSchema: AnswerCoachDecisionRpcResultSchema,
+    eventSchema: TurnEventSchema,
+  },
+  skipCoachDecision: {
+    wireName: "skipCoachDecision",
+    requestSchema: SkipCoachDecisionRpcParamsSchema,
+    responseSchema: SkipCoachDecisionRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resumeCoachDecision: {
+    wireName: "resumeCoachDecision",
+    requestSchema: ResumeCoachDecisionRpcParamsSchema,
+    responseSchema: ResumeCoachDecisionRpcResultSchema,
+    eventSchema: TurnEventSchema,
   },
   getTranscriptPage: {
     wireName: "getTranscriptPage",
@@ -1669,6 +2033,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: SelfTestRpcResultSchema,
     eventSchema: OperationProgressEventSchema,
   },
+  getPlanState: {
+    wireName: "getPlanState",
+    requestSchema: GetPlanStateRpcParamsSchema,
+    responseSchema: GetPlanStateRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  executePlanTransition: {
+    wireName: "executePlanTransition",
+    requestSchema: ExecutePlanTransitionRpcParamsSchema,
+    responseSchema: ExecutePlanTransitionRpcResultSchema,
+    eventSchema: PlanProgressEventSchema,
+  },
 } as const satisfies CoachRpcMethodRegistryShape;
 
 export type CoachRpcRequest<K extends CoachRpcMethodName> = z.input<
@@ -1681,8 +2057,13 @@ export type CoachRpcEvent<K extends CoachRpcMethodName> = z.output<
   (typeof COACH_RPC_METHOD_REGISTRY)[K]["eventSchema"]
 >;
 
-export type CoachRpcNotification<K extends CoachRpcMethodName> = K extends "chat"
+export type CoachRpcNotification<K extends CoachRpcMethodName> = K extends
+  | "chat"
+  | "answerCoachDecision"
+  | "resumeCoachDecision"
   ? CoachTurnEventNotificationEnvelope
   : K extends "importFiles" | "sync" | "selfTest"
     ? CoachOperationProgressNotificationEnvelope
-    : never;
+    : K extends "executePlanTransition"
+      ? CoachPlanProgressNotificationEnvelope
+      : never;

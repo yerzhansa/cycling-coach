@@ -36,14 +36,59 @@ function coachClient(input: {
     options: CoachClientCallOptions<"chat"> | undefined,
   ) => Promise<{ text: string }>;
 }): CoachClient {
+  let revision = 0;
+  let queued:
+    | {
+        queuedMessageId: string;
+        submissionId: string;
+        text: string;
+        kind: "ordinary";
+        position: number;
+        restored: boolean;
+      }
+    | undefined;
   return {
     handshake: {} as CoachClient["handshake"],
-    call: vi.fn((method, _request, options) => {
+    call: vi.fn((method, request, options) => {
       if (method === "hasSession") {
         return Promise.resolve({ hasSession: input.hasSession ?? false }) as never;
       }
       if (method === "resetSession") {
         return (input.resetSession?.() ?? Promise.resolve({ memoryFlushed: true })) as never;
+      }
+      if (method === "getCoachDecision") {
+        return Promise.resolve({ decision: null }) as never;
+      }
+      if (method === "getChatQueue") {
+        return Promise.resolve({
+          schemaVersion: 1,
+          revision,
+          items: queued === undefined ? [] : [queued],
+        }) as never;
+      }
+      if (method === "enqueueChatMessage") {
+        const value = request as { submissionId: string; text: string };
+        revision += 1;
+        queued = {
+          queuedMessageId: `queued-${revision}`,
+          submissionId: value.submissionId,
+          text: value.text,
+          kind: "ordinary",
+          position: 0,
+          restored: false,
+        };
+        return Promise.resolve({ schemaVersion: 1, revision, items: [queued] }) as never;
+      }
+      if (method === "resumeChatQueue" && input.chat !== undefined) {
+        const queueOptions = {
+          ...(options as CoachClientCallOptions<"chat">),
+          requestMethod: "resumeChatQueue" as const,
+        };
+        return input.chat(queueOptions).then((response) => {
+          revision += 1;
+          queued = undefined;
+          return { snapshot: { schemaVersion: 1, revision, items: [] }, response };
+        }) as never;
       }
       if (method === "chat" && input.chat !== undefined) {
         return input.chat(options as CoachClientCallOptions<"chat">) as never;
@@ -55,12 +100,15 @@ function coachClient(input: {
 }
 
 function deliver(options: CoachClientCallOptions<"chat"> | undefined, event: TurnEvent): void {
+  const requestMethod = (
+    options as (CoachClientCallOptions<"chat"> & { requestMethod?: "resumeChatQueue" }) | undefined
+  )?.requestMethod;
   options?.onNotificationEnvelope?.({
     jsonrpc: "2.0",
     method: "coach.turnEvent",
     params: {
       requestId: 1,
-      requestMethod: "chat",
+      requestMethod: requestMethod ?? "chat",
       turnId: event.turnId,
       event,
     },
@@ -124,8 +172,9 @@ describe("chat controller transcript hydration", () => {
       expect(readTranscriptPage).toHaveBeenCalledTimes(1);
       expect(states.at(-1)?.messages).toHaveLength(2);
     });
-    expect(client.call).toHaveBeenCalledTimes(1);
+    expect(client.call).toHaveBeenCalledTimes(3);
     expect(client.call).toHaveBeenCalledWith("hasSession", { chatId: "desktop" });
+    expect(client.call).toHaveBeenCalledWith("getCoachDecision", { chatId: "desktop" });
   });
 
   it("renders the first persisted page alongside a still-pending live readiness probe", async () => {
@@ -133,6 +182,9 @@ describe("chat controller transcript hydration", () => {
     const client = coachClient({});
     vi.mocked(client.call).mockImplementation((method) => {
       if (method === "hasSession") return session.promise as never;
+      if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
+      if (method === "getChatQueue")
+        return Promise.resolve({ schemaVersion: 1, revision: 0, items: [] }) as never;
       throw new TypeError();
     });
     const { controller, states } = subject({
@@ -151,7 +203,7 @@ describe("chat controller transcript hydration", () => {
     await readiness;
   });
 
-  it("does not delay sending and deduplicates the completed live turn after hydration settles", async () => {
+  it("sends after decision recovery without waiting for transcript hydration", async () => {
     const hydration = deferred<TranscriptPage>();
     const client = coachClient({
       chat: async (options) => {
@@ -164,16 +216,18 @@ describe("chat controller transcript hydration", () => {
         return { text: "Live coach" };
       },
     });
-    const { controller, states } = subject({
+    const { controller, states, controls } = subject({
       client,
       readTranscriptPage: () => hydration.promise,
     });
-    void controller.start();
+    const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
 
-    await expect(controller.submit("Live athlete")).resolves.toBeUndefined();
-    expect(states.at(-1)?.messages).toHaveLength(2);
+    await expect(controller.submit("Live athlete")).resolves.toBe(true);
+    await vi.waitFor(() => expect(states.at(-1)?.messages).toHaveLength(2));
 
     hydration.resolve(transcriptPage("turn-live"));
+    await starting;
     await vi.waitFor(() => {
       expect(states.at(-1)?.messages).toHaveLength(2);
       expect(states.at(-1)?.messages.every((message) => message.historical !== true)).toBe(true);
@@ -244,7 +298,8 @@ describe("chat controller transcript hydration", () => {
       client,
       readTranscriptPage: () => stale.promise,
     });
-    await controller.start();
+    const starting = controller.start();
+    await vi.waitFor(() => expect(states.at(-1)?.session.presence).toBe("present"));
 
     expect(controller.openNewConversation()).toBe(true);
     const resetting = controller.confirmNewConversation();
@@ -253,6 +308,7 @@ describe("chat controller transcript hydration", () => {
     expect(states.at(-1)?.messages).toEqual([]);
 
     stale.resolve(transcriptPage("turn-stale"));
+    await starting;
     await vi.waitFor(() => expect(states.at(-1)?.messages).toEqual([]));
   });
 

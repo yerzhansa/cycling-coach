@@ -33,7 +33,7 @@ async function serializeToolset(regs: readonly ToolRegistration[]): Promise<stri
 const CYCLING_TOOLSET_CHAR_CEILING = 20_000;
 
 describe("cycling chat toolset serialized-size ceiling", () => {
-  it("keeps the full 18-tool cycling toolset under the ceiling", async () => {
+  it("keeps the full 19-tool cycling toolset under the ceiling", async () => {
     const serialized = await serializeToolset(cyclingSport.tools(deps));
     expect(serialized.length).toBeLessThan(CYCLING_TOOLSET_CHAR_CEILING);
     expect(estimateTokens(serialized)).toBeLessThan(

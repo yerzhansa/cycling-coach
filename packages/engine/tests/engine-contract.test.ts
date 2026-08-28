@@ -39,7 +39,7 @@ describe("createCoachEngine", () => {
 
   afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
 
-  it("returns the four-method contract and delegates state and chat behavior", async () => {
+  it("returns the canonical contract and delegates state and chat behavior", async () => {
     dataDir = mkdtempSync(join(tmpdir(), "engine-contract-"));
     const decorator: ModelTransportDecorator = () => ({
       generate: async () => ({
@@ -67,16 +67,46 @@ describe("createCoachEngine", () => {
     });
 
     expect(Object.keys(engine).sort()).toEqual([
+      "answerCoachDecision",
       "chat",
+      "commitPlanChatTurn",
+      "enqueueChatMessage",
       "getAthleteState",
+      "getChatQueue",
+      "getCoachDecision",
+      "getPlanDecisionIntakePatch",
       "hasSession",
+      "removeQueuedChatMessage",
+      "replacePlanChatHistory",
       "resetSession",
+      "resumeChatQueue",
+      "resumeCoachDecision",
+      "retryQueuedTurn",
+      "runQueuedCommand",
+      "skipCoachDecision",
+      "stopChat",
     ]);
     await expect(engine.hasSession({ chatId: "c1" })).resolves.toEqual({ hasSession: false });
     await expect(engine.chat({ chatId: "c1", message: "hello" })).resolves.toEqual({
       text: "unchanged reply",
     });
     await expect(engine.hasSession({ chatId: "c1" })).resolves.toEqual({ hasSession: true });
+    let planTurnId = "";
+    await expect(
+      engine.chat({ chatId: "plan:c2", message: "hello" }, (event) => {
+        if (event.type === "turn-start") planTurnId = event.turnId;
+      }),
+    ).resolves.toEqual({ text: "unchanged reply" });
+    await expect(engine.hasSession({ chatId: "plan:c2" })).resolves.toEqual({
+      hasSession: false,
+    });
+    await engine.commitPlanChatTurn?.({ chatId: "plan:c2", turnId: planTurnId });
+    await expect(engine.hasSession({ chatId: "plan:c2" })).resolves.toEqual({ hasSession: true });
+    await engine.replacePlanChatHistory?.({
+      chatId: "plan:c2",
+      turns: [{ athleteText: "restored athlete", coachText: "restored coach" }],
+    });
+    await expect(engine.hasSession({ chatId: "plan:c2" })).resolves.toEqual({ hasSession: true });
     await expect(engine.getAthleteState()).resolves.toBe(state);
   });
 });

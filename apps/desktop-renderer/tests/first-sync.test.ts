@@ -36,7 +36,10 @@ const success: SyncRpcResult = {
   published: true,
   referenceSucceeded: true,
   requests: { store: 1, reference: 1, total: 2 },
-  droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+  droppedActivities: {
+    overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+    recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+  },
 };
 
 function deferred<T>(): {
@@ -145,7 +148,15 @@ describe("first sync controller", () => {
     expect(ports.states).toEqual([{ status: "syncing" }]);
     coordinator.publish({ status: "running", operation: 1 });
     expect(ports.states).toEqual([{ status: "syncing" }]);
-    coordinator.finish({ status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await first;
     expect(ports.states.at(-1)).toEqual({ status: "ready" });
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
@@ -201,7 +212,15 @@ describe("first sync controller", () => {
     expect(coordinator.requestCalls).toEqual([1]);
     expect(ports.states).toEqual([]);
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
-    coordinator.finish({ status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "no-change",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await manualTask;
     expect(ports.states).toEqual([]);
 
@@ -211,7 +230,15 @@ describe("first sync controller", () => {
 
   it.each([
     [
-      { status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } },
+      {
+        status: "succeeded",
+        operation: 1,
+        kind: "no-change",
+        droppedActivities: {
+          overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+          recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+        },
+      },
       { status: "failed", kind: "operation", retryable: true },
     ],
     [
@@ -257,7 +284,15 @@ describe("first sync controller", () => {
     expect(coordinator.requestCalls).toEqual([1]);
     const retry = controller.retry();
     expect(coordinator.requestCalls).toEqual([1, 2]);
-    coordinator.finish({ status: "succeeded", operation: 2, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 2,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await retry;
     expect(coordinator.requestCalls).toEqual([1, 2]);
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
@@ -277,14 +312,30 @@ describe("first sync controller", () => {
       const joinedTask = admission === "joined" ? manual.activate("pointer") : undefined;
       const firstTask = first.start(completion);
       if (joinedTask !== undefined) expect(firstTask).toBe(joinedTask);
-      coordinator.finish({ status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+      coordinator.finish({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: {
+          overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+          recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+        },
+      });
       await firstTask;
       await Promise.resolve();
       const renderedAtReady = [...ports.states];
       const focusCallsAtReady = ports.focusComposer.mock.calls.length;
 
       const laterManual = manual.activate("pointer");
-      coordinator.finish({ status: "succeeded", operation: 2, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+      coordinator.finish({
+        status: "succeeded",
+        operation: 2,
+        kind: "no-change",
+        droppedActivities: {
+          overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+          recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+        },
+      });
       await laterManual;
 
       expect(coordinator.requestCalls).toEqual([1, 2]);
@@ -306,13 +357,29 @@ describe("first sync controller", () => {
     });
 
     const initialSetup = first.start(completion);
-    coordinator.finish({ status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await initialSetup;
     expect(ports.states).toEqual([{ status: "syncing" }, { status: "ready" }]);
     const renderedAtReady = [...ports.states];
 
     const laterManual = manual.activate("pointer");
-    coordinator.finish({ status: "succeeded", operation: 2, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 2,
+      kind: "no-change",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await laterManual;
     expect(ports.states).toEqual(renderedAtReady);
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
@@ -320,7 +387,15 @@ describe("first sync controller", () => {
     const laterSetup = first.start(completion);
     expect(coordinator.requestCalls).toEqual([1, 2, 3]);
     expect(ports.states).toEqual([...renderedAtReady, { status: "syncing" }]);
-    coordinator.finish({ status: "succeeded", operation: 3, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 3,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await laterSetup;
     expect(ports.states).toEqual([...renderedAtReady, { status: "syncing" }, { status: "ready" }]);
     expect(ports.focusComposer).toHaveBeenCalledTimes(1);
@@ -334,7 +409,15 @@ describe("first sync controller", () => {
     const controller = createFirstSyncController(ports);
     const task = controller.start(completion);
     controller.dispose();
-    coordinator.finish({ status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await task;
     await controller.retry();
     await controller.start(completion);
@@ -362,7 +445,15 @@ describe("first sync controller", () => {
         tone: "active",
       },
     ]);
-    coordinator.finish({ status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await firstTask;
     expect(manualStates.at(-1)?.message).toBe("Training-data check completed.");
   });
@@ -423,20 +514,44 @@ describe("first sync controller", () => {
     });
     const keyboard = manual.activate("keyboard");
     expect(manual.activate("pointer")).toBe(keyboard);
-    coordinator.finish({ status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await keyboard;
     await Promise.resolve();
     expect(restoreKeyboardFocus).toHaveBeenCalledTimes(1);
 
     const pointer = manual.activate("pointer");
-    coordinator.finish({ status: "succeeded", operation: 2, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 2,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await pointer;
     await Promise.resolve();
     expect(restoreKeyboardFocus).toHaveBeenCalledTimes(1);
 
     const staleKeyboard = manual.activate("keyboard");
     manual.dispose();
-    coordinator.finish({ status: "succeeded", operation: 3, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } });
+    coordinator.finish({
+      status: "succeeded",
+      operation: 3,
+      kind: "published",
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
+    });
     await staleKeyboard;
     expect(restoreKeyboardFocus).toHaveBeenCalledTimes(1);
   });
@@ -540,7 +655,8 @@ describe("first sync controller", () => {
     expect(host).toContain("coordinator: trainingSyncCoordinator");
     expect(host).not.toContain("syncNeedsReconnect");
     expect(controller).not.toMatch(/onNotificationEnvelope|requestId|chat|transcript/u);
-    expect(card).toContain("w-[min(680px,calc(100%-48px))]");
+    expect(card).toContain('className="first-sync my-6 w-full');
+    expect(card).not.toContain("first-sync__mark");
     expect(card).toContain("motion-reduce:before:animate-none");
     expect(styles).toContain("@keyframes first-sync-sweep");
   });

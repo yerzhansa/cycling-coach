@@ -84,7 +84,9 @@ function placeFixedSchedule(
   keySessionDay?: DayOfWeek,
 ): SampleWorkout[] {
   const sortedDays = [...availableDays].sort((a, b) => dayIndex(a) - dayIndex(b));
-  const toPlace = [...templates].slice(0, sortedDays.length);
+  const toPlace = [...templates]
+    .sort((left, right) => left.priority - right.priority)
+    .slice(0, sortedDays.length);
 
   const longIdx = toPlace.findIndex((s) => s.type === "long");
   const longSession = longIdx >= 0 ? toPlace.splice(longIdx, 1)[0] : null;

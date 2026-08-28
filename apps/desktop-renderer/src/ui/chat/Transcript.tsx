@@ -1,22 +1,29 @@
+import { Check, X } from "lucide-react";
 import type { ReactElement } from "react";
-import type { ChatMessageView } from "../../state/chat-slice.js";
+import type {
+  ChatChoiceView,
+  ChatMessageView,
+  ChatTranscriptItemView,
+} from "../../state/chat-slice.js";
 import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
 import { CoachMessage } from "./CoachMessage.js";
-import { Notice, RetryBar } from "./Notice.js";
 import { HistoryControls } from "./HistoryControls.js";
 import { StreamingMessage } from "./StreamingMessage.js";
 
-function MessageRow(props: { readonly message: ChatMessageView }): ReactElement {
+function MessageRow(props: {
+  readonly message: ChatMessageView;
+  readonly bufferedStreaming: boolean;
+}): ReactElement {
   const message = props.message;
   const streaming = message.role === "coach" && message.delivery === "streaming";
   const silent = message.historical || message.role === "athlete";
   const rowClassName = cn(
-    "chat-message grid min-w-0 max-w-[78%] gap-[7px] data-[delivery=interrupted]:text-ink-2",
+    "chat-message grid min-w-0 data-[delivery=interrupted]:text-ink-2",
     message.role === "coach"
-      ? "chat-message--coach justify-self-start text-base leading-[1.6] tracking-[0.002em]"
-      : "chat-message--athlete justify-self-end rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3",
+      ? "chat-message--coach max-w-full justify-self-start text-base leading-6"
+      : "chat-message--athlete max-w-[76%] justify-self-end rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3",
   );
 
   return (
@@ -28,12 +35,12 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
       aria-atomic={message.role === "coach" ? "true" : "false"}
       aria-busy={streaming ? "true" : undefined}
     >
-      <p className="chat-message__role m-0 text-xs leading-[1.2] tracking-[0.04em] text-ink-3 uppercase">
-        {message.role === "athlete" ? "You" : "Coach"}
-      </p>
+      <span className="sr-only">
+        {message.role === "athlete" ? "Your message" : "Coach response"}
+      </span>
       {message.role === "athlete" ? (
         <AthleteMessage text={message.text} />
-      ) : streaming ? (
+      ) : streaming && props.bufferedStreaming ? (
         <StreamingMessage messageId={message.id} />
       ) : (
         <CoachMessage text={message.text} />
@@ -42,8 +49,49 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
   );
 }
 
-export function Transcript(): ReactElement {
-  const messages = useEnduragentStore((state) => state.chat.messages);
+function ChoiceRow(props: { readonly choice: ChatChoiceView }): ReactElement {
+  const choice = props.choice;
+  return (
+    <article
+      className="grid grid-cols-[var(--ctl-h-sm)_minmax(0,1fr)] items-center gap-2.5 rounded-card bg-sunk p-3"
+      aria-label="Choice consequence"
+      aria-live={choice.historical ? "off" : undefined}
+    >
+      <span
+        className={cn(
+          "grid size-8 place-items-center rounded-full",
+          choice.skipped ? "bg-surface-2 text-ink-2" : "bg-ok/16 text-ok",
+        )}
+      >
+        {choice.skipped ? (
+          <X className="size-4" aria-hidden="true" />
+        ) : (
+          <Check className="size-4" aria-hidden="true" />
+        )}
+      </span>
+      <div className="grid gap-[calc(var(--inset)/2)]">
+        <p className="m-0 text-xs font-semibold leading-4 text-ink-2">Choice consequence</p>
+        <strong className="text-sm font-medium leading-5">{choice.label}</strong>
+        {choice.consequence === null ? null : (
+          <p className="m-0 text-xs leading-4 text-ink-2">{choice.consequence}</p>
+        )}
+      </div>
+    </article>
+  );
+}
+
+export function ConversationTranscript(props: {
+  readonly messages: readonly ChatMessageView[];
+  readonly timeline?: readonly ChatTranscriptItemView[];
+  readonly historyControls?: boolean;
+  readonly bufferedStreaming?: boolean;
+}): ReactElement {
+  const timeline = props.timeline ?? [];
+  const messages = props.messages;
+  const items =
+    timeline.length > 0
+      ? timeline
+      : messages.map((message) => ({ kind: "message" as const, message }));
 
   return (
     <section
@@ -54,18 +102,30 @@ export function Transcript(): ReactElement {
       aria-atomic="false"
       aria-label="Coach conversation"
     >
-      <HistoryControls />
+      {props.historyControls === false ? null : <HistoryControls />}
       <div className="chat-messages grid gap-7">
-        {messages.length === 0 ? null : (
+        {items.length === 0 ? null : (
           <div className="contents">
-            {messages.map((message) => (
-              <MessageRow key={message.id} message={message} />
-            ))}
+            {items.map((item) =>
+              item.kind === "message" ? (
+                <MessageRow
+                  key={`message:${item.message.id}`}
+                  message={item.message}
+                  bufferedStreaming={props.bufferedStreaming ?? false}
+                />
+              ) : (
+                <ChoiceRow key={`choice:${item.choice.id}`} choice={item.choice} />
+              ),
+            )}
           </div>
         )}
       </div>
-      <Notice />
-      <RetryBar />
     </section>
   );
+}
+
+export function Transcript(): ReactElement {
+  const timeline = useEnduragentStore((state) => state.chat.timeline);
+  const messages = useEnduragentStore((state) => state.chat.messages);
+  return <ConversationTranscript messages={messages} timeline={timeline} bufferedStreaming />;
 }

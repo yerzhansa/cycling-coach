@@ -1,5 +1,6 @@
 import {
   Activity,
+  CalendarDays,
   History,
   MessageSquare,
   Settings,
@@ -7,7 +8,7 @@ import {
 } from "lucide-react";
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
-export type ViewId = "chat" | "archive" | "training" | "settings";
+export type ViewId = "chat" | "archive" | "training" | "plan" | "settings";
 export type StoredViewId = ViewId;
 
 export const REACT_CHAT_REGION = "react-chat-region";
@@ -44,6 +45,15 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     title: "Training",
     page: lazy(async () => ({
       default: (await import("../ui/training/TrainingView.js")).TrainingView,
+    })),
+  },
+  {
+    id: "plan",
+    label: "Plan",
+    icon: CalendarDays,
+    title: "Plan",
+    page: lazy(async () => ({
+      default: (await import("../ui/plan/PlanView.js")).PlanView,
     })),
   },
   {

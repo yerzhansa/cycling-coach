@@ -10,6 +10,7 @@ import type {
   ModelTransport,
   ConversationResetInput,
   TranscriptCompletedTurnInput,
+  TranscriptInterruptedTurnInput,
 } from "../src/host-ports.js";
 import type { GenerateResult } from "../src/sport.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
@@ -49,11 +50,14 @@ function harness(input: {
   generate: ModelTransport["generate"];
   classifyFailure?: EngineHostPorts["classifyFailure"];
   appendCompletedTurn?: (turn: TranscriptCompletedTurnInput) => void;
+  appendInterruptedTurn?: (turn: TranscriptInterruptedTurnInput) => void;
   config?: Partial<EngineHostPorts["config"]["session"]>;
+  randomId?: () => string;
 }) {
   const dataDir = makeDataDir();
   const base = baseAgentConfig(dataDir);
   const completed: TranscriptCompletedTurnInput[] = [];
+  const interrupted: TranscriptInterruptedTurnInput[] = [];
   const boundaries: ConversationResetInput[] = [];
   const warnings: Array<{ event: string; error: unknown; fields: unknown }> = [];
   vi.spyOn(base.chatStore, "resetConversation").mockImplementation((boundary) => {
@@ -66,7 +70,7 @@ function harness(input: {
       session: { ...base.config.session, timezone: "UTC", ...input.config },
     },
     now: () => Date.parse("2026-07-22T12:34:56.789Z"),
-    randomId: () => "turn-transcript-1",
+    randomId: input.randomId ?? (() => "turn-transcript-1"),
     classifyFailure: input.classifyFailure ?? base.classifyFailure,
     logger: {
       ...base.logger,
@@ -74,12 +78,14 @@ function harness(input: {
     },
     transcriptWriter: {
       appendCompletedTurn: input.appendCompletedTurn ?? ((turn) => completed.push(turn)),
+      appendInterruptedTurn: input.appendInterruptedTurn ?? ((turn) => interrupted.push(turn)),
     },
     modelTransportDecorator: () => ({ generate: input.generate }),
   };
   return {
     dataDir,
     completed,
+    interrupted,
     boundaries,
     warnings,
     agent: new CoachAgent(cyclingSport, ports),
@@ -247,6 +253,93 @@ describe("CoachAgent transcript recording", () => {
     ).rejects.toBe(failure);
     expect(setup.completed).toEqual([]);
     expect(events.some((event) => event.type === "final-text")).toBe(false);
+  });
+
+  it("stops only the active response, records its partial text, and accepts the next turn", async () => {
+    let releaseFirst: (() => void) | undefined;
+    let attempt = 0;
+    const setup = harness({
+      generate: async (request) => {
+        attempt += 1;
+        if (attempt > 1) return result("next response");
+        request.options.onTextDelta?.("Partial response");
+        await new Promise<void>((resolve, reject) => {
+          releaseFirst = resolve;
+          request.options.signal?.addEventListener(
+            "abort",
+            () => reject(request.options.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+        return result("unreachable");
+      },
+    });
+    const events: TurnEvent[] = [];
+    const first = setup.agent.chat("chat-stop", "stop this", undefined, (event) =>
+      events.push(event),
+    );
+
+    await vi.waitFor(() => expect(releaseFirst).toBeTypeOf("function"));
+    expect(setup.agent.stopChat("chat-stop", "turn-transcript-1")).toBe(true);
+    await expect(first).resolves.toBe("Partial response");
+    expect(setup.agent.stopChat("chat-stop", "turn-transcript-1")).toBe(false);
+    expect(setup.completed).toEqual([]);
+    expect(setup.interrupted).toEqual([
+      {
+        chatId: "chat-stop",
+        turnId: "turn-transcript-1",
+        completedAt: "2026-07-22T12:34:56.789Z",
+        athleteText: "stop this",
+        coachText: "Partial response",
+      },
+    ]);
+    expect(events.at(0)).toEqual({
+      type: "turn-start",
+      turnId: "turn-transcript-1",
+      chatId: "chat-stop",
+    });
+    expect(events.at(-1)).toEqual({
+      type: "interrupted",
+      turnId: "turn-transcript-1",
+      chatId: "chat-stop",
+      text: "Partial response",
+    });
+
+    await expect(setup.agent.chat("chat-stop", "continue")).resolves.toBe("next response");
+    releaseFirst?.();
+  });
+
+  it("ignores a delayed Stop for a completed turn after its successor starts", async () => {
+    const ids = ["turn-a", "turn-b"];
+    let secondStarted!: () => void;
+    const activeSecond = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    let secondSignal: AbortSignal | undefined;
+    let attempt = 0;
+    const setup = harness({
+      randomId: () => ids.shift() ?? "unexpected-turn",
+      generate: async (request) => {
+        attempt += 1;
+        if (attempt === 1) return result("First response");
+        secondSignal = request.options.signal;
+        secondStarted();
+        await new Promise<void>((_resolve, reject) => {
+          request.options.signal?.addEventListener("abort", () => reject(new Error("stopped")), {
+            once: true,
+          });
+        });
+        return result("unreachable");
+      },
+    });
+
+    await setup.agent.chat("chat-stop-scope", "first");
+    const second = setup.agent.chat("chat-stop-scope", "second");
+    await activeSecond;
+    expect(setup.agent.stopChat("chat-stop-scope", "turn-a")).toBe(false);
+    expect(secondSignal?.aborted).toBe(false);
+    expect(setup.agent.stopChat("chat-stop-scope", "turn-b")).toBe(true);
+    await expect(second).resolves.toBe("");
   });
 
   it.each([

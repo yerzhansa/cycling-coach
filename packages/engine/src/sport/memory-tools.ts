@@ -212,7 +212,7 @@ export function createMemoryTools(
         }),
       ),
       execute: async (input: { plan: Record<string, unknown> }) => {
-        memory.savePlan(input.plan, "chat-tool");
+        await memory.savePlan(input.plan, "chat-tool");
         return { saved: true };
       },
     }),

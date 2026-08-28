@@ -28,22 +28,23 @@ export type IntervalsEventRuntime = {
   externalId?: string | null;
 };
 
-export function guardDeletableEvent(
+function guardMutableEvent(
   event: IntervalsEventRuntime,
   tz: string,
-  eventId: number = event.id,
+  eventId: number,
+  action: "delete" | "update",
 ): { error: string; details: string } | undefined {
+  const verb = action === "delete" ? "deleted" : "updated";
   if (event.category !== "WORKOUT") {
     return {
       error: "not_a_workout",
-      details: `Event ${eventId} is category ${event.category ?? "unknown"}, not a scheduled workout. Races, notes, plans, and other calendar entries cannot be deleted by the coach.`,
+      details: `Event ${eventId} is category ${event.category ?? "unknown"}, not a scheduled workout. Races, notes, plans, and other calendar entries cannot be ${verb} by the coach.`,
     };
   }
   if (!isCoachOwnedEvent(event)) {
     return {
       error: "not_coach_created",
-      details:
-        "This workout was not created by this coach (no provenance marker) — it may be athlete-added, from another app, or created before provenance markers shipped. It will not be deleted; the athlete can remove it directly on intervals.icu.",
+      details: `This workout was not created by this coach (no provenance marker) — it may be athlete-added, from another app, or created before provenance markers shipped. It will not be ${verb}; the athlete can ${action === "delete" ? "remove" : "change"} it directly on intervals.icu.`,
     };
   }
   const today = todayInTZ(tz);
@@ -51,7 +52,33 @@ export function guardDeletableEvent(
   if (eventDate < today) {
     return {
       error: "past_workout_protected",
-      details: `Cannot delete workout dated ${eventDate} — it's before today (${today}).`,
+      details: `Cannot ${action} workout dated ${eventDate} — it's before today (${today}).`,
+    };
+  }
+  return undefined;
+}
+
+export function guardDeletableEvent(
+  event: IntervalsEventRuntime,
+  tz: string,
+  eventId: number = event.id,
+): { error: string; details: string } | undefined {
+  return guardMutableEvent(event, tz, eventId, "delete");
+}
+
+export function guardUpdatableEvent(
+  event: IntervalsEventRuntime,
+  tz: string,
+  eventId: number = event.id,
+  nextDate?: string,
+): { error: string; details: string } | undefined {
+  const refusal = guardMutableEvent(event, tz, eventId, "update");
+  if (refusal !== undefined) return refusal;
+  const today = todayInTZ(tz);
+  if (nextDate !== undefined && nextDate < today) {
+    return {
+      error: "past_workout_destination",
+      details: `Cannot move workout to ${nextDate} — it's before today (${today}).`,
     };
   }
   return undefined;

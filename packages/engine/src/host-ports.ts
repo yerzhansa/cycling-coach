@@ -1,4 +1,13 @@
-import type { AthleteState } from "@enduragent/coach-contract";
+import type {
+  AthleteState,
+  ChatQueueSnapshot,
+  CoachDecisionAnswer,
+  CoachDecisionContinuationLineage,
+  CoachDecisionReadModel,
+  PlanIntakePatch,
+  RequestUserDecisionInput,
+  RequestUserDecisionResult,
+} from "@enduragent/coach-contract";
 import type { ModelMessage } from "ai";
 import type { EventInput, IntervalsClient } from "intervals-icu-api";
 import type { GenerateOptions, GenerateResult } from "./sport.js";
@@ -83,7 +92,11 @@ export interface MemoryStorePort {
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }>;
   readEventsRaw(): string;
   appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void;
-  savePlan(plan: unknown, source?: MemoryWriteSource, provenance?: SourceProvenance): void;
+  savePlan(
+    plan: unknown,
+    source?: MemoryWriteSource,
+    provenance?: SourceProvenance,
+  ): void | Promise<void>;
   loadPlan(): unknown | null;
   /** Source labels bound to the exact visible result of a synchronous tool read. */
   provenanceForToolRead?(
@@ -129,9 +142,37 @@ export interface ChatStorePort {
     assistantContent: string,
     lineage: ChatLineage,
   ): void;
+  persistDecisionContext(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly athleteText: string;
+    readonly request: RequestUserDecisionInput;
+    readonly result?: RequestUserDecisionResult;
+    readonly coachText?: string;
+    readonly continuationId?: string;
+    readonly lineage?: ChatLineage;
+  }): void;
   overwriteHistory(chatId: string, messages: ModelMessage[]): void;
   resetConversation(input: ConversationResetInput): void;
   archivePreCompact(chatId: string): void;
+  getChatQueue?(chatId: string): ChatQueueSnapshot;
+  enqueueChatMessage?(
+    chatId: string,
+    submissionId: string,
+    text: string,
+    queuedMessageId: string,
+  ): ChatQueueSnapshot;
+  removeQueuedChatMessage?(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
+  claimChatQueue?(
+    chatId: string,
+    claimId: string,
+    turnId: string,
+    queuedMessageIds: readonly string[],
+  ): ChatQueueSnapshot;
+  completeChatQueueClaim?(chatId: string, claimId: string): ChatQueueSnapshot;
+  requireChatQueueRetry?(chatId: string, claimId: string): ChatQueueSnapshot;
+  retryChatQueueClaim?(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
+  clearChatQueue?(chatId: string): ChatQueueSnapshot;
 }
 
 export type TranscriptConversationBoundaryReason = "explicit-reset" | "stale-reset";
@@ -150,8 +191,47 @@ export interface TranscriptCompletedTurnInput {
   readonly coachText: string;
 }
 
+export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;
+
 export interface TranscriptWriterPort {
   appendCompletedTurn(input: TranscriptCompletedTurnInput): void;
+  appendInterruptedTurn?(input: TranscriptInterruptedTurnInput): void;
+}
+
+export interface CoachDecisionStorePort {
+  appendDecisionRequested(input: {
+    readonly decision: CoachDecisionReadModel;
+    readonly turnId: string;
+    readonly toolCallId: string;
+    readonly athleteText: string;
+    readonly requestedAt: string;
+    readonly planIntakePatch?: PlanIntakePatch;
+  }): CoachDecisionReadModel;
+  answerDecision(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly answer: CoachDecisionAnswer;
+    readonly consequence: string;
+    readonly continuationId: string;
+    readonly answeredAt: string;
+  }): CoachDecisionReadModel;
+  skipDecision(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly skippedAt: string;
+  }): CoachDecisionReadModel;
+  completeDecisionContinuation(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly continuationId: string;
+    readonly turnId: string;
+    readonly coachText: string;
+    readonly lineage: CoachDecisionContinuationLineage;
+    readonly completedAt: string;
+  }): CoachDecisionReadModel;
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null;
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null;
+  getDecisionPlanIntakePatch?(chatId: string, decisionId: string): PlanIntakePatch | null;
 }
 
 export type ExecSecretRef = {
@@ -204,9 +284,19 @@ export interface CalendarEventForDelete {
   readonly externalId?: string | null;
 }
 
+export interface CalendarEventUpdate {
+  readonly startDateLocal?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly movingTime?: number;
+  readonly icuTrainingLoad?: number;
+  readonly workoutDoc?: unknown;
+}
+
 export interface PlatformCalendarMutationsPort {
   createEvent(input: EventInput): Promise<unknown>;
   readEventForDelete(input: { eventId: number }): Promise<CalendarEventForDelete>;
+  updateEvent(input: { eventId: number; patch: CalendarEventUpdate }): Promise<unknown>;
   deleteEvent(input: { eventId: number }): Promise<unknown>;
 }
 
@@ -316,6 +406,7 @@ export interface ReferenceStateSnapshot {
   } | null;
   readonly latest: {
     readonly metadata?: { readonly last_updated?: string };
+    readonly derived_metrics?: { readonly eftp?: number | null };
   } | null;
 }
 
@@ -324,6 +415,7 @@ export interface EngineHostPorts {
   readonly memory: MemoryStorePort;
   readonly chatStore: ChatStorePort;
   readonly transcriptWriter: TranscriptWriterPort;
+  readonly coachDecisions?: CoachDecisionStorePort;
   readonly secrets: SecretsPort;
   readonly platform: PlatformClientPort;
   readonly logger: LoggerPort;

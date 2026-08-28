@@ -16,6 +16,9 @@ interface EnduragentAuth {
     readonly cursor: string | null;
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
+  getPlanState(): Promise<DesktopPlanStateResult>;
+  executePlanTransition(input: DesktopPlanTransitionCommand): Promise<DesktopPlanTransitionResult>;
+  onPlanProgress(listener: (progress: DesktopPlanProgressEvent) => void): () => void;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
@@ -57,6 +60,7 @@ interface EnduragentAuth {
   acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   setAppearance(appearance: "system" | "light" | "dark"): void;
   chooseImportFiles(): Promise<readonly string[]>;
+  choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   getUpdateState(): Promise<DesktopUpdateState>;
@@ -66,6 +70,12 @@ interface EnduragentAuth {
 }
 
 type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
+type DesktopPlanStateResult = import("@enduragent/coach-contract").GetPlanStateRpcResult;
+type DesktopPlanTransitionCommand =
+  import("@enduragent/coach-contract").ExecutePlanTransitionRpcParams;
+type DesktopPlanTransitionResult =
+  import("@enduragent/coach-contract").ExecutePlanTransitionRpcResult;
+type DesktopPlanProgressEvent = import("@enduragent/coach-contract").PlanProgressEvent;
 type CredentialRecoveryStatus = import("./onboarding/bridge").CredentialRecoveryStatus;
 type CredentialResetResult = import("./onboarding/bridge").CredentialResetResult;
 

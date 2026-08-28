@@ -29,6 +29,25 @@ const EXPECTED_TABLES = [
 ];
 const EXPECTED_FULL_TABLES = [
   ...EXPECTED_TABLES,
+  "plan",
+  "plan_adaptation_ledger",
+  "plan_conversation",
+  "plan_conversation_turn",
+  "plan_draft_build_checkpoint",
+  "plan_draft_revision",
+  "plan_intake",
+  "plan_proposal",
+  "plan_proposal_premise",
+  "plan_reconciliation_item",
+  "plan_reconciliation_job",
+  "plan_race_outcome",
+  "plan_replacement",
+  "plan_settings",
+  "plan_source_request",
+  "plan_weekly_review",
+  "plan_workout",
+  "plan_workout_drift",
+  "plan_workout_match",
   "ingest_metadata",
   "repair_log",
   "dedup_confirmation",
@@ -171,6 +190,19 @@ describe("001_init migration", () => {
       { version: 9, name: "009_activity_source_resolver" },
       { version: 10, name: "010_analytics_curves" },
       { version: 11, name: "011_activity_analysis_projection" },
+      { version: 12, name: "012_planning" },
+      { version: 13, name: "013_plan_conversations" },
+      { version: 14, name: "014_plan_reconciliation" },
+      { version: 15, name: "015_plan_race_course" },
+      { version: 16, name: "016_plan_workout_match" },
+      { version: 17, name: "017_plan_workout_drift" },
+      { version: 18, name: "018_plan_proposals" },
+      { version: 19, name: "019_plan_adaptation_ledger" },
+      { version: 20, name: "020_plan_settings" },
+      { version: 21, name: "021_plan_replacement" },
+      { version: 22, name: "022_plan_weekly_review" },
+      { version: 23, name: "023_plan_race_outcome" },
+      { version: 24, name: "024_plan_intake" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -262,7 +294,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies 001 through 010 with exactly forty-one tables and no foreign-key violations", () => {
+  it("applies all migrations with exactly sixty-one tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -272,7 +304,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(42);
+    expect(names).toHaveLength(61);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -519,6 +551,7 @@ describe("001_init migration", () => {
         "analytics_curve_current_no_delete",
         "analytics_curve_current_insert_clears_failure",
         "analytics_curve_current_update_clears_failure",
+        "plan_settings_defaults_after_insert",
       ]),
     );
 
@@ -758,6 +791,25 @@ describe("001_init migration", () => {
       { table: "lap", orderBy: "lap_key" },
       { table: "mean_max_cache", orderBy: "mmax_key" },
       { table: "metric_snapshot", orderBy: "snapshot_key" },
+      { table: "plan", orderBy: "id" },
+      { table: "plan_adaptation_ledger", orderBy: "plan_id, occurred_at_ms, id" },
+      { table: "plan_conversation", orderBy: "id" },
+      { table: "plan_conversation_turn", orderBy: "conversation_id, sequence, id" },
+      { table: "plan_draft_revision", orderBy: "conversation_id, revision, id" },
+      { table: "plan_intake", orderBy: "conversation_id" },
+      { table: "plan_draft_build_checkpoint", orderBy: "conversation_id" },
+      { table: "plan_proposal", orderBy: "plan_id, created_at_ms, id" },
+      { table: "plan_proposal_premise", orderBy: "proposal_id, source_type, source_id, id" },
+      { table: "plan_reconciliation_item", orderBy: "job_id, date_key, id" },
+      { table: "plan_reconciliation_job", orderBy: "plan_id, kind, window_start_date_key, id" },
+      { table: "plan_race_outcome", orderBy: "plan_id" },
+      { table: "plan_replacement", orderBy: "previous_plan_id, created_at_ms, id" },
+      { table: "plan_settings", orderBy: "plan_id" },
+      { table: "plan_source_request", orderBy: "conversation_id, created_at_ms, id" },
+      { table: "plan_workout", orderBy: "plan_id, date_key, id" },
+      { table: "plan_workout_drift", orderBy: "plan_id, detected_at_ms, id" },
+      { table: "plan_workout_match", orderBy: "plan_id, activity_date_key, id" },
+      { table: "plan_weekly_review", orderBy: "plan_id, week_start_date_key, id" },
       { table: "planned_workout", orderBy: "id" },
       { table: "pool_size_correction_overlay", orderBy: "id" },
       { table: "race_goal", orderBy: "id" },
@@ -777,13 +829,14 @@ describe("001_init migration", () => {
       { table: "workout", orderBy: "workout_key" },
       { table: "zone_set_history", orderBy: "id" },
     ]);
-    expect(DUMP_TABLES).toHaveLength(37);
+    expect(DUMP_TABLES).toHaveLength(56);
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("store_owner");
-    expect(DUMP_TABLES.map(({ table }) => String(table)))
-      .not.toContain("analytics_curve_refresh_failure");
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain(
+      "analytics_curve_refresh_failure",
+    );
     for (const table of [
       "analytics_curve_current",
       "analytics_curve_evidence",
@@ -833,7 +886,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     }>;
     expect(tables.find((row) => row.name === "sync_failure")?.strict).toBe(1);
     expect(db.prepare("PRAGMA foreign_key_list(sync_failure)").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(37);
+    expect(DUMP_TABLES).toHaveLength(56);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(PURE_AUTHORED_TABLES).not.toContain("sync_failure");
     expect(MIXED_AUTHORED_TABLES).not.toContain("sync_failure");
@@ -846,14 +899,18 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     );
     const columns = db.prepare("PRAGMA table_info(store_owner)").all();
     expect(columns).toContainEqual(expect.objectContaining({ name: "singleton", pk: 1 }));
-    expect(columns).toContainEqual(expect.objectContaining({ name: "account_fingerprint", notnull: 1 }));
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "account_fingerprint", notnull: 1 }),
+    );
     expect(() =>
       db!
         .prepare("INSERT INTO store_owner(singleton,account_fingerprint) VALUES(1,?)")
         .run("a".repeat(64)),
     ).not.toThrow();
     expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
-    expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
+    expect(() =>
+      db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64)),
+    ).toThrow();
     expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
   });
 
@@ -862,9 +919,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(createHash("sha256").update(MIGRATIONS[8]!.sql).digest("hex")).toBe(
       "4fe2e7648bbb09ad62c60a86e26ac4a9e09f4c0e24882428e12ad8722f3d420c",
     );
-    expect(
-      db.prepare("PRAGMA index_info(idx_source_record_session_source)").all(),
-    ).toEqual([
+    expect(db.prepare("PRAGMA index_info(idx_source_record_session_source)").all()).toEqual([
       expect.objectContaining({ seqno: 0, name: "session_key" }),
       expect.objectContaining({ seqno: 1, name: "source" }),
       expect.objectContaining({ seqno: 2, name: "id" }),
@@ -890,7 +945,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
       expect(tables.find((row) => row.name === name)?.strict).toBe(1);
     }
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(37);
+    expect(DUMP_TABLES).toHaveLength(56);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("analytics_curve_refresh_failure");
     expect(DERIVED_TABLES).not.toContain("analytics_curve_generation");
   });
@@ -900,24 +955,126 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(createHash("sha256").update(MIGRATIONS[10]!.sql).digest("hex")).toBe(
       "b9c22b99343093655536059e68c1846b5deb8b77355a08e38013d807906e300e",
     );
-    const table = db.prepare("PRAGMA table_list").all().find(
-      (row) => (row as { name?: unknown }).name === "activity_analysis_projection",
-    ) as { strict: number; wr: number } | undefined;
+    const table = db
+      .prepare("PRAGMA table_list")
+      .all()
+      .find((row) => (row as { name?: unknown }).name === "activity_analysis_projection") as
+      | { strict: number; wr: number }
+      | undefined;
     expect(table).toMatchObject({ strict: 1, wr: 1 });
-    expect(db.prepare("PRAGMA foreign_key_list(activity_analysis_projection)").all())
-      .toContainEqual(expect.objectContaining({ table: "session", on_delete: "CASCADE" }));
-    expect(db.prepare("PRAGMA index_info(idx_activity_analysis_projection_lru)").all())
-      .toEqual([
-        expect.objectContaining({ seqno: 0, name: "accessed_epoch_s" }),
-        expect.objectContaining({ seqno: 1, name: "canonical_activity_id" }),
-        expect.objectContaining({ seqno: 2, name: "source_revision" }),
-        expect.objectContaining({ seqno: 3, name: "contract_version" }),
-        expect.objectContaining({ seqno: 4, name: "section" }),
-      ]);
-    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain(
-      "activity_analysis_projection",
-    );
+    expect(
+      db.prepare("PRAGMA foreign_key_list(activity_analysis_projection)").all(),
+    ).toContainEqual(expect.objectContaining({ table: "session", on_delete: "CASCADE" }));
+    expect(db.prepare("PRAGMA index_info(idx_activity_analysis_projection_lru)").all()).toEqual([
+      expect.objectContaining({ seqno: 0, name: "accessed_epoch_s" }),
+      expect.objectContaining({ seqno: 1, name: "canonical_activity_id" }),
+      expect.objectContaining({ seqno: 2, name: "source_revision" }),
+      expect.objectContaining({ seqno: 3, name: "contract_version" }),
+      expect.objectContaining({ seqno: 4, name: "section" }),
+    ]);
+    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain("activity_analysis_projection");
     expect(DERIVED_TABLES).not.toContain("activity_analysis_projection");
+  });
+
+  it("adds strict authored Plan and Plan Workout tables without changing planned_workout", () => {
+    db = openFull();
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+    }>;
+    expect(tables.find((row) => row.name === "plan")?.strict).toBe(1);
+    expect(tables.find((row) => row.name === "plan_workout")?.strict).toBe(1);
+    expect(db.prepare("PRAGMA foreign_key_list(plan_workout)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan", on_delete: "CASCADE" }),
+    );
+    expect(db.prepare("PRAGMA index_info(idx_plan_workout_plan_date)").all()).toEqual([
+      expect.objectContaining({ seqno: 0, name: "plan_id" }),
+      expect.objectContaining({ seqno: 1, name: "date_key" }),
+    ]);
+    expect(PURE_AUTHORED_TABLES).toEqual(
+      expect.arrayContaining([
+        "plan",
+        "plan_proposal",
+        "plan_proposal_premise",
+        "plan_workout",
+        "plan_workout_drift",
+        "plan_workout_match",
+      ]),
+    );
+    expect(MIXED_AUTHORED_TABLES).toContain("planned_workout");
+    expect(db.prepare("PRAGMA table_info(planned_workout)").all()).not.toEqual([]);
+  });
+
+  it("adds strict Plan conversation, Draft lineage, and source-request tables", () => {
+    db = openFull();
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+    }>;
+    for (const name of [
+      "plan_conversation",
+      "plan_conversation_turn",
+      "plan_draft_revision",
+      "plan_source_request",
+    ]) {
+      expect(tables.find((row) => row.name === name)?.strict).toBe(1);
+    }
+    expect(db.prepare("PRAGMA foreign_key_list(plan_conversation_turn)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
+    );
+    expect(db.prepare("PRAGMA foreign_key_list(plan_draft_revision)").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
+        expect.objectContaining({ table: "plan", on_delete: "CASCADE" }),
+        expect.objectContaining({ table: "plan_draft_revision", on_delete: "CASCADE" }),
+      ]),
+    );
+    expect(db.prepare("PRAGMA foreign_key_list(plan_source_request)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
+    );
+    expect(PURE_AUTHORED_TABLES).toEqual(
+      expect.arrayContaining([
+        "plan_conversation",
+        "plan_conversation_turn",
+        "plan_draft_revision",
+        "plan_intake",
+        "plan_source_request",
+      ]),
+    );
+  });
+
+  it("adds strict authored Plan Intake without duplicating FTP or Race Course", () => {
+    db = openFull();
+    const table = (
+      db.prepare("PRAGMA table_list").all() as Array<{ name: string; strict: number }>
+    ).find((row) => row.name === "plan_intake");
+    expect(table?.strict).toBe(1);
+    expect(db.prepare("PRAGMA foreign_key_list(plan_intake)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
+    );
+    const columns = (
+      db.prepare("PRAGMA table_info(plan_intake)").all() as Array<{ name: string }>
+    ).map(({ name }) => name);
+    expect(columns).toEqual([
+      "conversation_id",
+      "event_name",
+      "event_priority",
+      "event_date_key",
+      "athlete_goal",
+      "availability_sessions_per_week",
+      "availability_weekdays_mask",
+      "experience",
+      "current_training_summary",
+      "source_turn_sequence",
+      "created_at_ms",
+      "updated_at_ms",
+      "device_id",
+      "hlc_physical_ms",
+      "hlc_counter",
+    ]);
+    expect(columns).not.toContain("ftp_watts");
+    expect(columns).not.toContain("race_course_json");
+    expect(PURE_AUTHORED_TABLES).toContain("plan_intake");
   });
 
   it("omits the unreleased prior bone-stress column from the baseline schema", () => {

@@ -29,14 +29,20 @@ function archiveActions(): ArchiveActions {
 function chatActions(): ChatActions {
   return {
     submit: vi.fn(),
+    stop: vi.fn(),
     retry: vi.fn(),
     removeQueued: vi.fn(),
+    runQueuedCommand: vi.fn(),
+    retryQueuedTurn: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),
     openNewConversation: vi.fn(),
     cancelNewConversation: vi.fn(),
     confirmNewConversation: vi.fn(),
     retryFirstSync: vi.fn(),
+    answerDecision: vi.fn(),
+    skipDecision: vi.fn(),
+    retryDecision: vi.fn(),
   };
 }
 

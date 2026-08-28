@@ -88,8 +88,28 @@ describe("chat view adapter", () => {
         },
       ],
       queued: [],
+      retryRequired: null,
+      decision: null,
+      decisionPhase: "idle",
+      decisionAnswerLabel: null,
+      decisionError: null,
+      decisionLoadError: null,
+      queueMutationError: null,
+      timeline: [
+        {
+          kind: "message",
+          message: {
+            id: "m1",
+            role: "athlete",
+            delivery: "complete",
+            historical: false,
+            text: "How is my form?",
+          },
+        },
+      ],
       status: "streaming",
-      notice: CHAT_WORKING_COPY,
+      notice: null,
+      coachProgress: CHAT_WORKING_COPY,
       interrupted: false,
       workBlocked: true,
       sendDisabled: true,
@@ -104,6 +124,256 @@ describe("chat view adapter", () => {
       hydrationRevision: 3,
       hydrationChange: "prepend",
     });
+  });
+
+  it("blocks normal Chat work and projects a completed decision consequence", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "desktop",
+      messageId: "message-1",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+        {
+          id: "tempo",
+          label: "Keep tempo",
+          description: "Keep the planned workout.",
+          recommended: false,
+          consequence: "Tomorrow keeps tempo.",
+        },
+      ],
+    };
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        decision: { value: decision, phase: "idle", answerLabel: null, error: null },
+      }),
+    );
+    expect(published.at(-1)).toMatchObject({ sendDisabled: true, inputDisabled: false });
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        decision: {
+          value: {
+            ...decision,
+            status: "answered",
+            answer: { kind: "option", optionId: "recovery" },
+            consequence: "Tomorrow becomes a recovery day.",
+            continuation: {
+              continuationId: "continuation-1",
+              status: "completed",
+              turnId: "turn-1",
+              coachText: "We’ll keep tomorrow easy.",
+            },
+          },
+          phase: "idle",
+          answerLabel: "Prioritize recovery",
+          error: null,
+        },
+      }),
+    );
+    expect(published.at(-1)?.timeline).toContainEqual({
+      kind: "choice",
+      choice: {
+        id: "decision-1",
+        label: "Prioritize recovery",
+        consequence: "Tomorrow becomes a recovery day.",
+        skipped: false,
+        historical: false,
+      },
+    });
+  });
+
+  it("blocks Send while the persisted decision state is loading", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+
+    adapter.view.render(EMPTY_CHAT_STATE, controls({ decisionLoading: true }));
+
+    expect(published.at(-1)).toMatchObject({
+      sendDisabled: true,
+      inputDisabled: false,
+      newConversationUnavailable: true,
+    });
+  });
+
+  it("keeps v2 decision consequences between the athlete request and Coach continuation", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "desktop",
+      messageId: "message-1",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+        {
+          id: "tempo",
+          label: "Keep tempo",
+          description: "Keep the planned workout.",
+          recommended: false,
+          consequence: "Tomorrow keeps tempo.",
+        },
+      ],
+    };
+    const entries = [
+      {
+        kind: "decision-requested" as const,
+        recordedAt: "2001-01-01T00:00:00.000Z",
+        athleteText: "What should I do tomorrow?",
+        decision,
+      },
+      {
+        kind: "decision-answered" as const,
+        recordedAt: "2001-01-01T00:01:00.000Z",
+        decisionId: "decision-1",
+        answer: { kind: "option" as const, optionId: "recovery" },
+        consequence: "Tomorrow becomes a recovery day.",
+        continuationId: "continuation-1",
+      },
+      {
+        kind: "decision-continuation-completed" as const,
+        recordedAt: "2001-01-01T00:02:00.000Z",
+        completedAt: "2001-01-01T00:02:00.000Z",
+        decisionId: "decision-1",
+        continuationId: "continuation-1",
+        turnId: "turn-1",
+        coachText: "We’ll keep tomorrow easy.",
+      },
+    ];
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        hydration: { status: "ready", hasEarlier: false, revision: 1, change: "initial", entries },
+      }),
+    );
+
+    expect(published.at(-1)?.timeline.map((item) => item.kind)).toEqual([
+      "message",
+      "choice",
+      "message",
+    ]);
+  });
+
+  it("deduplicates a live decision when its persisted entries hydrate later", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "desktop",
+      messageId: "message-1",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+        {
+          id: "tempo",
+          label: "Keep tempo",
+          description: "Keep the planned workout.",
+          recommended: false,
+          consequence: "Tomorrow keeps tempo.",
+        },
+      ],
+    };
+    const completedDecision = {
+      ...decision,
+      status: "answered" as const,
+      answer: { kind: "option" as const, optionId: "recovery" },
+      consequence: "Tomorrow becomes a recovery day.",
+      continuation: {
+        continuationId: "continuation-1",
+        status: "completed" as const,
+        turnId: "turn-2",
+        coachText: "We’ll keep tomorrow easy.",
+      },
+    };
+    let live = submitted("What should I do tomorrow?");
+    live = reduceChatState(live, {
+      type: "bind-decision",
+      requestKey: 1,
+      decisionId: "decision-1",
+    });
+    live = reduceChatState(live, { type: "bind-turn", requestKey: 1, turnId: "turn-2" });
+    live = reduceChatState(live, {
+      type: "event",
+      requestKey: 1,
+      event: { type: "final-text", turnId: "turn-2", text: "We’ll keep tomorrow easy." },
+    });
+    live = reduceChatState(live, { type: "complete", requestKey: 1 });
+
+    adapter.view.render(
+      live,
+      controls({
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 2,
+          change: "initial",
+          entries: [
+            {
+              kind: "decision-requested",
+              recordedAt: "2001-01-01T00:00:00.000Z",
+              athleteText: "What should I do tomorrow?",
+              decision,
+            },
+            {
+              kind: "decision-answered",
+              recordedAt: "2001-01-01T00:01:00.000Z",
+              decisionId: "decision-1",
+              answer: { kind: "option", optionId: "recovery" },
+              consequence: "Tomorrow becomes a recovery day.",
+              continuationId: "continuation-1",
+            },
+            {
+              kind: "decision-continuation-completed",
+              recordedAt: "2001-01-01T00:02:00.000Z",
+              completedAt: "2001-01-01T00:02:00.000Z",
+              decisionId: "decision-1",
+              continuationId: "continuation-1",
+              turnId: "turn-2",
+              coachText: "We’ll keep tomorrow easy.",
+            },
+          ],
+        },
+        decision: {
+          value: completedDecision,
+          phase: "idle",
+          answerLabel: "Prioritize recovery",
+          error: null,
+        },
+      }),
+    );
+
+    expect(published.at(-1)?.timeline.map((item) => item.kind)).toEqual([
+      "message",
+      "choice",
+      "message",
+    ]);
   });
 
   it("derives the controls the port leaves optional", () => {
@@ -585,7 +855,11 @@ describe("follow-latest anchoring", () => {
     send(state, first.controls);
 
     expect(published).toHaveLength(2);
-    expect(changedKeys(published[0], published[1])).toEqual(["messages", "notice"]);
+    expect(changedKeys(published[0], published[1])).toEqual([
+      "messages",
+      "timeline",
+      "coachProgress",
+    ]);
     expect(published[1].status).toBe("streaming");
     expect(document.querySelectorAll(".chat-message")).toHaveLength(2);
     expect(host.scrollTop).toBe(VIEWPORT + 2 * ROW_HEIGHT);

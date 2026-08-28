@@ -88,7 +88,22 @@ function mockEngine(
   }));
   const getAthleteState = vi.fn<CoachEngine["getAthleteState"]>(async () => state);
   return {
-    engine: { chat, resetSession, hasSession, getAthleteState },
+    engine: {
+      chat,
+      getCoachDecision: async () => ({ decision: null }),
+      answerCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      skipCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resumeCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resetSession,
+      hasSession,
+      getAthleteState,
+    },
     chat,
     resetSession,
     hasSession,

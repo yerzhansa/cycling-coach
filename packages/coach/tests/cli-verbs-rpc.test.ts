@@ -78,7 +78,10 @@ const operations: CoachOperations = {
     published: true,
     referenceSucceeded: true,
     requests: { store: 1, reference: 1, total: 2 },
-    droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+    droppedActivities: {
+      overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+      recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+    },
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
   getTranscriptPage: async () => ({
@@ -266,6 +269,16 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
         onEvent?.(event);
         return { text: request.message };
       }),
+      getCoachDecision: async () => ({ decision: null }),
+      answerCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      skipCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resumeCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
       getAthleteState,
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
@@ -388,6 +401,16 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
         entered.push(request.message);
         const gate = gates.get(request.message);
         return gate === undefined ? { text: request.message } : gate.promise;
+      },
+      getCoachDecision: async () => ({ decision: null }),
+      answerCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      skipCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resumeCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
       },
       getAthleteState: async () => state,
       resetSession: async () => ({ memoryFlushed: true }),

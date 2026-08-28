@@ -62,6 +62,22 @@ A delivery surface (currently only Telegram); sport-agnostic.
 **Static Prefix**:
 The turn-invariant head of the system prompt — SOUL, the joined skill prompts, the rule blocks (untrusted-data, recall, workout-review, data-grounding) — that forms one frozen cache prefix; only the Athlete Context block is volatile and renders last. **Boundary policy:** SOUL and always-needed rules stay preloaded in this prefix. Future skill growth that is not needed every turn (e.g., nutrition depth, race-prep depth) ships tool-retrievable rather than preloaded — but never via per-turn conditional injection, which would reshape the prefix and defeat the cache. A guardrail test fails if the prefix's estimated token count exceeds its ceiling, forcing a conscious preload-vs-retrieve decision instead of silent bloat.
 
+**Plan**:
+The locally authoritative training block with exactly one lifecycle state: `draft`, `active`, or `ended`.
+_Avoid_: Training program, calendar plan
+
+**Plan Workout**:
+A Workout that belongs to one Plan and carries its planned date, origin, and sport-owned prescription.
+_Avoid_: Session, `planned_workout`, `planned_workouts`
+
+**Plan Intake**:
+The structured athlete information gathered while the Plan coach prepares a Draft, before any Plan becomes active.
+_Avoid_: Plan chat, onboarding
+
+**Training Week**:
+A seven-day span counted from a Plan's athlete-selected start date; week 1 begins on that date.
+_Avoid_: Calendar week, partial week
+
 ## Relationships
 
 - A **Binary** wraps exactly one **Sport** plus deployment config.

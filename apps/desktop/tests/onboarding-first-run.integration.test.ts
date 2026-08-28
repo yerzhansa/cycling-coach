@@ -38,6 +38,20 @@ interface FixtureIntake {
 function makeScript(): DesktopFixtureScript {
   let savedIntake: FixtureIntake | null = null;
   let durableTrainingData = true;
+  let queueRevision = 0;
+  let queueItems: Array<{
+    queuedMessageId: string;
+    submissionId: string;
+    text: string;
+    kind: "ordinary" | "slash-command";
+    position: number;
+    restored: boolean;
+  }> = [];
+  const queueSnapshot = () => ({
+    schemaVersion: 1 as const,
+    revision: queueRevision,
+    items: queueItems,
+  });
   return {
     onRequest(value) {
       const request = value as ScriptRequest;
@@ -100,7 +114,10 @@ function makeScript(): DesktopFixtureScript {
           published: true,
           referenceSucceeded: true,
           requests: { store: 1, reference: 1, total: 2 },
-          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+          droppedActivities: {
+            overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+            recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+          },
         });
       }
       if (request.method === "getAthleteState") {
@@ -151,6 +168,36 @@ function makeScript(): DesktopFixtureScript {
       }
       if (request.method === "hasSession") {
         return response({ hasSession: false });
+      }
+      if (request.method === "getCoachDecision") return response({ decision: null });
+      if (request.method === "getChatQueue") return response(queueSnapshot());
+      if (request.method === "enqueueChatMessage") {
+        const params = request.params as { readonly submissionId: string; readonly text: string };
+        if (!queueItems.some((item) => item.submissionId === params.submissionId)) {
+          queueRevision += 1;
+          queueItems.push({
+            queuedMessageId: `queued-${queueRevision}`,
+            submissionId: params.submissionId,
+            text: params.text,
+            kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+            position: queueItems.length,
+            restored: false,
+          });
+        }
+        return response(queueSnapshot());
+      }
+      if (request.method === "removeQueuedChatMessage") {
+        const id = (request.params as { readonly queuedMessageId: string }).queuedMessageId;
+        queueItems = queueItems
+          .filter((item) => item.queuedMessageId !== id)
+          .map((item, position) => ({ ...item, position }));
+        queueRevision += 1;
+        return response(queueSnapshot());
+      }
+      if (request.method === "resumeChatQueue") {
+        queueItems = [];
+        queueRevision += 1;
+        return response({ snapshot: queueSnapshot() });
       }
       throw new TypeError(`unexpected fixture request: ${request.method}`);
     },

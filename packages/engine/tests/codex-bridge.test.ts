@@ -634,6 +634,74 @@ describe("codex-bridge", () => {
     expect(JSON.stringify(toolMsg!.content)).toContain("logged 60");
   });
 
+  it("executes zero tools when a decision call has a sibling", async () => {
+    const decide = vi.fn(async () => ({ status: "presented", decisionId: "d1" }));
+    const mutate = vi.fn(async () => ({ saved: true }));
+    const tools = {
+      request_user_decision: {
+        description: "decide",
+        inputSchema: zodSchema(z.object({ question: z.string() })),
+        execute: decide,
+      },
+      plan_save: {
+        description: "save",
+        inputSchema: zodSchema(z.object({ name: z.string() })),
+        execute: mutate,
+      },
+    };
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        asstMsg({
+          stopReason: "toolUse",
+          toolCalls: [
+            { id: "d1", name: "request_user_decision", arguments: { question: "Choose" } },
+            { id: "w1", name: "plan_save", arguments: { name: "Changed" } },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(asstMsg({ text: "Choose 1 or 2." }));
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: tools as never,
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+    });
+
+    expect(decide).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("stops after executing a decision-only batch", async () => {
+    const decide = vi.fn(async () => ({ status: "presented", decisionId: "d1" }));
+    const complete = vi.fn(async () =>
+      asstMsg({
+        text: "",
+        stopReason: "toolUse",
+        toolCalls: [{ id: "d1", name: "request_user_decision", arguments: { question: "Choose" } }],
+      }),
+    );
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete });
+
+    await codexGenerateText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: {
+        request_user_decision: {
+          description: "decide",
+          inputSchema: zodSchema(z.object({ question: z.string() })),
+          execute: decide,
+        },
+      } as never,
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+    });
+
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards opts.signal to codex tool execution", async () => {
     let toolOptions: { abortSignal?: AbortSignal } | undefined;
     const execute = vi.fn(

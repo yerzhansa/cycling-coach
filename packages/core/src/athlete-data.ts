@@ -1,10 +1,12 @@
 import type { ApiError, EventInput, IntervalsClient } from "intervals-icu-api";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { CanonicalActivityReader } from "@enduragent/kernel/store";
+import { PLANNING_EVENT_CATEGORIES } from "@enduragent/kernel/reference/schemas";
 import type {
   AthleteDataReaderPort as AthleteDataReader,
   AthleteReadResult,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   PlatformCalendarMutationsPort as PlatformCalendarMutations,
   StoredDataFreshness,
 } from "@enduragent/engine/sport";
@@ -13,6 +15,7 @@ export type {
   AthleteDataReader,
   AthleteReadResult,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   PlatformCalendarMutations,
   StoredDataFreshness,
 };
@@ -38,6 +41,7 @@ export function createMissingPlatformCalendarMutations(): PlatformCalendarMutati
   return Object.freeze({
     createEvent: missing,
     readEventForDelete: missing,
+    updateEvent: missing,
     deleteEvent: missing,
   });
 }
@@ -79,7 +83,7 @@ export function createPlatformAthleteDataReader(intervals: IntervalsClient): Ath
       return { ok: true as const, value: await platformValue(intervals.events.list({
         oldest: input.start,
         newest: input.end,
-        category: ["WORKOUT"],
+        category: [...PLANNING_EVENT_CATEGORIES],
       })) as unknown[] };
     },
     freshness: () => undefined,
@@ -100,6 +104,8 @@ export function createPlatformCalendarMutations(intervals: IntervalsClient): Pla
         externalId: value.externalId,
       };
     },
+    updateEvent: (input: { eventId: number; patch: CalendarEventUpdate }) =>
+      platformValue(intervals.events.update(input.eventId, input.patch as EventInput)),
     deleteEvent: (input: { eventId: number }) => platformValue(intervals.events.delete(input.eventId)),
   });
 }

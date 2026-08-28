@@ -180,6 +180,7 @@ function makeFakeMutations(eventDateLocal: string): PlatformCalendarMutationsPor
       category: "WORKOUT",
       tags: [COACH_EVENT_TAG],
     }),
+    updateEvent: async () => ({}),
     deleteEvent: async ({ eventId }) => {
       deleteCalls.push(eventId);
       return { ok: true };

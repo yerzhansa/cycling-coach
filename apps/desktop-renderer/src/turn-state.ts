@@ -1,8 +1,13 @@
-import type { TurnEvent } from "@enduragent/coach-contract";
+import type {
+  ChatQueueRecoveryClaim,
+  ChatQueueSnapshot,
+  TurnEvent,
+} from "@enduragent/coach-contract";
 import { isSlashCommandText } from "./chat/commands.js";
 
 export const DESKTOP_CHAT_ID = "desktop" as const;
 export const CHAT_WORKING_COPY = "Coach is working…";
+export const CHAT_RESPONSE_STOPPED_COPY = "Response stopped. Your partial response is preserved.";
 export const QUEUED_MESSAGE_SEPARATOR = "\n\n";
 
 export type ChatStatus = "idle" | "streaming" | "interrupted";
@@ -35,6 +40,7 @@ export interface ActiveTurn {
 export interface ChatTranscriptMessage {
   readonly id: string;
   readonly turnId?: string;
+  readonly decisionId?: string;
   readonly role: "athlete" | "coach";
   readonly text: string;
   readonly delivery: "complete" | "streaming" | "interrupted";
@@ -45,6 +51,7 @@ export interface QueuedMessage {
   readonly id: string;
   readonly text: string;
   readonly command: boolean;
+  readonly restored?: boolean;
 }
 
 export interface ChatDrainGroup {
@@ -58,6 +65,9 @@ export interface ChatState {
   readonly activeTurn: ActiveTurn | null;
   readonly progress: string | null;
   readonly queued: readonly QueuedMessage[];
+  readonly queueRevision?: number;
+  readonly activeQueueClaimIds?: readonly string[];
+  readonly retryRequired?: ChatQueueRecoveryClaim | null;
   readonly session: ChatSessionState;
 }
 
@@ -85,11 +95,16 @@ export type ChatAction =
       readonly includeUser: boolean;
     }
   | { readonly type: "bind-turn"; readonly requestKey: number; readonly turnId: string }
+  | { readonly type: "bind-decision"; readonly requestKey: number; readonly decisionId: string }
   | { readonly type: "event"; readonly requestKey: number; readonly event: TurnEvent }
   | { readonly type: "complete"; readonly requestKey: number }
+  | { readonly type: "discard"; readonly requestKey: number }
+  | { readonly type: "discard-submission"; readonly requestKey: number }
   | { readonly type: "interrupt"; readonly requestKey: number; readonly copy: string }
   | { readonly type: "retry-pending"; readonly requestKey: number }
   | { readonly type: "fail"; readonly requestKey: number; readonly copy: string }
+  | { readonly type: "queue-snapshot"; readonly snapshot: ChatQueueSnapshot }
+  | { readonly type: "queue-claimed"; readonly ids: readonly string[] }
   | { readonly type: "enqueue"; readonly id: string; readonly text: string }
   | { readonly type: "remove-queued"; readonly id: string }
   | { readonly type: "dequeue-group" }
@@ -177,6 +192,8 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         messages,
         progress: CHAT_WORKING_COPY,
         queued: state.queued,
+        ...(state.queueRevision === undefined ? {} : { queueRevision: state.queueRevision }),
+        ...(state.retryRequired === undefined ? {} : { retryRequired: state.retryRequired }),
         session: { ...state.session, announcement: null },
         activeTurn: {
           requestKey: action.requestKey,
@@ -202,6 +219,19 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
                 : message,
             ),
             activeTurn: { ...active, turnId: action.turnId },
+          };
+    }
+    case "bind-decision": {
+      const active = current(state, action.requestKey);
+      return active === null || active.userMessageId === null
+        ? state
+        : {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.userMessageId
+                ? { ...message, decisionId: action.decisionId }
+                : message,
+            ),
           };
     }
     case "event": {
@@ -246,10 +276,22 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
               error: { kind: action.event.kind, athleteMessage: action.event.athleteMessage },
             },
           };
+        case "interrupted": {
+          const next = { ...active, draft: action.event.text };
+          return {
+            ...state,
+            status: "interrupted",
+            progress: CHAT_RESPONSE_STOPPED_COPY,
+            activeTurn: next,
+            messages: updateAssistant(state, next, action.event.text, "interrupted"),
+          };
+        }
         case "tool-start":
         case "tool-end":
         case "step-text":
           return { ...state, progress: "Checking your training data…" };
+        case "decision-requested":
+          return state;
         default:
           return assertNever(action.event);
       }
@@ -264,6 +306,31 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         progress: null,
         session: { ...state.session, presence: "present" },
         messages: updateAssistant(state, active, active.finalText, "complete"),
+      };
+    }
+    case "discard": {
+      const active = current(state, action.requestKey);
+      if (active === null) return state;
+      return {
+        ...state,
+        status: "idle",
+        progress: null,
+        activeTurn: null,
+        messages: state.messages.filter((message) => message.id !== active.assistantMessageId),
+      };
+    }
+    case "discard-submission": {
+      const active = current(state, action.requestKey);
+      if (active === null) return state;
+      return {
+        ...state,
+        status: "idle",
+        progress: null,
+        activeTurn: null,
+        messages: state.messages.filter(
+          (message) =>
+            message.id !== active.assistantMessageId && message.id !== active.userMessageId,
+        ),
       };
     }
     case "interrupt": {
@@ -296,10 +363,41 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         messages: updateAssistant(state, active, visibleDraft(active.draft), "interrupted"),
       };
     }
+    case "queue-snapshot": {
+      if (action.snapshot.revision <= (state.queueRevision ?? 0)) return state;
+      const activeQueueClaimIds =
+        action.snapshot.retryRequired === undefined
+          ? (state.activeQueueClaimIds ?? []).filter((id) =>
+              action.snapshot.items.some((item) => item.queuedMessageId === id),
+            )
+          : [];
+      const activeClaims = new Set(activeQueueClaimIds);
+      return {
+        ...state,
+        queueRevision: action.snapshot.revision,
+        activeQueueClaimIds,
+        queued: action.snapshot.items
+          .filter((item) => !activeClaims.has(item.queuedMessageId))
+          .map((item) => ({
+            id: item.queuedMessageId,
+            text: item.text,
+            command: item.kind === "slash-command",
+            restored: item.restored,
+          })),
+        retryRequired: action.snapshot.retryRequired ?? null,
+      };
+    }
+    case "queue-claimed": {
+      const claimed = new Set(action.ids);
+      return {
+        ...state,
+        activeQueueClaimIds: action.ids,
+        queued: state.queued.filter((message) => !claimed.has(message.id)),
+      };
+    }
     case "enqueue": {
-      if (!/\S/u.test(action.text) || state.queued.some((message) => message.id === action.id)) {
+      if (!/\S/u.test(action.text) || state.queued.some((message) => message.id === action.id))
         return state;
-      }
       return {
         ...state,
         queued: [
@@ -362,6 +460,9 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             activeTurn: null,
             progress: null,
             queued: [],
+            ...(state.queueRevision === undefined ? {} : { queueRevision: state.queueRevision }),
+            ...(state.activeQueueClaimIds === undefined ? {} : { activeQueueClaimIds: [] }),
+            ...(state.retryRequired === undefined ? {} : { retryRequired: null }),
             session: {
               presence: "absent",
               resetPhase: "idle",
