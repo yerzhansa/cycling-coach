@@ -348,7 +348,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
       return {
         ...real,
-        checkForUpdate: vi.fn(async () => ({
+        checkForUpdateWithDailyTelemetry: vi.fn(async () => ({
           current: "2026.5.5",
           latest: "2026.5.10",
           updateAvailable: true,
@@ -395,7 +395,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
       return {
         ...real,
-        checkForUpdate: vi.fn(async () => ({
+        checkForUpdateWithDailyTelemetry: vi.fn(async () => ({
           current: "2026.5.5",
           latest: "2026.5.10",
           updateAvailable: true,
@@ -433,7 +433,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
       return {
         ...real,
-        checkForUpdate: vi.fn(async () => ({
+        checkForUpdateWithDailyTelemetry: vi.fn(async () => ({
           current: "2026.5.5",
           latest: "2026.5.10",
           updateAvailable: true,
@@ -467,7 +467,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
       return {
         ...real,
-        checkForUpdate: vi.fn(async () => ({
+        checkForUpdateWithDailyTelemetry: vi.fn(async () => ({
           current: "2026.5.5",
           latest: "2026.5.10",
           updateAvailable: true,
@@ -493,7 +493,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
       return {
         ...real,
-        checkForUpdate: vi.fn(async () => ({
+        checkForUpdateWithDailyTelemetry: vi.fn(async () => ({
           current: "2026.5.5",
           latest: "2026.5.10",
           updateAvailable: true,
@@ -525,7 +525,7 @@ describe("notifyUpdate — broadcast filtering (L3)", () => {
       const real = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
       return {
         ...real,
-        checkForUpdate: vi.fn(async () => ({
+        checkForUpdateWithDailyTelemetry: vi.fn(async () => ({
           current: "2026.5.5",
           latest: "2026.5.10",
           updateAvailable: true,

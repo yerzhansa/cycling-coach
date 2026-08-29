@@ -8,6 +8,7 @@ import { formatSnapshotRaw } from "../reference/sync/snapshot-debug.js";
 import { provenanceForLatestSection } from "../reference/source-provenance.js";
 import {
   checkForUpdate,
+  checkForUpdateWithDailyTelemetry,
   getCurrentVersion,
   getKnownTelegramChatIds,
   getLastNotifiedVersion,
@@ -56,7 +57,7 @@ export function createNpmTelegramHost(input: CreateNpmTelegramHostInput): Telegr
     version: async () =>
       `${input.binary.displayName} v${getCurrentVersion(input.binary.binaryName)}`,
     whatsNew: async () => {
-      const info = await checkForUpdate(input.binary.binaryName, input.dataDir);
+      const info = await checkForUpdate(input.binary.binaryName);
       return info === null
         ? ({ kind: "unavailable" } as const)
         : ({
@@ -75,7 +76,7 @@ export function createNpmTelegramHost(input: CreateNpmTelegramHostInput): Telegr
         ...releaseBase,
         updatePolicy: "npm-self-update" as const,
         binaryName: input.binary.binaryName,
-        check: () => checkForUpdate(input.binary.binaryName, input.dataDir),
+        check: () => checkForUpdate(input.binary.binaryName),
         install: async (version: string) => selfUpdate(input.binary.binaryName, version),
       };
   const reference = input.reference;
@@ -134,7 +135,7 @@ export async function notifyNpmTelegramUpdate(
   binary: BinaryConfig,
 ): Promise<void> {
   try {
-    const info = await checkForUpdate(binary.binaryName, dataDir);
+    const info = await checkForUpdateWithDailyTelemetry(binary.binaryName, dataDir);
     if (!info?.updateAvailable || getLastNotifiedVersion(dataDir) === info.latest) return;
 
     const allowed = loadAllowedSenders(dataDir);

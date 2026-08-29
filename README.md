@@ -160,9 +160,11 @@ Keychain. If secure storage is unavailable, the app refuses to save the key rath
 in the clear.
 
 **What does leave.** Your prompt and the training numbers in it go to the model provider you
-chose. Your intervals.icu key goes to intervals.icu. The self-hosted Telegram bot checks
-`ping.enduragent.icu` for a newer version on startup and daily — no athlete data, no credentials;
-set `CYCLING_COACH_NO_UPDATE_CHECK=1` to switch it off. The desktop app never makes that request.
+chose. Your intervals.icu key goes to intervals.icu. The self-hosted Telegram bot may contact
+`ping.enduragent.icu` at startup and on its daily timer, but at most once per installation in any
+24 hours — no athlete data, no credentials; set `CYCLING_COACH_NO_UPDATE_CHECK=1` to switch it off.
+Manual commands never initiate telemetry. Version lookups use npm; `/whatsnew` also queries GitHub
+for release notes. The desktop app never makes that request.
 
 Full policy: [enduragent.icu/privacy.html](https://enduragent.icu/privacy.html).
 

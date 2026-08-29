@@ -11,6 +11,16 @@ const install = vi.fn();
 const getKnownTelegramChatIds = vi.fn((): string[] => []);
 const getLastNotifiedVersion = vi.fn((): string | null => null);
 const setLastNotifiedVersion = vi.fn();
+const checkForUpdate = vi.fn(async () => ({
+  current: "2026.8.1",
+  latest: "2026.8.2",
+  updateAvailable: true,
+}));
+const checkForUpdateWithDailyTelemetry = vi.fn(async () => ({
+  current: "2026.8.1",
+  latest: "2026.8.2",
+  updateAvailable: true,
+}));
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "npm-telegram-host-"));
@@ -21,16 +31,15 @@ beforeEach(() => {
   getLastNotifiedVersion.mockReset();
   getLastNotifiedVersion.mockReturnValue(null);
   setLastNotifiedVersion.mockReset();
+  checkForUpdate.mockClear();
+  checkForUpdateWithDailyTelemetry.mockClear();
   vi.resetModules();
   vi.doMock("../src/updater.js", async () => {
     const actual = await vi.importActual<typeof import("../src/updater.js")>("../src/updater.js");
     return {
       ...actual,
-      checkForUpdate: vi.fn(async () => ({
-        current: "2026.8.1",
-        latest: "2026.8.2",
-        updateAvailable: true,
-      })),
+      checkForUpdate,
+      checkForUpdateWithDailyTelemetry,
       getCurrentVersion: vi.fn(() => "2026.8.1"),
       getKnownTelegramChatIds,
       getLastNotifiedVersion,
@@ -142,6 +151,8 @@ describe("createNpmTelegramHost", () => {
     await expect(host.release.check()).resolves.toMatchObject({ latest: "2026.8.2" });
     await host.release.install("2026.8.2");
     expect(install).toHaveBeenCalledWith("cycling-coach", "2026.8.2");
+    expect(checkForUpdate).toHaveBeenCalledTimes(2);
+    expect(checkForUpdateWithDailyTelemetry).not.toHaveBeenCalled();
   });
 
   it("makes managed deployment policy structurally incapable of installing", async () => {
@@ -178,6 +189,8 @@ describe("createNpmTelegramHost", () => {
 
     await notifyNpmTelegramUpdate({ sendMessage }, dataDir, cyclingBinary);
 
+    expect(checkForUpdateWithDailyTelemetry).toHaveBeenCalledWith("cycling-coach", dataDir);
+    expect(checkForUpdate).not.toHaveBeenCalled();
     expect(sendMessage.mock.calls.map(([chatId]) => chatId)).toEqual(["73", "74"]);
     expect(setLastNotifiedVersion).toHaveBeenCalledOnce();
     expect(setLastNotifiedVersion).toHaveBeenCalledWith(dataDir, "2026.8.2");
