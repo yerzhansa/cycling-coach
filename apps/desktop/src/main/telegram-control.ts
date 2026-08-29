@@ -205,14 +205,12 @@ function resolveDesiredRecord(
     return { state: "known", desiredState: value.enabled ? "enabled" : "disabled" };
   }
   if (value.state === "missing") return { state: "known", desiredState: "disabled" };
+  if (value.state === "wrong-home") return { state: "known", desiredState: "disabled" };
   const desiredState = daemonSnapshot?.channel.desiredState ?? "enabled";
   return {
     state: "repair-required",
     desiredState,
-    errorCode:
-      value.state === "wrong-home"
-        ? "telegram-home-mismatch"
-        : "telegram-settings-storage-uncertain",
+    errorCode: "telegram-settings-storage-uncertain",
   };
 }
 
@@ -454,7 +452,14 @@ export function createTelegramControlCoordinator(
         daemonSnapshot?.pairing ?? UNPAIRED,
       );
     }
-    if (profile.state === "wrong-home") return failure(desiredState, "telegram-home-mismatch");
+    if (profile.state === "wrong-home") {
+      return {
+        channel: DISABLED_CHANNEL,
+        bot: UNCONFIGURED_BOT,
+        pairing: UNPAIRED,
+        credentialConfigured: false,
+      };
+    }
     if (profile.state === "re-prompt") {
       return failure(
         desiredState,
@@ -815,11 +820,12 @@ export function createTelegramControlCoordinator(
       const checked = await checkedBinding();
       if ("result" in checked) return checked.result;
       const profileStatus = await input.vault.profileStatus();
-      const profileRefusal = profileStatusRefusal(profileStatus);
-      if (profileRefusal !== undefined) return refused(profileRefusal);
       if (profileStatus.state === "uncertain") return uncertain();
-      if (profileStatus.state === "wrong-home") return refused("storage-failed");
-      if (replacement && profileStatus.state !== "configured") return refused("invalid-state");
+      if (replacement) {
+        const profileRefusal = profileStatusRefusal(profileStatus);
+        if (profileRefusal !== undefined) return refused(profileRefusal);
+        if (profileStatus.state !== "configured") return refused("invalid-state");
+      }
       if (!replacement && profileStatus.state === "configured") return refused("invalid-state");
       const prior = replacement ? await captureProfile(checked.active) : undefined;
       if (replacement && prior?.state === "uncertain") return uncertain();

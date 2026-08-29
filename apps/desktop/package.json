@@ -6,6 +6,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:isolated": "node scripts/interactive-development.mjs",
     "build": "electron-vite build",
     "check": "tsc --noEmit",
     "package:dir": "pnpm build:self-test-resources && electron-vite build && node scripts/development-package-plan.mjs",

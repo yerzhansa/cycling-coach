@@ -678,6 +678,15 @@ describe("Desktop Telegram power lifecycle", () => {
       state: "possible-message-loss",
     });
     expect(JSON.parse(await readFile(target, "utf8"))).toEqual(wrongHomeRecord);
+    await expect(wrongHome.resetForCreate()).resolves.toEqual({ state: "clear" });
+    expect(JSON.parse(await readFile(target, "utf8"))).toEqual({
+      schemaVersion: 2,
+      athleteHome: files.athleteHome,
+      gapStartedAt: null,
+      lastSuccessfulPollAt: null,
+      suspendedAt: null,
+      warningDetectedAt: null,
+    });
     await wrongHome.close();
 
     if (process.platform !== "win32") {

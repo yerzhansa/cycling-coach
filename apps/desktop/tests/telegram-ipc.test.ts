@@ -156,6 +156,7 @@ function setup(
   };
   const power = {
     warning: vi.fn(async (): Promise<TelegramGapWarning> => ({ state: "clear" })),
+    resetForCreate: vi.fn(async (): Promise<TelegramGapWarning> => ({ state: "clear" })),
     acknowledgeWarning: vi.fn(async (): Promise<TelegramGapWarning> => ({ state: "clear" })),
   };
   const dispose = installDesktopTelegramIpc({
@@ -289,6 +290,7 @@ describe("Desktop Telegram IPC", () => {
     expect(runtime.trace).toEqual(["read", "clear", `configure:${TOKEN}`]);
     expect(runtime.coordinator.configure).toHaveBeenCalledWith(TOKEN);
     expect(runtime.coordinator.replace).not.toHaveBeenCalled();
+    expect(runtime.power.resetForCreate).toHaveBeenCalledOnce();
   });
 
   it("selects replacement only after clipboard capture when a credential exists", async () => {
@@ -299,13 +301,14 @@ describe("Desktop Telegram IPC", () => {
     expect(runtime.trace).toEqual(["read", "clear", `replace:${TOKEN}`]);
     expect(runtime.coordinator.configure).not.toHaveBeenCalled();
     expect(runtime.coordinator.replace).toHaveBeenCalledWith(TOKEN);
+    expect(runtime.power.resetForCreate).not.toHaveBeenCalled();
   });
 
   for (const [run, reason, available, backend] of [
     [it, "encryption-unavailable" as const, false, undefined],
     [it.skipIf(process.platform === "win32"), "unsafe-backend" as const, true, "basic_text"],
   ] as const) {
-    run(`routes a reopened real-vault ${reason} paste through replacement`, async () => {
+    run(`routes a reopened real-vault ${reason} paste through Create`, async () => {
       const base = await mkdtemp(join(await realpath(tmpdir()), "telegram-ipc-secure-storage-"));
       try {
         const homePath = join(base, "athlete-home");
@@ -341,7 +344,7 @@ describe("Desktop Telegram IPC", () => {
         });
         await expect(reopened.profileStatus()).resolves.toEqual({ state: "re-prompt", reason });
         const runtime = setup({ configured: true, vault: reopened });
-        vi.mocked(runtime.coordinator.replace).mockResolvedValueOnce({
+        vi.mocked(runtime.coordinator.configure).mockResolvedValueOnce({
           outcome: "refused",
           reason,
           current: snapshot(true),
@@ -352,8 +355,9 @@ describe("Desktop Telegram IPC", () => {
           reason,
           current: ipcSnapshot(true),
         });
-        expect(runtime.coordinator.replace).toHaveBeenCalledWith(TOKEN);
-        expect(runtime.coordinator.configure).not.toHaveBeenCalled();
+        expect(runtime.coordinator.configure).toHaveBeenCalledWith(TOKEN);
+        expect(runtime.coordinator.replace).not.toHaveBeenCalled();
+        expect(runtime.power.resetForCreate).not.toHaveBeenCalled();
       } finally {
         await rm(base, { recursive: true, force: true });
       }

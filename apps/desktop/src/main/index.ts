@@ -1,4 +1,5 @@
 import "./keychain-binding-probe-deprecation.js";
+import { bindDevelopmentUserData } from "./development-user-data.js";
 import { bindWindowsUserData } from "./windows-user-data.js";
 import {
   createAcceptanceKeychainTransport,
@@ -192,6 +193,7 @@ import {
 } from "./planning-read-ipc.js";
 
 bindDesktopAppUserModelId(app);
+bindDevelopmentUserData(app, { isPackaged: app.isPackaged });
 bindWindowsUserData(app);
 startDesktopCrashReporter({ crashReporter });
 installDesktopCrashTelemetry({ app });

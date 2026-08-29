@@ -454,6 +454,7 @@ export async function launchDesktopFixture(input: {
         ENDURAGENT_HOME: athleteHome,
         ENDURAGENT_ACCEPTANCE_HIDDEN: input.hidden === false ? "0" : "1",
         ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND: "memory",
+        ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT: "1",
         FORCE_COLOR: undefined,
         NO_COLOR: undefined,
         CLICOLOR_FORCE: undefined,

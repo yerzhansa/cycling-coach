@@ -37,7 +37,7 @@ interface TelegramAttempt {
 
 type TelegramIdentity =
   | { readonly kind: "verified"; readonly username: string }
-  | { readonly kind: "missing" | "unknown" };
+  | { readonly kind: "missing" };
 
 const persistedTelegramAttempts = new WeakMap<TelegramSettingsPort, TelegramAttempt>();
 
@@ -52,14 +52,7 @@ function identity(telegram: TelegramControlStatus | null): TelegramIdentity {
   if (telegram?.credentialConfigured === true && telegram.bot.state !== "unconfigured") {
     return { kind: "verified", username: telegram.bot.username };
   }
-  if (
-    telegram?.credentialConfigured === false &&
-    telegram.bot.state === "unconfigured" &&
-    (telegram.channel.state === "disabled" || telegram.channel.state === "waiting-for-credential")
-  ) {
-    return { kind: "missing" };
-  }
-  return { kind: "unknown" };
+  return { kind: "missing" };
 }
 
 function sameFeedback(
@@ -133,7 +126,7 @@ function restoreAttempt(
     if (sameFeedback(feedback, attempt.feedback)) return attempt;
     const currentIdentity = identity(current?.telegram ?? null);
     if (attempt.action === "remove" && currentIdentity.kind === "missing") return attempt;
-    return currentIdentity.kind === "unknown" ? attempt : persistAttempt(port, null);
+    return persistAttempt(port, null);
   }
   if (attempt.phase === "requested" && sameFeedback(feedback, attempt.feedbackBefore)) {
     return persistAttempt(port, null);
@@ -182,13 +175,10 @@ export function TelegramRow(): ReactElement {
   const telegram = current?.telegram ?? null;
   const feedback = current?.feedback ?? null;
   const currentIdentity = identity(telegram);
-  const authoritativeIdentity = useRef<"verified" | "missing" | null>(
-    currentIdentity.kind === "unknown" ? null : currentIdentity.kind,
-  );
+  const authoritativeIdentity = useRef<"verified" | "missing">(currentIdentity.kind);
   const verifiedUsername = currentIdentity.kind === "verified" ? currentIdentity.username : null;
   const username = verifiedUsername ?? attempt?.verifiedUsernameBefore ?? null;
   const configured = username !== null;
-  const identityUnknown = currentIdentity.kind === "unknown";
   const loading = state.status === "closed" || state.status === "loading";
   const busy = loading || settingsMutationActive(settings) || state.status === "working";
   const credentialMutationBlocked = credentialChangesBlocked(settings.credentials, false);
@@ -199,7 +189,7 @@ export function TelegramRow(): ReactElement {
     attempt?.phase === "settled" &&
     attempt.feedback?.tone === "warning" &&
     sameFeedback(feedback, attempt.feedback);
-  const mutationUnsafe = identityUnknown || authoritativeCheckRequired;
+  const mutationUnsafe = authoritativeCheckRequired;
   const panelId = "onboarding-telegram-panel";
 
   useEffect(() => {
@@ -212,7 +202,6 @@ export function TelegramRow(): ReactElement {
   }, [panel, setupReadyForFocus]);
 
   useEffect(() => {
-    if (currentIdentity.kind === "unknown") return;
     const previous = authoritativeIdentity.current;
     authoritativeIdentity.current = currentIdentity.kind;
     if (previous === currentIdentity.kind) return;
@@ -262,7 +251,7 @@ export function TelegramRow(): ReactElement {
         attempt.feedback?.tone === "warning" &&
         feedbackChanged &&
         ((attempt.action === "remove" && currentIdentity.kind === "missing") ||
-          (attempt.action === "paste-token" && currentIdentity.kind !== "unknown"));
+          attempt.action === "paste-token");
       if (recoveredFromUncertain) {
         persistAttempt(port, null);
         setAttempt(null);
@@ -276,7 +265,7 @@ export function TelegramRow(): ReactElement {
         }
         return;
       }
-      if (feedbackChanged && currentIdentity.kind !== "unknown") {
+      if (feedbackChanged) {
         persistAttempt(port, null);
         setAttempt(null);
         setPanelFeedback(null);
@@ -454,19 +443,7 @@ export function TelegramRow(): ReactElement {
         }
         announce={panel === "token" ? "Telegram bot setup opened below this row." : ""}
         trailing={
-          identityUnknown && !configured && panel === "closed" ? (
-            <Button
-              ref={trigger}
-              type="button"
-              variant="ghost"
-              size="sm"
-              data-setup-trigger="telegram"
-              disabled={busy}
-              onClick={checkAgain}
-            >
-              Check again
-            </Button>
-          ) : configured ? (
+          configured ? (
             <Button
               ref={trigger}
               type="button"
