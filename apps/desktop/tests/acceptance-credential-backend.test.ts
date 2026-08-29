@@ -37,15 +37,31 @@ afterEach(async () => {
 });
 
 describe("acceptance credential backend eligibility", () => {
-  it("allows an explicitly requested development memory backend", () => {
+  it("allows an explicitly requested visible development memory backend", () => {
     const readPackageJson = vi.fn(() => {
       throw new Error("must not read");
     });
-    const selected = eligibility({ isPackaged: false, backend: "memory", readPackageJson });
+    const selected = eligibility({
+      isPackaged: false,
+      hidden: false,
+      backend: "memory",
+      readPackageJson,
+    });
     expect(selected?.kind).toBe("memory");
     if (selected?.kind !== "memory") throw new Error("memory backend was not selected");
     expect(selected.key).toHaveLength(32);
     expect(readPackageJson).not.toHaveBeenCalled();
+  });
+
+  it("rejects a persistent development memory backend", () => {
+    expect(
+      eligibility({
+        isPackaged: false,
+        hidden: false,
+        backend: "memory",
+        disposableContext: false,
+      }),
+    ).toBeUndefined();
   });
 
   it("allows the marked packaged Telegram acceptance app", () => {

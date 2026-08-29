@@ -63,12 +63,12 @@ export function resolveAcceptanceCredentialBackend(input: {
   readonly disposableContext: boolean;
   readonly readPackageJson?: (path: string) => string;
 }): AcceptanceCredentialBackend | undefined {
-  if (!input.hidden) return undefined;
   if (!input.isPackaged) {
-    return input.backend === "memory"
+    return input.backend === "memory" && input.disposableContext
       ? { kind: "memory", key: randomBytes(KEYCHAIN_KEY_BYTES) }
       : undefined;
   }
+  if (!input.hidden) return undefined;
   if (
     input.backend !== "file" ||
     !input.disposableContext ||

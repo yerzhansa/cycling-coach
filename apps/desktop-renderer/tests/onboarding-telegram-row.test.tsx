@@ -352,7 +352,7 @@ describe("setup gate Telegram row", () => {
   it.each([
     ["a closed control fallback", CLOSED_UNCONFIGURED],
     ["a redacted saved credential", REDACTED_CONFIGURED],
-  ] as const)("requires a fresh status before token mutation for %s", async (_label, status) => {
+  ] as const)("offers Create for %s", async (_label, status) => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(status));
     const wizard = mountWizard({
@@ -360,14 +360,13 @@ describe("setup gate Telegram row", () => {
     });
     await wizard.open();
 
-    expect(screen.queryByRole("button", { name: "Create Telegram bot" })).toBeNull();
+    const create = screen.getByRole("button", { name: "Create Telegram bot" });
+    expect(create).toBeVisible();
     expect(screen.queryByRole("button", { name: "Delete the Telegram connection" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Check again" }));
-    expect(port.retry).toHaveBeenCalledOnce();
-    expect(port.pasteToken).not.toHaveBeenCalled();
-    publishTelegram(readyTelegramSettings(UNCONFIGURED));
-    expect(screen.getByRole("button", { name: "Create Telegram bot" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    await user.click(create);
+    await user.click(screen.getByRole("button", { name: "Use copied token" }));
+    expect(port.pasteToken).toHaveBeenCalledOnce();
 
     wizard.controller.dispose();
   });

@@ -44,6 +44,7 @@ export type TelegramPowerMonitorPort = Pick<PowerMonitor, "on" | "off">;
 export interface DesktopTelegramPowerLifecycle {
   start(): Promise<TelegramGapWarning>;
   warning(): Promise<TelegramGapWarning>;
+  resetForCreate(): Promise<TelegramGapWarning>;
   acknowledgeWarning(): Promise<TelegramGapWarning>;
   close(): Promise<void>;
 }
@@ -751,6 +752,16 @@ export function createDesktopTelegramPowerLifecycle(
     warning() {
       if (closed) return Promise.resolve(cached);
       return serialize(samplePollingHealth);
+    },
+    resetForCreate() {
+      if (closed) return Promise.resolve(cached);
+      return serialize(async () => {
+        if (closed) return cached;
+        const result = await writeState(emptyState(athleteHome));
+        if (closed || result !== "durably-committed") return cached;
+        scopeMismatch = false;
+        return publish(CLEAR_WARNING);
+      });
     },
     acknowledgeWarning() {
       if (closed) return Promise.resolve(cached);

@@ -252,7 +252,10 @@ export function installDesktopTelegramIpc(input: {
   readonly isTrusted: (event: Pick<IpcMainInvokeEvent, "sender" | "senderFrame">) => boolean;
   readonly coordinator: TelegramControlCoordinator;
   readonly vault: Pick<TelegramCredentialVault, "profileStatus">;
-  readonly power: Pick<DesktopTelegramPowerLifecycle, "warning" | "acknowledgeWarning">;
+  readonly power: Pick<
+    DesktopTelegramPowerLifecycle,
+    "warning" | "resetForCreate" | "acknowledgeWarning"
+  >;
 }): () => Promise<void> {
   let accepting = true;
   let closePromise: Promise<void> | undefined;
@@ -375,9 +378,19 @@ export function installDesktopTelegramIpc(input: {
               current: closedSnapshot(),
             } as const;
           }
-          return profile.state === "configured" || profile.state === "re-prompt"
-            ? input.coordinator.replace(captured.token)
-            : input.coordinator.configure(captured.token);
+          if (profile.state === "configured") {
+            return input.coordinator.replace(captured.token);
+          }
+          const result = await input.coordinator.configure(captured.token);
+          if (
+            result.outcome === "applied" ||
+            (result.outcome === "refused" &&
+              result.reason === "webhook-removal-required" &&
+              result.current.credentialConfigured)
+          ) {
+            await input.power.resetForCreate();
+          }
+          return result;
         });
       },
     ],

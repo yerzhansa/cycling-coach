@@ -2771,11 +2771,6 @@ describe("Telegram main-process control coordinator", () => {
       "telegram-settings-storage-uncertain" as const,
     ],
     [
-      "wrong-home",
-      { state: "wrong-home", enabled: false } as const,
-      "telegram-home-mismatch" as const,
-    ],
-    [
       "re-prompt",
       { state: "re-prompt", enabled: false } as const,
       "telegram-settings-storage-uncertain" as const,
@@ -2815,6 +2810,59 @@ describe("Telegram main-process control coordinator", () => {
       expectNoTelegramMutation(reconcileRuntime);
     },
   );
+
+  it("projects another athlete home's Telegram state as Create and replaces it only on configure", async () => {
+    const statusRuntime = harness({
+      configured: false,
+      enabled: false,
+      daemonSnapshot: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "unconfigured" },
+        pairing: { state: "unpaired" },
+      },
+    });
+    vi.mocked(statusRuntime.vault.desiredState).mockResolvedValueOnce({
+      state: "wrong-home",
+      enabled: false,
+    });
+    vi.mocked(statusRuntime.vault.profileStatus).mockResolvedValueOnce({ state: "wrong-home" });
+
+    await expect(statusRuntime.coordinator.status()).resolves.toEqual({
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "unconfigured" },
+      pairing: { state: "unpaired" },
+      credentialConfigured: false,
+    });
+    expectNoTelegramMutation(statusRuntime);
+
+    const createRuntime = harness({
+      configured: false,
+      enabled: false,
+      daemonSnapshot: snapshot(
+        { desiredState: "disabled", state: "disabled" },
+        { username: OTHER_USERNAME, pairing: { state: "unpaired" } },
+      ),
+    });
+    vi.mocked(createRuntime.vault.desiredState).mockResolvedValueOnce({
+      state: "wrong-home",
+      enabled: false,
+    });
+    vi.mocked(createRuntime.vault.profileStatus).mockResolvedValueOnce({ state: "wrong-home" });
+
+    await expect(createRuntime.coordinator.configure(REPLACEMENT_TOKEN)).resolves.toMatchObject({
+      outcome: "applied",
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "ready", username: OTHER_USERNAME },
+        credentialConfigured: true,
+      },
+    });
+    expect(createRuntime.vault.replaceProfile).toHaveBeenCalledOnce();
+    expect(createRuntime.vault.setDesiredState).toHaveBeenCalledWith(false);
+    expect(createRuntime.binding.configureTelegram).toHaveBeenCalledWith({
+      token: REPLACEMENT_TOKEN,
+    });
+  });
 
   it("projects repair-required settings conservatively without a trustworthy daemon snapshot", async () => {
     const runtime = harness();
