@@ -8,6 +8,9 @@ export interface ArchiveActions {
   close(): void;
   loadEarlier(): void;
   retry(): void;
+  requestDeletion(boundaryRef: string): void;
+  cancelDeletion(): void;
+  confirmDeletion(): void;
 }
 
 export interface ArchiveSlice {

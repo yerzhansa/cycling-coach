@@ -13,6 +13,11 @@ export interface PlanningRequestSourceCleanupInput {
   readonly identity: AuthoredIdentity;
 }
 
+export interface PlanningRequestSourceCleanupTarget {
+  readonly messageIds: readonly string[];
+  readonly attachmentIds: readonly string[];
+}
+
 function intentSummary(intent: string): string {
   const normalized = intent.trim().replace(/\s+/gu, " ");
   return (normalized.length === 0 ? "Plan request" : normalized).slice(0, 2_000);
@@ -65,11 +70,20 @@ function provenance(record: PlanningRequestRecord): PlanningRequestProvenanceSna
 
 export function createPlanningRequestSourceCleanup(
   input: PlanningRequestSourceCleanupInput,
-): (chatId: string) => Promise<void> {
-  return async (chatId) => {
+): (chatId: string, target?: PlanningRequestSourceCleanupTarget) => Promise<void> {
+  return async (chatId, target) => {
     const deviceId = await input.identity.deviceId();
     const outboxRecords = await input.outbox.readByChatId(chatId);
+    const messageIds = target === undefined ? undefined : new Set(target.messageIds);
+    const attachmentIds = target === undefined ? undefined : new Set(target.attachmentIds);
     for (const outboxRecord of outboxRecords) {
+      const selected =
+        target === undefined ||
+        (outboxRecord.payload !== null &&
+          (messageIds?.has(outboxRecord.payload.source.messageId) === true ||
+            (outboxRecord.payload.source.attachmentId !== undefined &&
+              attachmentIds?.has(outboxRecord.payload.source.attachmentId) === true)));
+      if (!selected) continue;
       if (outboxRecord.state === "pending" || outboxRecord.state === "failed") {
         const stamp = input.identity.hlcStamp();
         await input.outbox.cancelUndelivered({
@@ -96,10 +110,7 @@ export function createPlanningRequestSourceCleanup(
           hlcCounter: stamp.counter,
         });
       }
-      if (
-        request.request.lifecycle !== "open" &&
-        request.sourceState.status === "detached_open"
-      ) {
+      if (request.request.lifecycle !== "open" && request.sourceState.status === "detached_open") {
         const stamp = input.identity.hlcStamp();
         request = await input.requests.compactSource({
           requestId: request.request.requestId,

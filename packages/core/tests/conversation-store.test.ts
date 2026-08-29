@@ -26,6 +26,8 @@ import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-po
 
 const roots: string[] = [];
 const RESET_ID = "c".repeat(64);
+const RESET_ID_A = "a".repeat(64);
+const RESET_ID_B = "b".repeat(64);
 
 function makeDataDir(): string {
   const path = mkdtempSync(join(tmpdir(), "conversation-store-"));
@@ -228,6 +230,101 @@ describe("ConversationStore reset transaction recovery", () => {
         .turns.map((record) => record.turnId),
     ).toEqual(["turn-3"]);
     expect(readFileSync(transcriptPath(dataDir, chatId))).toEqual(before);
+  });
+
+  it("deletes only the selected archived session after validating its transcript manifest", () => {
+    const dataDir = makeDataDir();
+    const chatId = "delete-one-archive";
+    const chat = new ChatStore(dataDir);
+    const transcript = new TranscriptStore(dataDir);
+    const resetIds = [RESET_ID_A, RESET_ID_B, RESET_ID];
+    const store = new ConversationStore(chat, transcript, () => resetIds.shift()!);
+    const boundaries = [
+      "2026-07-22T01:00:00.000Z",
+      "2026-07-22T02:00:00.000Z",
+      "2026-07-22T03:00:00.000Z",
+    ];
+    for (let index = 0; index < boundaries.length; index += 1) {
+      store.appendTurn(chatId, `athlete-${index + 1}`, `coach-${index + 1}`, LINEAGE);
+      store.appendCompletedTurn({
+        chatId,
+        turnId: `turn-${index + 1}`,
+        completedAt: `2026-07-22T00:00:0${index}.000Z`,
+        athleteText: `athlete-${index + 1}`,
+        coachText: `coach-${index + 1}`,
+      });
+      store.resetConversation({
+        chatId,
+        boundaryAt: boundaries[index]!,
+        reason: "explicit-reset",
+      });
+    }
+    store.appendTurn(chatId, "athlete-current", "coach-current", LINEAGE);
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-current",
+      completedAt: "2026-07-22T04:00:00.000Z",
+      athleteText: "athlete-current",
+      coachText: "coach-current",
+    });
+    const manifest = store.inspectArchivedConversation(chatId, RESET_ID_B)!;
+
+    expect(store.finalizeArchivedConversationDeletion(chatId, manifest)).toBe(true);
+    expect(store.finalizeArchivedConversationDeletion(chatId, manifest)).toBe(false);
+    expect(resetArchives(dataDir, chatId).sort()).toEqual(
+      [
+        `${sessionName(chatId)}.jsonl.reset.${boundaries[0]!.replace(/:/g, "-")}.${RESET_ID_A}`,
+        `${sessionName(chatId)}.jsonl.reset.${boundaries[2]!.replace(/:/g, "-")}.${RESET_ID}`,
+      ].sort(),
+    );
+    expect(existsSync(sessionPath(dataDir, chatId))).toBe(true);
+    expect(
+      store.listArchivedConversations(chatId).conversations.map(({ boundaryRef }) => boundaryRef),
+    ).toEqual([RESET_ID, RESET_ID_A]);
+    expect(store.readCurrentConversation(chatId).map(({ turnId }) => turnId)).toEqual([
+      "turn-current",
+    ]);
+  });
+
+  it("keeps the exact session archive when transcript inspection becomes stale", () => {
+    const dataDir = makeDataDir();
+    const chatId = "stale-delete-manifest";
+    const chat = new ChatStore(dataDir);
+    const transcript = new TranscriptStore(dataDir);
+    const store = new ConversationStore(chat, transcript, () => RESET_ID_A);
+    store.appendTurn(chatId, "athlete", "coach", LINEAGE);
+    store.appendCompletedTurn({
+      chatId,
+      turnId: "turn-1",
+      completedAt: "2026-07-22T00:00:00.000Z",
+      athleteText: "athlete",
+      coachText: "coach",
+    });
+    store.resetConversation({
+      chatId,
+      boundaryAt: "2026-07-22T01:00:00.000Z",
+      reason: "explicit-reset",
+    });
+    const manifest = store.inspectArchivedConversation(chatId, RESET_ID_A)!;
+    const path = transcriptPath(dataDir, chatId);
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('"athleteText":"athlete"', '"athleteText":"changed"'),
+      { mode: 0o600 },
+    );
+
+    expect(() => store.finalizeArchivedConversationDeletion(chatId, manifest)).toThrow(
+      "Archived conversation changed before deletion completed.",
+    );
+    expect(
+      existsSync(
+        join(
+          dataDir,
+          "sessions",
+          `${sessionName(chatId)}.jsonl.reset.2026-07-22T01-00-00.000Z.${RESET_ID_A}`,
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("fences a pagination cursor after the reset transaction completes", () => {

@@ -177,6 +177,20 @@ function validateAttachment(row: ChatAttachmentRow): void {
   }
 }
 
+function validateCleanupIds(conversationId: string, ids: readonly string[], name: string): void {
+  if (
+    conversationId.length < 1 ||
+    conversationId.length > 512 ||
+    ids.some((id) => !SAFE_ID.test(id)) ||
+    new Set(ids).size !== ids.length
+  ) {
+    throw new ChatAttachmentInvariantError(
+      `invalid_${name}`,
+      `attachment ${name.replaceAll("_", " ")} is invalid`,
+    );
+  }
+}
+
 function mapObject(row: Row): ChatAttachmentObjectRow {
   const value: ChatAttachmentObjectRow = {
     id: String(row.id),
@@ -745,6 +759,58 @@ export function createChatAttachmentRepository(
 
     async markObjectMissing(objectId, updatedAtMs) {
       await this.failObject(objectId, "managed_bytes_missing", updatedAtMs);
+    },
+
+    async prepareAttachmentCleanup({ conversationId, attachmentIds }) {
+      validateCleanupIds(conversationId, attachmentIds, "cleanup_target");
+      if (attachmentIds.length === 0) return [];
+      const placeholders = attachmentIds.map(() => "?").join(",");
+      return (
+        await store.all(
+          `SELECT ${OBJECT_COLUMNS.split(",")
+            .map((column) => `o.${column}`)
+            .join(",")}
+             FROM chat_attachment_object o
+            WHERE o.conversation_id=?
+              AND EXISTS (
+                SELECT 1 FROM chat_attachment selected
+                 WHERE selected.object_id=o.id
+                   AND selected.conversation_id=?
+                   AND selected.id IN (${placeholders})
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_attachment retained
+                 WHERE retained.object_id=o.id
+                   AND retained.id NOT IN (${placeholders})
+              )
+            ORDER BY o.created_at_ms,o.id`,
+          [conversationId, conversationId, ...attachmentIds, ...attachmentIds],
+        )
+      ).map(mapObject);
+    },
+
+    async finalizeAttachmentCleanup({ conversationId, attachmentIds, removedObjectIds }) {
+      validateCleanupIds(conversationId, attachmentIds, "cleanup_target");
+      validateCleanupIds(conversationId, removedObjectIds, "removed_object_ids");
+      if (attachmentIds.length === 0 && removedObjectIds.length === 0) return;
+      await store.transaction(async () => {
+        if (attachmentIds.length > 0) {
+          const placeholders = attachmentIds.map(() => "?").join(",");
+          await store.run(
+            `DELETE FROM chat_attachment
+              WHERE conversation_id=? AND id IN (${placeholders})`,
+            [conversationId, ...attachmentIds],
+          );
+        }
+        for (const objectId of removedObjectIds) {
+          await store.run(
+            `DELETE FROM chat_attachment_object
+              WHERE id=? AND conversation_id=?
+                AND NOT EXISTS (SELECT 1 FROM chat_attachment WHERE object_id=?)`,
+            [objectId, conversationId, objectId],
+          );
+        }
+      });
     },
 
     async cleanupConversation(conversationId) {

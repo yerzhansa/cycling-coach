@@ -19,6 +19,8 @@ import {
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
   ConfigureTelegramRpcParamsSchema,
+  DeleteArchivedConversationRpcParamsSchema,
+  DeleteArchivedConversationRpcResultSchema,
   DeleteTelegramWebhookRpcParamsSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
@@ -328,6 +330,12 @@ describe("coach request and event projection", () => {
       { jsonrpc: "2.0", id: 16, method: "listArchivedConversations", params: {} },
       {
         jsonrpc: "2.0",
+        id: 38,
+        method: "deleteArchivedConversation",
+        params: { boundaryRef: BOUNDARY_REF },
+      },
+      {
+        jsonrpc: "2.0",
         id: 17,
         method: "getArchivedTranscriptPage",
         params: { boundaryRef: BOUNDARY_REF, cursor: null, limit: 25 },
@@ -561,6 +569,28 @@ describe("coach request and event projection", () => {
     expect(ListArchivedConversationsRpcParamsSchema.safeParse({ chatId: "desktop" }).success).toBe(
       false,
     );
+    expect(DeleteArchivedConversationRpcParamsSchema.parse({ boundaryRef: BOUNDARY_REF })).toEqual({
+      boundaryRef: BOUNDARY_REF,
+    });
+    for (const request of [
+      { boundaryRef: BOUNDARY_REF.toUpperCase() },
+      { boundaryRef: BOUNDARY_REF, chatId: "desktop" },
+      {},
+    ]) {
+      expect(DeleteArchivedConversationRpcParamsSchema.safeParse(request).success).toBe(false);
+    }
+    for (const status of ["deleted", "not-found"] as const) {
+      expect(DeleteArchivedConversationRpcResultSchema.parse({ schemaVersion: 1, status })).toEqual(
+        { schemaVersion: 1, status },
+      );
+    }
+    for (const result of [
+      { schemaVersion: 2, status: "deleted" },
+      { schemaVersion: 1, status: "missing" },
+      { schemaVersion: 1, status: "deleted", boundaryRef: BOUNDARY_REF },
+    ]) {
+      expect(DeleteArchivedConversationRpcResultSchema.safeParse(result).success).toBe(false);
+    }
   });
 
   it("rejects every nested non-JSON resolvedCs value at every wire boundary", () => {
@@ -1265,6 +1295,10 @@ describe("coach request and event projection", () => {
         conversations: [],
         truncated: false,
       }),
+      deleteArchivedConversation: async () => ({
+        schemaVersion: 1,
+        status: "deleted" as const,
+      }),
       getArchivedTranscriptPage: async () => ({
         schemaVersion: 1,
         status: "page",
@@ -1446,6 +1480,12 @@ describe("coach request and event projection", () => {
       wireName: "listArchivedConversations",
       requestSchema: ListArchivedConversationsRpcParamsSchema,
       responseSchema: ListArchivedConversationsRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.deleteArchivedConversation).toEqual({
+      wireName: "deleteArchivedConversation",
+      requestSchema: DeleteArchivedConversationRpcParamsSchema,
+      responseSchema: DeleteArchivedConversationRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.getArchivedTranscriptPage).toEqual({
@@ -1639,6 +1679,7 @@ describe("coach request and event projection", () => {
       "hasSession",
       "getTranscriptPage",
       "listArchivedConversations",
+      "deleteArchivedConversation",
       "getArchivedTranscriptPage",
       "getAthleteState",
       "saveIntake",
@@ -1899,7 +1940,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-31 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-32 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1907,8 +1948,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 31,
-      serverProtocolVersion: 31,
+      clientProtocolVersion: 32,
+      serverProtocolVersion: 32,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1917,7 +1958,7 @@ describe("handshake", () => {
 
   it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
     const previous = PROTOCOL_VERSION - 1;
-    expect(previous).toBe(30);
+    expect(previous).toBe(31);
     expect(() =>
       createAcceptedServerHandshakeFrame("service-managed", previous, {
         ...acceptedHandshakeBinding,
@@ -1990,9 +2031,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 31 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 32 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(31);
+    expect(client.clientProtocolVersion).toBe(32);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -2118,7 +2159,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version 31", () => {
-    expect(PROTOCOL_VERSION).toBe(31);
+  it("uses protocol version 32", () => {
+    expect(PROTOCOL_VERSION).toBe(32);
   });
 });

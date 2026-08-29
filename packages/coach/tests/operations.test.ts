@@ -57,9 +57,7 @@ function promiseGate(): { readonly promise: Promise<void>; release(): void } {
 }
 
 function operationRuntime(
-  runWindowAfter: (
-    work: (signal: AbortSignal) => Promise<void>,
-  ) => Promise<
+  runWindowAfter: (work: (signal: AbortSignal) => Promise<void>) => Promise<
     Omit<Awaited<ReturnType<LocalStoreRuntime["runWindowAfter"]>>, "droppedActivities"> & {
       readonly droppedActivities?: DroppedActivities;
     }
@@ -148,6 +146,10 @@ describe("coach operations", () => {
       turns: [],
       nextCursor: null,
     }));
+    const deleteArchivedConversation = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      status: "deleted" as const,
+    }));
     const wiring = {
       home,
       context: context(),
@@ -160,6 +162,7 @@ describe("coach operations", () => {
       ...wiring,
       readArchivedConversations,
       readArchivedTranscriptPage,
+      deleteArchivedConversation,
     });
 
     await expect(operations.listArchivedConversations({})).resolves.toEqual({
@@ -197,12 +200,22 @@ describe("coach operations", () => {
     expect(() => operations.listArchivedConversations({ chatId: "other" } as never)).toThrow();
     expect(readArchivedConversations).toHaveBeenCalledOnce();
     expect(readArchivedTranscriptPage).toHaveBeenCalledOnce();
+    await expect(operations.deleteArchivedConversation({ boundaryRef })).resolves.toEqual({
+      schemaVersion: 1,
+      status: "deleted",
+    });
+    expect(deleteArchivedConversation).toHaveBeenCalledWith({ boundaryRef });
+    expect(() =>
+      operations.deleteArchivedConversation({ boundaryRef: "invalid" } as never),
+    ).toThrow();
+    expect(deleteArchivedConversation).toHaveBeenCalledOnce();
 
     const unwired = createCoachOperations(wiring);
     expect(() => unwired.listArchivedConversations({})).toThrow(TypeError);
     expect(() =>
       unwired.getArchivedTranscriptPage({ boundaryRef, cursor: null, limit: 25 }),
     ).toThrow(TypeError);
+    expect(() => unwired.deleteArchivedConversation({ boundaryRef })).toThrow(TypeError);
   });
 
   it("imports synthetic activity files through the live store and deduplicates reruns", async () => {
@@ -527,7 +540,10 @@ describe("coach operations", () => {
       published: true,
       referenceSucceeded: false,
       requests: { store: 2, reference: 1, total: 3 },
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     });
     expect(importFiles).toHaveBeenCalledTimes(1);
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
@@ -623,7 +639,12 @@ describe("coach operations", () => {
   });
 
   it("reports pending verification instead of a completed keyless sync", async () => {
-    const backfill = vi.fn(async () => ({ pages: 0, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
+    const backfill = vi.fn(async () => ({
+      pages: 0,
+      artifacts: 0,
+      reports: [],
+      droppedActivityRows: { sourceRestricted: 0, other: 0 },
+    }));
     const pending = { value: true };
     const operations = createCoachOperations(
       {
@@ -663,7 +684,12 @@ describe("coach operations", () => {
     };
     const backfill = vi.fn(async () => {
       trace.push("backfill");
-      return { pages: 1, artifacts: 1, reports: [], droppedActivityRows: { sourceRestricted: 60, other: 2 } };
+      return {
+        pages: 1,
+        artifacts: 1,
+        reports: [],
+        droppedActivityRows: { sourceRestricted: 60, other: 2 },
+      };
     });
     const runWindowAfter = vi.fn(async (work: (signal: AbortSignal) => Promise<void>) => {
       trace.push("admitted");
@@ -770,7 +796,12 @@ describe("coach operations", () => {
     ] as const;
     for (const options of pairs) {
       const events: unknown[] = [];
-      const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
+      const backfill = vi.fn(async () => ({
+        pages: 1,
+        artifacts: 0,
+        reports: [],
+        droppedActivityRows: { sourceRestricted: 0, other: 0 },
+      }));
       const refresh = vi.fn();
       const runtime = {
         credentials: intervalsCredentials(options.apiKey, options.athleteId),
@@ -821,7 +852,12 @@ describe("coach operations", () => {
       const refresh = vi.fn();
       const backfill = vi.fn(async () => {
         if (failurePoint === "backfill") throw new Error("synthetic backfill failure");
-        return { pages: 1, artifacts: 1, reports: [], droppedActivityRows: { sourceRestricted: 60, other: 2 } };
+        return {
+          pages: 1,
+          artifacts: 1,
+          reports: [],
+          droppedActivityRows: { sourceRestricted: 60, other: 2 },
+        };
       });
       const runtime = {
         intervals: intervalsCredentials(
@@ -877,7 +913,12 @@ describe("coach operations", () => {
         ]);
         attempt += 1;
         if (attempt === 1) throw new Error("synthetic interruption");
-        return { pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } };
+        return {
+          pages: 1,
+          artifacts: 0,
+          reports: [],
+          droppedActivityRows: { sourceRestricted: 0, other: 0 },
+        };
       });
       const runtime = {
         intervals: intervalsCredentials(

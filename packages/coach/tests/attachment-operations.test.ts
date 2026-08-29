@@ -317,6 +317,96 @@ describe("managed Chat attachment operations", () => {
     expect(JSON.stringify(observations)).not.toContain("desktop");
   });
 
+  it("removes only selected archived attachments and preserves shared bytes", async () => {
+    const sourcePath = join(root, "shared.txt");
+    await writeFile(sourcePath, "shared conversation bytes");
+    const { operations, repository } = createOperations([
+      "object-shared",
+      "attachment-archived",
+      "object-unused",
+      "attachment-retained",
+    ]);
+    const request = {
+      chatId: "desktop",
+      source: "picker" as const,
+      candidate: { kind: "native-path" as const, sourcePath },
+    };
+    await operations.admit({ ...request, selectionId: "selection-archived" });
+    await repository.linkMessage({
+      conversationId: "desktop",
+      messageId: "turn-archived",
+      attachmentIds: ["attachment-archived"],
+      createdAtMs: 101,
+    });
+    await operations.admit({ ...request, selectionId: "selection-retained" });
+    await repository.linkMessage({
+      conversationId: "desktop",
+      messageId: "turn-retained",
+      attachmentIds: ["attachment-retained"],
+      createdAtMs: 102,
+    });
+    const object = (await repository.readObject("object-shared"))!;
+    const objectPath = join(archiveDir, ...object.relative_path.split("/"));
+
+    await operations.cleanupAttachments("desktop", ["attachment-archived"]);
+    await expect(repository.readAttachment("attachment-archived")).resolves.toBeUndefined();
+    await expect(repository.listMessageAttachments("turn-archived")).resolves.toEqual([]);
+    await expect(repository.readAttachment("attachment-retained")).resolves.toMatchObject({
+      object_id: "object-shared",
+    });
+    await expect(readFile(objectPath, "utf8")).resolves.toBe("shared conversation bytes");
+
+    await operations.cleanupAttachments("desktop", ["attachment-retained"]);
+    await operations.cleanupAttachments("desktop", ["attachment-retained"]);
+    await expect(repository.readObject("object-shared")).resolves.toBeUndefined();
+    await expect(readFile(objectPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps targeted metadata when physical byte removal fails", async () => {
+    const sourcePath = join(root, "retry-cleanup.txt");
+    await writeFile(sourcePath, "retry this cleanup");
+    const repository = createChatAttachmentRepository(store);
+    const objects = createManagedChatAttachmentStore({
+      archiveDir,
+      kindByteLimits: { document: 100, activity: 100, workout: 100, image: 100 },
+    });
+    const ids = ["object-retry", "attachment-retry"];
+    const admitting = createManagedChatAttachmentOperations({
+      repository,
+      objects,
+      runExclusive: (work) => work(),
+      randomId: () => ids.shift()!,
+    });
+    await admitting.admit({
+      chatId: "desktop",
+      selectionId: "selection-retry",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath },
+    });
+    await repository.linkMessage({
+      conversationId: "desktop",
+      messageId: "turn-retry",
+      attachmentIds: ["attachment-retry"],
+      createdAtMs: 101,
+    });
+    const failing = createManagedChatAttachmentOperations({
+      repository,
+      objects: {
+        ...objects,
+        removeObject: vi.fn(async () => {
+          throw new Error("managed storage unavailable");
+        }),
+      },
+      runExclusive: (work) => work(),
+    });
+
+    await expect(failing.cleanupAttachments("desktop", ["attachment-retry"])).rejects.toThrow(
+      "managed storage unavailable",
+    );
+    await expect(repository.readAttachment("attachment-retry")).resolves.toBeDefined();
+    await expect(repository.readObject("object-retry")).resolves.toBeDefined();
+  });
+
   it("keeps attachment bytes when the destination cleanup barrier fails", async () => {
     const sourcePath = join(root, "protected.txt");
     await writeFile(sourcePath, "preserve until Plan provenance is safe");

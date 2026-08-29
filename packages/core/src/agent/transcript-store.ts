@@ -12,6 +12,7 @@ import {
   readFileSync,
   readdirSync,
   readSync,
+  renameSync,
   unlinkSync,
   writeSync,
   type Stats,
@@ -83,6 +84,7 @@ type TranscriptWrite = (
 
 interface TranscriptStoreHooks {
   readonly write?: TranscriptWrite;
+  readonly rename?: typeof renameSync;
   readonly syncFile?: (descriptor: number) => void;
   readonly syncDirectory?: (descriptor: number) => void;
   readonly beforeExistingFileOpen?: (path: string) => void;
@@ -332,6 +334,15 @@ export interface ArchivedConversationList {
   readonly truncated: boolean;
 }
 
+export interface ArchivedConversationDeletionManifest {
+  readonly schemaVersion: 1;
+  readonly boundaryRef: string;
+  readonly boundaryAt: string;
+  readonly turnIds: string[];
+  readonly attachmentIds: string[];
+  readonly manifestHash: string;
+}
+
 interface IndexedTranscriptTurn {
   readonly record: Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>;
   readonly start: number;
@@ -347,8 +358,19 @@ interface CurrentTranscriptWindow {
 
 interface ArchivedTranscriptSegment {
   readonly boundary: TranscriptConversationBoundaryRecord;
+  readonly start: number;
   readonly boundaryEnd: number;
   readonly turns: readonly IndexedTranscriptTurn[];
+  readonly trusted: boolean;
+}
+
+export class ArchivedConversationDeletionConflictError extends Error {
+  readonly code = "ARCHIVED_CONVERSATION_DELETION_CONFLICT";
+
+  constructor() {
+    super("Archived conversation changed before deletion completed.");
+    this.name = "ArchivedConversationDeletionConflictError";
+  }
 }
 
 interface DecodedTranscriptCursor {
@@ -862,6 +884,7 @@ function parseArchivedSegments(contents: Buffer, chatId: string): ArchivedTransc
   const segments: ArchivedTranscriptSegment[] = [];
   let trusted = true;
   let turns: IndexedTranscriptTurn[] = [];
+  let segmentStart = 0;
   let lineStart = 0;
   for (let index = 0; index < contents.length; index += 1) {
     if (contents[index] !== 0x0a) continue;
@@ -875,7 +898,14 @@ function parseArchivedSegments(contents: Buffer, chatId: string): ArchivedTransc
       continue;
     }
     if (record.kind === "conversation-boundary") {
-      segments.push({ boundary: record, boundaryEnd: lineStart, turns });
+      segments.push({
+        boundary: record,
+        start: segmentStart,
+        boundaryEnd: lineStart,
+        turns,
+        trusted,
+      });
+      segmentStart = lineStart;
       trusted = true;
       turns = [];
     } else if (trusted) {
@@ -883,6 +913,77 @@ function parseArchivedSegments(contents: Buffer, chatId: string): ArchivedTransc
     }
   }
   return segments;
+}
+
+function archivedConversationManifest(
+  contents: Buffer,
+  segment: ArchivedTranscriptSegment,
+): ArchivedConversationDeletionManifest {
+  if (!segment.trusted) {
+    throw new Error("Archived conversation cannot be safely inspected.");
+  }
+  const turnIds = new Set<string>();
+  const attachmentIds = new Set<string>();
+  for (const { record } of segment.turns) {
+    if ("turnId" in record && typeof record.turnId === "string") {
+      turnIds.add(record.turnId);
+    }
+    if (
+      (record.kind === "turn-completed" || record.kind === "turn-interrupted") &&
+      record.attachments !== undefined
+    ) {
+      for (const attachment of record.attachments) attachmentIds.add(attachment.attachmentId);
+    }
+  }
+  return {
+    schemaVersion: 1,
+    boundaryRef: segment.boundary.resetId,
+    boundaryAt: segment.boundary.boundaryAt,
+    turnIds: [...turnIds],
+    attachmentIds: [...attachmentIds],
+    manifestHash: createHash("sha256")
+      .update(contents.subarray(segment.start, segment.boundaryEnd))
+      .digest("hex"),
+  };
+}
+
+function isArchivedConversationDeletionManifest(
+  value: unknown,
+): value is ArchivedConversationDeletionManifest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    hasExactKeys(record, [
+      "schemaVersion",
+      "boundaryRef",
+      "boundaryAt",
+      "turnIds",
+      "attachmentIds",
+      "manifestHash",
+    ]) &&
+    record.schemaVersion === 1 &&
+    typeof record.boundaryRef === "string" &&
+    RESET_ID_PATTERN.test(record.boundaryRef) &&
+    typeof record.boundaryAt === "string" &&
+    isIsoTimestamp(record.boundaryAt) &&
+    Array.isArray(record.turnIds) &&
+    record.turnIds.every((turnId) => typeof turnId === "string" && turnId.length > 0) &&
+    new Set(record.turnIds).size === record.turnIds.length &&
+    Array.isArray(record.attachmentIds) &&
+    record.attachmentIds.every(
+      (attachmentId) => typeof attachmentId === "string" && attachmentId.length > 0,
+    ) &&
+    new Set(record.attachmentIds).size === record.attachmentIds.length &&
+    typeof record.manifestHash === "string" &&
+    RESET_ID_PATTERN.test(record.manifestHash)
+  );
+}
+
+function sameArchivedConversationDeletionManifest(
+  left: ArchivedConversationDeletionManifest,
+  right: ArchivedConversationDeletionManifest,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function selectArchivedSegment(
@@ -1742,6 +1843,130 @@ export class TranscriptStore implements TranscriptWriterPort {
         closeSync(descriptor);
       }
     });
+  }
+
+  inspectArchivedConversation(
+    chatId: string,
+    boundaryRef: string,
+  ): ArchivedConversationDeletionManifest | null {
+    if (
+      typeof chatId !== "string" ||
+      typeof boundaryRef !== "string" ||
+      !RESET_ID_PATTERN.test(boundaryRef)
+    ) {
+      throw new TypeError("Archived conversation inspection request is invalid.");
+    }
+    return this.withDirectory((directoryDescriptor) => {
+      const path = this.transcriptPath(chatId);
+      const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
+      if (descriptor === null) return null;
+      try {
+        const contents = this.readSnapshot(directoryDescriptor, descriptor, path);
+        if (this.platform === "win32") this.assertWindowsTranscriptContent(contents, chatId);
+        const segments = parseArchivedSegments(contents, chatId);
+        if (new Set(segments.map(({ boundary }) => boundary.resetId)).size !== segments.length) {
+          throw this.unsafeTarget("Transcript contains duplicate reset boundaries.");
+        }
+        const target = this.selectArchivedSegment(segments, boundaryRef);
+        this.assertOpenedFileSafe(descriptor);
+        this.assertDirectoryStable(directoryDescriptor);
+        return target === null ? null : archivedConversationManifest(contents, target);
+      } finally {
+        closeSync(descriptor);
+      }
+    });
+  }
+
+  finalizeArchivedConversationDeletion(
+    chatId: string,
+    manifest: ArchivedConversationDeletionManifest,
+  ): boolean {
+    if (typeof chatId !== "string" || !isArchivedConversationDeletionManifest(manifest)) {
+      throw new TypeError("Archived conversation deletion request is invalid.");
+    }
+    return this.withDirectory((directoryDescriptor) => {
+      const path = this.transcriptPath(chatId);
+      const tempPath = this.deletionTempPath(chatId, manifest.boundaryRef);
+      this.unlinkPrivateFileIfPresent(directoryDescriptor, tempPath, 1);
+      const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
+      if (descriptor === null) return false;
+      let tempDescriptor: number | null = null;
+      let renamed = false;
+      try {
+        const beforeSnapshot = fstatSync(descriptor);
+        const contents = this.readSnapshot(directoryDescriptor, descriptor, path);
+        if (this.platform === "win32") this.assertWindowsTranscriptContent(contents, chatId);
+        const source = fstatSync(descriptor);
+        if (
+          !sameIdentity(identity(beforeSnapshot), identity(source)) ||
+          beforeSnapshot.size !== source.size ||
+          beforeSnapshot.mtimeMs !== source.mtimeMs ||
+          beforeSnapshot.ctimeMs !== source.ctimeMs ||
+          source.size !== contents.length
+        ) {
+          throw new ArchivedConversationDeletionConflictError();
+        }
+        const segments = parseArchivedSegments(contents, chatId);
+        if (new Set(segments.map(({ boundary }) => boundary.resetId)).size !== segments.length) {
+          throw this.unsafeTarget("Transcript contains duplicate reset boundaries.");
+        }
+        const target = this.selectArchivedSegment(segments, manifest.boundaryRef);
+        if (target === null) {
+          this.assertOpenedFileSafe(descriptor);
+          this.assertDirectoryStable(directoryDescriptor);
+          return false;
+        }
+        const current = archivedConversationManifest(contents, target);
+        if (!sameArchivedConversationDeletionManifest(current, manifest)) {
+          throw new ArchivedConversationDeletionConflictError();
+        }
+        const replacement = Buffer.concat([
+          contents.subarray(0, target.start),
+          contents.subarray(target.boundaryEnd),
+        ]);
+        if (this.platform === "win32") this.assertWindowsTranscriptSize(replacement.length);
+        tempDescriptor = this.openNewFile(directoryDescriptor, tempPath, 0, false);
+        this.writeComplete(tempDescriptor, replacement);
+        this.syncFile(tempDescriptor);
+        if (fstatSync(tempDescriptor).size !== replacement.length) {
+          throw this.unsafeTarget("Transcript replacement was incomplete.");
+        }
+        this.assertOpenedPathSafe(directoryDescriptor, descriptor, path);
+        const sourceCurrent = fstatSync(descriptor);
+        if (
+          !sameIdentity(identity(source), identity(sourceCurrent)) ||
+          source.size !== sourceCurrent.size ||
+          source.mtimeMs !== sourceCurrent.mtimeMs ||
+          source.ctimeMs !== sourceCurrent.ctimeMs
+        ) {
+          throw new ArchivedConversationDeletionConflictError();
+        }
+        try {
+          (this.hooks.rename ?? renameSync)(tempPath, path);
+        } catch (error) {
+          throw this.platform === "win32"
+            ? classifyWindowsPrivatePathFailure("rename", error)
+            : error;
+        }
+        renamed = true;
+        this.assertOpenedPathSafe(directoryDescriptor, tempDescriptor, path);
+        this.syncDirectory(directoryDescriptor);
+        this.assertOpenedPathSafe(directoryDescriptor, tempDescriptor, path);
+        return true;
+      } catch (error) {
+        if (!renamed) {
+          try {
+            this.unlinkPrivateFileIfPresent(directoryDescriptor, tempPath, 1);
+          } catch {}
+        }
+        throw this.platform === "win32"
+          ? classifyWindowsPrivatePathFailure("content-write", error)
+          : error;
+      } finally {
+        if (tempDescriptor !== null) closeSync(tempDescriptor);
+        closeSync(descriptor);
+      }
+    }, "content-write");
   }
 
   createResetIntent(input: ResetIntentRecord): void {
@@ -2679,6 +2904,10 @@ export class TranscriptStore implements TranscriptWriterPort {
 
   private transcriptPath(chatId: string): string {
     return join(this.transcriptsDir, `${this.chatDigest(chatId)}.jsonl`);
+  }
+
+  private deletionTempPath(chatId: string, resetId: string): string {
+    return join(this.transcriptsDir, `${this.chatDigest(chatId)}.${resetId}.delete.tmp`);
   }
 
   private intentPath(chatId: string): string {

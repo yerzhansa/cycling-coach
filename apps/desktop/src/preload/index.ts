@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   AttachmentAdmissionReadModelSchema,
   CHAT_ATTACHMENT_LIMITS,
+  DeleteArchivedConversationRpcResultSchema,
   GetArchivedTranscriptPageRpcResultSchema,
   GetPlanningReadModelRpcResultSchema,
   GetTranscriptPageRpcResultSchema,
@@ -35,6 +36,7 @@ import {
   DESKTOP_PLAN_TRANSITION_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
+  DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL,
   DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL,
@@ -1467,6 +1469,17 @@ contextBridge.exposeInMainWorld(
     },
     listArchivedConversations: async () =>
       parseArchivedConversations(await ipcRenderer.invoke(DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL)),
+    deleteArchivedConversation: async (value: unknown, ...args: unknown[]) => {
+      requireZeroArguments(args);
+      if (!boundaryRef(value)) throw new TypeError();
+      const result = DeleteArchivedConversationRpcResultSchema.safeParse(
+        await ipcRenderer.invoke(DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL, {
+          boundaryRef: value,
+        }),
+      );
+      if (!result.success) throw new TypeError();
+      return result.data;
+    },
     getArchivedTranscriptPage: async (input: unknown) => {
       const request = parseArchivedPageRequest(input);
       return parseTranscriptPage(

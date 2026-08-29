@@ -194,6 +194,10 @@ const operations: CoachOperations & PlanningReadOperations = {
     conversations: [],
     truncated: false,
   }),
+  deleteArchivedConversation: async () => ({
+    schemaVersion: 1,
+    status: "deleted",
+  }),
   getArchivedTranscriptPage: async () => ({
     schemaVersion: 1,
     status: "page",
@@ -1723,9 +1727,18 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       ],
       nextCursor: null,
     }));
+    const deleteArchivedConversation = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      status: "deleted" as const,
+    }));
     const rpc = createCoachRpcServer({
       engine: engine(),
-      operations: { ...operations, listArchivedConversations, getArchivedTranscriptPage },
+      operations: {
+        ...operations,
+        listArchivedConversations,
+        deleteArchivedConversation,
+        getArchivedTranscriptPage,
+      },
       token,
       owner: "app-supervised",
     });
@@ -1763,6 +1776,40 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       cursor: null,
       limit: 25,
     });
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "archive-delete",
+        method: "deleteArchivedConversation",
+        params: { boundaryRef },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "archive-delete",
+      result: { schemaVersion: 1, status: "deleted" },
+    });
+    expect(deleteArchivedConversation).toHaveBeenCalledWith({ boundaryRef });
+
+    const renderer = await openSocket(rpc);
+    renderer.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await renderer.frames.next();
+    renderer.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "renderer-archive-delete",
+        method: "deleteArchivedConversation",
+        params: { boundaryRef },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await renderer.frames.next())).toMatchObject({
+      id: "renderer-archive-delete",
+      result: { schemaVersion: 1, status: "deleted" },
+    });
 
     for (const [index, params] of [
       {},
@@ -1799,8 +1846,29 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       id: "archive-list-invalid",
       error: { code: -32602, message: "Invalid params" },
     });
+    for (const [index, params] of [
+      {},
+      { boundaryRef: boundaryRef.toUpperCase() },
+      { boundaryRef, chatId: "other" },
+    ].entries()) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `archive-delete-invalid-${index}`,
+          method: "deleteArchivedConversation",
+          params,
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+        jsonrpc: "2.0",
+        id: `archive-delete-invalid-${index}`,
+        error: { code: -32602, message: "Invalid params" },
+      });
+    }
     expect(listArchivedConversations).toHaveBeenCalledTimes(1);
+    expect(deleteArchivedConversation).toHaveBeenCalledTimes(2);
     expect(getArchivedTranscriptPage).toHaveBeenCalledTimes(1);
+    await renderer.close();
     await client.close();
   });
 

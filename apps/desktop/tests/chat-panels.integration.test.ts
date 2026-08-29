@@ -19,6 +19,7 @@ const hasLoopback = await new Promise<boolean>((resolveAvailability) => {
 });
 
 const token = "t".repeat(43);
+const archivedBoundaryRef = "a".repeat(64);
 const transcriptCursorBytes = Buffer.alloc(114);
 transcriptCursorBytes[0] = 1;
 const transcriptCursor = transcriptCursorBytes.toString("base64url");
@@ -182,6 +183,7 @@ function makeScript(
   let hasSession = false;
   let lastSynced: string = athleteState.lastSynced;
   let queueRevision = 0;
+  let archivedDeleted = false;
   let queueItems: Array<{
     queuedMessageId: string;
     messageId: string;
@@ -524,6 +526,44 @@ ${"nonwrapping".repeat(36)}
           nextCursor: cursor === null ? transcriptCursor : null,
         });
       }
+      if (request.method === "listArchivedConversations") {
+        return response({
+          schemaVersion: 1,
+          conversations: archivedDeleted
+            ? []
+            : [
+                {
+                  boundaryRef: archivedBoundaryRef,
+                  boundaryAt: "2001-01-05T08:00:00.000Z",
+                  reason: "explicit-reset",
+                  turnCount: 1,
+                },
+              ],
+          truncated: false,
+        });
+      }
+      if (request.method === "getArchivedTranscriptPage") {
+        return response({
+          schemaVersion: 1,
+          status: archivedDeleted ? "restart-required" : "page",
+          turns: archivedDeleted
+            ? []
+            : [
+                {
+                  turnId: "archived-turn-1",
+                  completedAt: "2001-01-05T07:00:00.000Z",
+                  athleteText: "How did that block go?",
+                  coachText: "The block was consistent.",
+                },
+              ],
+          nextCursor: null,
+        });
+      }
+      if (request.method === "deleteArchivedConversation") {
+        const status = archivedDeleted ? "not-found" : "deleted";
+        archivedDeleted = true;
+        return response({ schemaVersion: 1, status });
+      }
       if (request.method === "resetSession") {
         hasSession = false;
         queueItems = [];
@@ -676,6 +716,50 @@ async function launch(input: {
     }
   `);
   return { fixture, calls };
+}
+
+async function stackedProjectionGeometry(fixture: RunningDesktopFixture): Promise<{
+  readonly attachmentIssue: boolean;
+  readonly planningIssue: boolean;
+  readonly composerWithinViewport: boolean;
+  readonly disclaimerWithinViewport: boolean;
+  readonly projectionsScrollLocally: boolean;
+  readonly disclaimerStableAfterProjectionScroll: boolean;
+  readonly footerOrder: boolean;
+  readonly documentVerticalOverflow: boolean;
+}> {
+  return fixture.evaluate(`
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const composerWrap = document.querySelector(".composer-wrap");
+    const projections = document.querySelector(".composer-projections");
+    const composer = composerWrap?.querySelector("form");
+    const disclaimer = composerWrap?.querySelector(":scope > p:last-child");
+    if (!(composerWrap instanceof HTMLElement) || !(projections instanceof HTMLElement) ||
+        !(composer instanceof HTMLFormElement) || !(disclaimer instanceof HTMLElement)) {
+      throw new Error("stacked composer surface is incomplete");
+    }
+    const text = composerWrap.textContent ?? "";
+    const wrapRect = composerWrap.getBoundingClientRect();
+    const disclaimerBefore = disclaimer.getBoundingClientRect();
+    projections.scrollTop = projections.scrollHeight;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const disclaimerAfter = disclaimer.getBoundingClientRect();
+    return {
+      attachmentIssue: text.includes("We couldn’t update that attachment. Your message draft is preserved."),
+      planningIssue: text.includes("We couldn’t check saved Plan requests. Reconnect and try again."),
+      composerWithinViewport: wrapRect.top >= 0 && wrapRect.bottom <= window.innerHeight,
+      disclaimerWithinViewport:
+        disclaimerAfter.top >= 0 && disclaimerAfter.bottom <= window.innerHeight,
+      projectionsScrollLocally: getComputedStyle(projections).overflowY === "auto",
+      disclaimerStableAfterProjectionScroll:
+        Math.abs(disclaimerBefore.top - disclaimerAfter.top) < 1 &&
+        Math.abs(disclaimerBefore.bottom - disclaimerAfter.bottom) < 1,
+      footerOrder:
+        projections.nextElementSibling === composer && composer.nextElementSibling === disclaimer,
+      documentVerticalOverflow:
+        document.documentElement.scrollHeight > document.documentElement.clientHeight,
+    };
+  `);
 }
 
 afterEach(async () => {
@@ -1185,6 +1269,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "claudeCliStatus",
         "credentialRecoveryStatus",
         "credentialStatuses",
+        "deleteArchivedConversation",
         "deleteCredential",
         "disableTelegram",
         "enableTelegram",
@@ -1316,6 +1401,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       finalTranscriptClearsComposer: true,
     });
     expect(readingRoom.composerHeight).toBeGreaterThan(0);
+    await fixture.setViewport(1180, 820);
+    expect(await stackedProjectionGeometry(fixture)).toEqual({
+      attachmentIssue: true,
+      planningIssue: true,
+      composerWithinViewport: true,
+      disclaimerWithinViewport: true,
+      projectionsScrollLocally: true,
+      disclaimerStableAfterProjectionScroll: true,
+      footerOrder: true,
+      documentVerticalOverflow: false,
+    });
+    await fixture.setViewport(760, 820);
+    expect(await stackedProjectionGeometry(fixture)).toEqual({
+      attachmentIssue: true,
+      planningIssue: true,
+      composerWithinViewport: true,
+      disclaimerWithinViewport: true,
+      projectionsScrollLocally: true,
+      disclaimerStableAfterProjectionScroll: true,
+      footerOrder: true,
+      documentVerticalOverflow: false,
+    });
     await fixture.setViewport(720, 800);
     const compact = await fixture.evaluate<{
       readonly documentOverflow: boolean;
@@ -1334,8 +1441,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         document.querySelector('[aria-label="Show training context"]')?.click();
         await new Promise((resolve) => requestAnimationFrame(resolve));
         const contextDrawerOpened = document.querySelector('[data-slot="dialog-content"] .training-context') !== null;
-        document.querySelector('[data-slot="dialog-close"]')?.click();
-        await new Promise((resolve) => requestAnimationFrame(resolve));
         conversation.scrollTop = conversation.scrollHeight;
         const composerRect = composer.getBoundingClientRect();
         const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
@@ -1362,6 +1467,29 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       finalTranscriptClearsComposer: true,
     });
     expect(compact.composerHeight).toBeGreaterThan(0);
+    await fixture.pressKey("Tab");
+    await fixture.pressKey("Tab");
+    await fixture.pressKey("Tab", { shift: true });
+    await fixture.pressKey("Escape");
+    expect(
+      await fixture.evaluate<{
+        readonly drawerClosed: boolean;
+        readonly triggerFocused: boolean;
+      }>(`
+        const closeDeadline = Date.now() + 2000;
+        while (
+          document.querySelector('[data-slot="dialog-content"]') !== null &&
+          Date.now() < closeDeadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        const trigger = document.querySelector('[aria-label="Show training context"]');
+        return {
+          drawerClosed: document.querySelector('[data-slot="dialog-content"]') === null,
+          triggerFocused: document.activeElement === trigger,
+        };
+      `),
+    ).toEqual({ drawerClosed: true, triggerFocused: true });
     const reset = await fixture.evaluate<{
       readonly enabledBefore: boolean;
       readonly dialogOpen: boolean;
@@ -2084,10 +2212,120 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     fixtures.splice(fixtures.indexOf(fixture), 1);
   }, 90_000);
 
+  it("deletes one opened past chat through the native confirmation flow", async () => {
+    const { fixture, calls } = await launch({
+      width: 1180,
+      height: 820,
+      reducedMotion: false,
+    });
+    const confirmation = await fixture.evaluate<{
+      readonly entryOpened: boolean;
+      readonly dialogOpen: boolean;
+      readonly cancelFocused: boolean;
+      readonly actionOrder: readonly string[];
+      readonly impactCopy: string;
+    }>(`
+      const archiveNavigation = Array.from(
+        document.querySelectorAll('nav[aria-label="Main navigation"] button'),
+      ).find((entry) => entry.textContent?.includes("Past chats"));
+      archiveNavigation?.click();
+      const entryDeadline = Date.now() + 5000;
+      let entry = document.querySelector("button.archive-entry");
+      while (entry === null && Date.now() < entryDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        entry = document.querySelector("button.archive-entry");
+      }
+      entry?.click();
+      const readerDeadline = Date.now() + 5000;
+      let trigger = document.querySelector("button.archive-delete");
+      while (trigger === null && Date.now() < readerDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        trigger = document.querySelector("button.archive-delete");
+      }
+      trigger?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const dialog = document.querySelector(".archive-delete-dialog");
+      const buttons = Array.from(dialog?.querySelectorAll("button") ?? []);
+      return {
+        entryOpened: document.querySelector('[aria-label="Past conversation"]') !== null,
+        dialogOpen: dialog !== null,
+        cancelFocused: document.activeElement === buttons[0],
+        actionOrder: buttons.map((button) => button.textContent?.trim() ?? ""),
+        impactCopy: dialog?.textContent ?? "",
+      };
+    `);
+    expect(confirmation).toEqual({
+      entryOpened: true,
+      dialogOpen: true,
+      cancelFocused: true,
+      actionOrder: ["Cancel", "Delete conversation"],
+      impactCopy: expect.stringContaining("Imported activities in Training and work in Plan stay."),
+    });
+
+    await fixture.pressKey("Escape");
+    expect(
+      await fixture.evaluate<{
+        readonly dialogClosed: boolean;
+        readonly triggerFocused: boolean;
+      }>(`
+        const closeDeadline = Date.now() + 2000;
+        while (
+          document.querySelector(".archive-delete-dialog") !== null &&
+          Date.now() < closeDeadline
+        ) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        const trigger = document.querySelector("button.archive-delete");
+        return {
+          dialogClosed: document.querySelector(".archive-delete-dialog") === null,
+          triggerFocused: document.activeElement === trigger,
+        };
+      `),
+    ).toEqual({ dialogClosed: true, triggerFocused: true });
+
+    expect(
+      await fixture.evaluate<{
+        readonly dialogClosed: boolean;
+        readonly listEmpty: boolean;
+      }>(`
+        document.querySelector("button.archive-delete")?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const dialog = document.querySelector(".archive-delete-dialog");
+        Array.from(dialog?.querySelectorAll("button") ?? [])
+          .find((button) => button.textContent?.trim() === "Delete conversation")
+          ?.click();
+        const deleteDeadline = Date.now() + 5000;
+        while (
+          (document.querySelector(".archive-delete-dialog") !== null ||
+            document.querySelector(".archive-empty")?.hasAttribute("hidden")) &&
+          Date.now() < deleteDeadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return {
+          dialogClosed: document.querySelector(".archive-delete-dialog") === null,
+          listEmpty:
+            document.querySelector(".archive-empty")?.hasAttribute("hidden") === false &&
+            document.querySelector("button.archive-entry") === null,
+        };
+      `),
+    ).toEqual({ dialogClosed: true, listEmpty: true });
+    expect(calls.filter((call) => call.method === "deleteArchivedConversation")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "deleteArchivedConversation",
+        params: { boundaryRef: archivedBoundaryRef },
+      },
+    ]);
+    expect(calls.filter((call) => call.method === "listArchivedConversations")).toHaveLength(2);
+    expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
+    fixtures.splice(fixtures.indexOf(fixture), 1);
+  }, 90_000);
+
   it("keeps the dark Reading room usable at wide and compact viewports", async () => {
     const { fixture } = await launch({
-      width: 1440,
-      height: 900,
+      width: 1180,
+      height: 820,
       reducedMotion: false,
       colorScheme: "dark",
     });
@@ -2119,8 +2357,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       disclaimerCentered: true,
       contextVisible: true,
     });
+    expect(await stackedProjectionGeometry(fixture)).toEqual({
+      attachmentIssue: true,
+      planningIssue: true,
+      composerWithinViewport: true,
+      disclaimerWithinViewport: true,
+      projectionsScrollLocally: true,
+      disclaimerStableAfterProjectionScroll: true,
+      footerOrder: true,
+      documentVerticalOverflow: false,
+    });
 
-    await fixture.setViewport(720, 800);
+    await fixture.setViewport(760, 820);
+    expect(await stackedProjectionGeometry(fixture)).toEqual({
+      attachmentIssue: true,
+      planningIssue: true,
+      composerWithinViewport: true,
+      disclaimerWithinViewport: true,
+      projectionsScrollLocally: true,
+      disclaimerStableAfterProjectionScroll: true,
+      footerOrder: true,
+      documentVerticalOverflow: false,
+    });
     expect(
       await fixture.evaluate<{
         readonly overflow: boolean;

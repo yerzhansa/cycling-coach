@@ -1,6 +1,8 @@
 import {
   ConfigureRuntimeRpcParamsSchema,
   ConfigureRuntimeRpcResultSchema,
+  DeleteArchivedConversationRpcParamsSchema,
+  DeleteArchivedConversationRpcResultSchema,
   GetArchivedTranscriptPageRpcParamsSchema,
   GetArchivedTranscriptPageRpcResultSchema,
   GetRuntimeConfigRpcParamsSchema,
@@ -27,6 +29,8 @@ import {
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcRefusalReason,
   type ConfigureRuntimeRpcResult,
+  type DeleteArchivedConversationRpcParams,
+  type DeleteArchivedConversationRpcResult,
   type GetArchivedTranscriptPageRpcParams,
   type GetArchivedTranscriptPageRpcResult,
   type GetRuntimeConfigRpcParams,
@@ -83,6 +87,9 @@ export interface CreateCoachOperationsInput {
   readonly readArchivedTranscriptPage?: (
     request: GetArchivedTranscriptPageRpcParams,
   ) => Promise<GetArchivedTranscriptPageRpcResult>;
+  readonly deleteArchivedConversation?: (
+    request: DeleteArchivedConversationRpcParams,
+  ) => Promise<DeleteArchivedConversationRpcResult>;
   readonly applyRuntimeConfig: (
     request: ConfigureRuntimeRpcParams,
     signal: AbortSignal,
@@ -333,6 +340,17 @@ export function createCoachOperations(
       return input
         .readArchivedTranscriptPage(parsedRequest)
         .then((result) => GetArchivedTranscriptPageRpcResultSchema.parse(result));
+    },
+    deleteArchivedConversation(
+      request: DeleteArchivedConversationRpcParams,
+    ): Promise<DeleteArchivedConversationRpcResult> {
+      const parsedRequest = DeleteArchivedConversationRpcParamsSchema.parse(request);
+      if (input.deleteArchivedConversation === undefined) {
+        throw new TypeError("Archived conversation deletion is unavailable.");
+      }
+      return input
+        .deleteArchivedConversation(parsedRequest)
+        .then((result) => DeleteArchivedConversationRpcResultSchema.parse(result));
     },
     configureRuntime(
       request: ConfigureRuntimeRpcParams,

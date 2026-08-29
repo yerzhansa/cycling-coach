@@ -1025,6 +1025,78 @@ export class ChatStore {
     this.pruneArchives(chatId, "reset");
   }
 
+  deleteResetArchive(chatId: string, boundaryRef: string, boundaryAt: string): boolean {
+    if (
+      typeof chatId !== "string" ||
+      !/^[a-f0-9]{64}$/.test(boundaryRef) ||
+      typeof boundaryAt !== "string" ||
+      Number.isNaN(Date.parse(boundaryAt)) ||
+      new Date(boundaryAt).toISOString() !== boundaryAt
+    ) {
+      throw new TypeError("Reset archive deletion metadata is invalid.");
+    }
+    const path = `${this.filePath(chatId)}.reset.${boundaryAt.replace(/:/g, "-")}.${boundaryRef}`;
+    return this.withSessionsDirectory((directoryDescriptor) => {
+      let beforeOpen: import("node:fs").Stats;
+      try {
+        beforeOpen = lstatSync(path);
+      } catch (error) {
+        if (isMissing(error)) {
+          this.assertSessionsDirectoryStable(directoryDescriptor);
+          return false;
+        }
+        throw error;
+      }
+      if (!this.isPrivateFile(beforeOpen, 1)) {
+        throw this.unsafeTarget("Reset archive target is unsafe.");
+      }
+      let descriptor: number;
+      try {
+        descriptor =
+          this.platform === "win32"
+            ? this.openWindowsSessionFile(directoryDescriptor, path, constants.O_RDONLY)
+            : openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ELOOP" || code === "EISDIR" || code === "ENOTDIR") {
+          throw this.unsafeTarget("Reset archive target is unsafe.");
+        }
+        throw error;
+      }
+      try {
+        const opened = fstatSync(descriptor);
+        const current = lstatSync(path);
+        if (
+          !this.isPrivateFile(opened, 1) ||
+          !this.isPrivateFile(current, 1) ||
+          !sameIdentity(identity(beforeOpen), identity(opened)) ||
+          !sameIdentity(identity(opened), identity(current))
+        ) {
+          throw this.unsafeTarget("Reset archive target is unsafe.");
+        }
+        if (this.platform === "win32") {
+          assertWindowsPrivateFileBinding(
+            this.windowsDirectoryBinding!,
+            path,
+            windowsPrivatePathIdentity(opened),
+          );
+        }
+        this.assertSessionsDirectoryStable(directoryDescriptor);
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          throw this.platform === "win32"
+            ? classifyWindowsPrivatePathFailure("rename", error)
+            : error;
+        }
+        this.syncDirectory(directoryDescriptor);
+        return true;
+      } finally {
+        closeSync(descriptor);
+      }
+    }, "rename");
+  }
+
   archivePreCompact(chatId: string): void {
     const path = this.filePath(chatId);
     if (!this.sessionExists(path)) return;

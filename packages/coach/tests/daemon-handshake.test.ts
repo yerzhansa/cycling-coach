@@ -308,6 +308,7 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
           conversations: [],
           truncated: false,
         }),
+        deleteArchivedConversation: async () => ({ schemaVersion: 1, status: "deleted" }),
         getArchivedTranscriptPage: async () => ({
           schemaVersion: 1,
           status: "page",

@@ -37,6 +37,7 @@ import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-po
 const roots: string[] = [];
 const RESET_ID_A = "a".repeat(64);
 const RESET_ID_B = "b".repeat(64);
+const RESET_ID_C = "c".repeat(64);
 
 function makeDataDir(): string {
   const path = mkdtempSync(join(tmpdir(), "transcript-store-"));
@@ -372,6 +373,129 @@ describe("TranscriptStore archived conversation reads", () => {
     store.readArchivedConversationPage(chatId, RESET_ID_A, { cursor: null, limit: 5 });
 
     expect(readFileSync(transcriptPath(dataDir, chatId))).toEqual(before);
+  });
+});
+
+describe("TranscriptStore archived conversation deletion", () => {
+  it("inspects and deletes the oldest, middle, and newest segments without changing current", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-delete-order";
+    const store = new TranscriptStore(dataDir);
+    const append = (turnId: string, attachmentId: string) =>
+      store.appendCompletedTurn({
+        ...turn(chatId, turnId),
+        attachments: [
+          {
+            attachmentId,
+            displayName: `${attachmentId}.txt`,
+            kind: "document" as const,
+            extension: "txt" as const,
+          },
+        ],
+      });
+    append("turn-1", "attachment-1");
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    append("turn-2", "attachment-2");
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_B));
+    append("turn-3", "attachment-3");
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_C));
+    append("turn-4", "attachment-current");
+
+    const middle = store.inspectArchivedConversation(chatId, RESET_ID_B);
+    expect(middle).toMatchObject({
+      schemaVersion: 1,
+      boundaryRef: RESET_ID_B,
+      boundaryAt: "2026-07-22T01:00:00.000Z",
+      turnIds: ["turn-2"],
+      attachmentIds: ["attachment-2"],
+      manifestHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(store.finalizeArchivedConversationDeletion(chatId, middle!)).toBe(true);
+    expect(
+      store.listArchivedConversations(chatId).conversations.map((item) => item.boundaryRef),
+    ).toEqual([RESET_ID_C, RESET_ID_A]);
+    expect(
+      store
+        .readArchivedConversationPage(chatId, RESET_ID_A, { cursor: null, limit: 10 })
+        .turns.map(({ turnId }) => turnId),
+    ).toEqual(["turn-1"]);
+    expect(
+      store
+        .readArchivedConversationPage(chatId, RESET_ID_C, { cursor: null, limit: 10 })
+        .turns.map(({ turnId }) => turnId),
+    ).toEqual(["turn-3"]);
+
+    const oldest = store.inspectArchivedConversation(chatId, RESET_ID_A);
+    expect(store.finalizeArchivedConversationDeletion(chatId, oldest!)).toBe(true);
+    expect(
+      store.listArchivedConversations(chatId).conversations.map((item) => item.boundaryRef),
+    ).toEqual([RESET_ID_C]);
+
+    const newest = store.inspectArchivedConversation(chatId, RESET_ID_C);
+    expect(store.finalizeArchivedConversationDeletion(chatId, newest!)).toBe(true);
+    expect(store.listArchivedConversations(chatId)).toEqual({
+      schemaVersion: 1,
+      conversations: [],
+      truncated: false,
+    });
+    expect(store.readCurrentConversation(chatId).map(({ turnId }) => turnId)).toEqual(["turn-4"]);
+    expect(readFileSync(transcriptPath(dataDir, chatId), "utf8")).toContain("attachment-current");
+    expect(readFileSync(transcriptPath(dataDir, chatId), "utf8")).not.toContain("attachment-1");
+    expect(readFileSync(transcriptPath(dataDir, chatId), "utf8")).not.toContain("attachment-2");
+    expect(readFileSync(transcriptPath(dataDir, chatId), "utf8")).not.toContain("attachment-3");
+  });
+
+  it("makes not-found finalization idempotent and invalidates a deleted segment cursor", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-delete-idempotent";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.appendCompletedTurn(turn(chatId, "turn-2"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    store.appendCompletedTurn(turn(chatId, "turn-3"));
+    const page = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: null,
+      limit: 1,
+    });
+    const manifest = store.inspectArchivedConversation(chatId, RESET_ID_A)!;
+
+    expect(page.nextCursor).not.toBeNull();
+    expect(store.finalizeArchivedConversationDeletion(chatId, manifest)).toBe(true);
+    expect(store.inspectArchivedConversation(chatId, RESET_ID_A)).toBeNull();
+    expect(store.finalizeArchivedConversationDeletion(chatId, manifest)).toBe(false);
+    expect(
+      store.finalizeArchivedConversationDeletion("missing", {
+        ...manifest,
+        boundaryRef: RESET_ID_B,
+      }),
+    ).toBe(false);
+    expect(() =>
+      store.readArchivedConversationPage(chatId, RESET_ID_A, {
+        cursor: page.nextCursor,
+        limit: 1,
+      }),
+    ).toThrow(TypeError);
+    expect(store.readCurrentConversation(chatId).map(({ turnId }) => turnId)).toEqual(["turn-3"]);
+  });
+
+  it("rejects a manifest when the selected archived bytes changed", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-delete-conflict";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+    const manifest = store.inspectArchivedConversation(chatId, RESET_ID_A)!;
+    const path = transcriptPath(dataDir, chatId);
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('"athleteText":"athlete"', '"athleteText":"changed"'),
+      { mode: 0o600 },
+    );
+
+    expect(() => store.finalizeArchivedConversationDeletion(chatId, manifest)).toThrow(
+      "Archived conversation changed before deletion completed.",
+    );
+    expect(store.listArchivedConversations(chatId).conversations).toHaveLength(1);
   });
 });
 

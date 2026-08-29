@@ -255,6 +255,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "resumeCoachDecision",
   "getTranscriptPage",
   "listArchivedConversations",
+  "deleteArchivedConversation",
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getPlanningReadModel",
@@ -633,6 +634,25 @@ export const ListArchivedConversationsRpcResultSchema = z
   });
 export type ListArchivedConversationsRpcResult = z.infer<
   typeof ListArchivedConversationsRpcResultSchema
+>;
+
+export const DeleteArchivedConversationRpcParamsSchema = z
+  .object({
+    boundaryRef: ArchivedConversationBoundaryRefSchema,
+  })
+  .strict();
+export type DeleteArchivedConversationRpcParams = z.infer<
+  typeof DeleteArchivedConversationRpcParamsSchema
+>;
+
+export const DeleteArchivedConversationRpcResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    status: z.enum(["deleted", "not-found"]),
+  })
+  .strict();
+export type DeleteArchivedConversationRpcResult = z.infer<
+  typeof DeleteArchivedConversationRpcResultSchema
 >;
 
 export const AbsoluteImportPathSchema = PlatformAbsolutePathSchema;
@@ -1242,6 +1262,9 @@ export interface CoachOperations {
   listArchivedConversations(
     request: ListArchivedConversationsRpcParams,
   ): Promise<ListArchivedConversationsRpcResult>;
+  deleteArchivedConversation(
+    request: DeleteArchivedConversationRpcParams,
+  ): Promise<DeleteArchivedConversationRpcResult>;
   getArchivedTranscriptPage(
     request: GetArchivedTranscriptPageRpcParams,
   ): Promise<GetArchivedTranscriptPageRpcResult>;
@@ -1491,6 +1514,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("listArchivedConversations"),
       params: ListArchivedConversationsRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("deleteArchivedConversation"),
+      params: DeleteArchivedConversationRpcParamsSchema,
     })
     .strict(),
   z
@@ -2091,6 +2122,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "listArchivedConversations",
     requestSchema: ListArchivedConversationsRpcParamsSchema,
     responseSchema: ListArchivedConversationsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  deleteArchivedConversation: {
+    wireName: "deleteArchivedConversation",
+    requestSchema: DeleteArchivedConversationRpcParamsSchema,
+    responseSchema: DeleteArchivedConversationRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getArchivedTranscriptPage: {

@@ -69,11 +69,16 @@ function harness(input: {
     readonly cursor: string | null;
     readonly limit: number;
   }) => Promise<TranscriptPage>;
+  readonly deleteConversation?: (
+    boundaryRef: string,
+  ) => Promise<{ readonly schemaVersion: 1; readonly status: "deleted" | "not-found" }>;
 }) {
   const states: ArchiveViewState[] = [];
   const controller = createArchiveController({
     listConversations: input.listConversations ?? (async () => list()),
     readPage: input.readPage ?? (async () => page(["turn-1"])),
+    deleteConversation:
+      input.deleteConversation ?? (async () => ({ schemaVersion: 1, status: "deleted" })),
     view: {
       render(state) {
         states.push(state);
@@ -385,5 +390,128 @@ describe("archive controller reader", () => {
     expect(subject.current().reading).toMatchObject({ boundaryRef: NEWER, status: "ready" });
     expect(subject.current().reading?.turns.map((turn) => turn.turnId)).toEqual(["turn-9"]);
     expect(readPage).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("archive controller deletion", () => {
+  it.each(["deleted", "not-found"] as const)(
+    "treats %s as success, closes the reader, and refetches the whole list",
+    async (status) => {
+      const listConversations = vi
+        .fn<() => Promise<ArchivedConversationList>>()
+        .mockResolvedValueOnce(list(true))
+        .mockResolvedValueOnce({
+          schemaVersion: 1,
+          conversations: [list().conversations[1]!],
+          truncated: false,
+        });
+      const deleteConversation = vi.fn(async () => ({ schemaVersion: 1 as const, status }));
+      const subject = harness({ listConversations, deleteConversation });
+
+      await subject.controller.refresh();
+      await subject.controller.open(NEWER);
+      subject.controller.requestDeletion(NEWER);
+      expect(subject.current().deletion).toEqual({
+        boundaryRef: NEWER,
+        status: "confirming",
+      });
+
+      await subject.controller.confirmDeletion();
+
+      expect(deleteConversation).toHaveBeenCalledOnce();
+      expect(deleteConversation).toHaveBeenCalledWith(NEWER);
+      expect(listConversations).toHaveBeenCalledTimes(2);
+      expect(subject.current()).toMatchObject({
+        listStatus: "ready",
+        truncated: false,
+        reading: null,
+        deletion: null,
+      });
+      expect(subject.current().conversations.map((entry) => entry.boundaryRef)).toEqual([OLDER]);
+    },
+  );
+
+  it("keeps a failed deletion open for an explicit retry", async () => {
+    const deleteConversation = vi
+      .fn<
+        () => Promise<{
+          readonly schemaVersion: 1;
+          readonly status: "deleted" | "not-found";
+        }>
+      >()
+      .mockRejectedValueOnce(new Error("unavailable"))
+      .mockResolvedValueOnce({ schemaVersion: 1, status: "deleted" });
+    const subject = harness({ deleteConversation });
+
+    await subject.controller.refresh();
+    await subject.controller.open(NEWER);
+    subject.controller.requestDeletion(NEWER);
+    await subject.controller.confirmDeletion();
+
+    expect(subject.current().reading?.boundaryRef).toBe(NEWER);
+    expect(subject.current().deletion).toEqual({ boundaryRef: NEWER, status: "failed" });
+
+    await subject.controller.confirmDeletion();
+
+    expect(deleteConversation).toHaveBeenCalledTimes(2);
+    expect(subject.current().reading).toBeNull();
+    expect(subject.current().deletion).toBeNull();
+  });
+
+  it("cancels confirmation but cannot dismiss or duplicate an in-flight deletion", async () => {
+    let release!: () => void;
+    const pendingDelete = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deleteConversation = vi.fn(async () => {
+      await pendingDelete;
+      return { schemaVersion: 1 as const, status: "deleted" as const };
+    });
+    const subject = harness({ deleteConversation });
+
+    await subject.controller.refresh();
+    await subject.controller.open(NEWER);
+    subject.controller.requestDeletion(NEWER);
+    subject.controller.cancelDeletion();
+    expect(subject.current().deletion).toBeNull();
+
+    subject.controller.requestDeletion(NEWER);
+    const first = subject.controller.confirmDeletion();
+    const second = subject.controller.confirmDeletion();
+    subject.controller.cancelDeletion();
+    subject.controller.close();
+
+    expect(first).toBe(second);
+    expect(deleteConversation).toHaveBeenCalledOnce();
+    expect(subject.current().deletion).toEqual({ boundaryRef: NEWER, status: "deleting" });
+    expect(subject.current().reading?.boundaryRef).toBe(NEWER);
+
+    release();
+    await first;
+    expect(subject.current().reading).toBeNull();
+  });
+
+  it("ignores a deletion completion after disposal", async () => {
+    let release!: () => void;
+    const pendingDelete = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const subject = harness({
+      deleteConversation: async () => {
+        await pendingDelete;
+        return { schemaVersion: 1, status: "deleted" };
+      },
+    });
+
+    await subject.controller.refresh();
+    await subject.controller.open(NEWER);
+    subject.controller.requestDeletion(NEWER);
+    const deletion = subject.controller.confirmDeletion();
+    const beforeDispose = subject.current();
+    subject.controller.dispose();
+    release();
+    await deletion;
+
+    expect(subject.current()).toBe(beforeDispose);
   });
 });

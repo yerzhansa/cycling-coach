@@ -167,6 +167,15 @@ export interface ChatAttachmentRepository {
   listMessageAttachments(messageId: string): Promise<readonly ChatAttachmentRow[]>;
   listObjects(): Promise<readonly ChatAttachmentObjectRow[]>;
   markObjectMissing(objectId: string, updatedAtMs: number): Promise<void>;
+  prepareAttachmentCleanup(input: {
+    readonly conversationId: string;
+    readonly attachmentIds: readonly string[];
+  }): Promise<readonly ChatAttachmentObjectRow[]>;
+  finalizeAttachmentCleanup(input: {
+    readonly conversationId: string;
+    readonly attachmentIds: readonly string[];
+    readonly removedObjectIds: readonly string[];
+  }): Promise<void>;
   cleanupConversation(conversationId: string): Promise<readonly ChatAttachmentObjectRow[]>;
   hasObject(objectId: string): Promise<boolean>;
   deleteFailedObject(objectId: string): Promise<void>;

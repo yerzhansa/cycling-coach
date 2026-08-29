@@ -58,6 +58,7 @@ interface AuthBridge {
   initialSetupStatusSettled(input: unknown): Promise<unknown>;
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
+  deleteArchivedConversation(boundaryRef: unknown): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
   getPlanningReadModel(): Promise<unknown>;
   getPlanState(): Promise<unknown>;
@@ -345,6 +346,7 @@ describe("desktop preload ChatGPT auth", () => {
         "claudeCliStatus",
         "credentialStatuses",
         "credentialRecoveryStatus",
+        "deleteArchivedConversation",
         "deleteCredential",
         "disableTelegram",
         "enableTelegram",
@@ -1278,6 +1280,43 @@ describe("desktop preload ChatGPT auth", () => {
     await expect(
       bridge.getArchivedTranscriptPage({ boundaryRef: BOUNDARY_REF, cursor: null, limit: 25 }),
     ).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("validates archived conversation deletion at both sides of IPC", async () => {
+    const deleted = { schemaVersion: 1, status: "deleted" };
+    mocks.invoke.mockResolvedValueOnce(deleted);
+
+    const result = await bridge.deleteArchivedConversation(BOUNDARY_REF);
+    expect(result).toEqual(deleted);
+    expect(result).not.toBe(deleted);
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:delete-archived-conversation", {
+      boundaryRef: BOUNDARY_REF,
+    });
+
+    mocks.invoke.mockClear();
+    for (const boundaryRef of [BOUNDARY_REF.toUpperCase(), "a".repeat(63), "z".repeat(64), null]) {
+      await expect(bridge.deleteArchivedConversation(boundaryRef)).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    }
+    await expect(
+      (bridge.deleteArchivedConversation as (...args: unknown[]) => Promise<unknown>)(
+        BOUNDARY_REF,
+        "extra",
+      ),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    for (const response of [
+      { schemaVersion: 2, status: "deleted" },
+      { schemaVersion: 1, status: "missing" },
+      { schemaVersion: 1, status: "not-found", path: "/private/transcript" },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(response);
+      await expect(bridge.deleteArchivedConversation(BOUNDARY_REF)).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    }
   });
 
   it("returns strict copied update states from zero-argument channels", async () => {

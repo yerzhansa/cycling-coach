@@ -132,9 +132,11 @@ export {
   MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
   MAX_TRANSCRIPT_PAGE_TURNS,
   MAX_TRANSCRIPT_RECORD_BYTES,
+  ArchivedConversationDeletionConflictError,
   UnsafeTranscriptTargetError,
 } from "./agent/transcript-store.js";
 export type {
+  ArchivedConversationDeletionManifest,
   ArchivedConversationList,
   ArchivedConversationSummary,
   TranscriptPageRequest,
