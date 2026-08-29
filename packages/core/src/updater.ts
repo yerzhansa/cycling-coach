@@ -1,10 +1,12 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { binaryEnvVar } from "./binary.js";
 import { enumerateTelegramSessions } from "./channels/telegram-sessions.js";
+import { atomicWriteFileSync } from "./io/atomic-write-file-sync.js";
+import { withInterprocessFileLockSync } from "./io/interprocess-file-lock-sync.js";
 
 export interface UpdateInfo {
   current: string;
@@ -110,6 +112,22 @@ export function getCurrentVersion(binaryName: string): string {
 const NPM_REGISTRY = "https://registry.npmjs.org";
 const PING_ENDPOINT = "https://ping.enduragent.icu/v1/check";
 const INSTANCE_ID_FILE = "instance-id";
+const LAST_VERSION_PING_AT_FILE = "last-version-ping-at";
+const VERSION_PING_LOCK = ".version-ping.lock";
+const VERSION_CHECK_CACHE_TTL_MS = 5 * 60 * 1000;
+const VERSION_PING_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+interface CachedUpdateInfo {
+  readonly cachedAt: number;
+  readonly info: UpdateInfo;
+}
+
+interface ActiveUpdateCheck {
+  readonly promise: Promise<UpdateInfo | null>;
+}
+
+const updateInfoCache = new Map<string, CachedUpdateInfo>();
+const activeUpdateChecks = new Map<string, ActiveUpdateCheck>();
 
 function isDevOrTest(): boolean {
   return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
@@ -134,8 +152,7 @@ export function getInstanceId(dataDir: string): string {
   return id;
 }
 
-export function buildCheckUrl(binaryName: string, dataDir?: string): string {
-  if (isDevOrTest()) return `${NPM_REGISTRY}/${binaryName}/latest`;
+export function buildVersionPingUrl(binaryName: string, dataDir?: string): string {
   const params = new URLSearchParams({
     bin: binaryName,
     version: getCurrentVersion(binaryName),
@@ -145,39 +162,131 @@ export function buildCheckUrl(binaryName: string, dataDir?: string): string {
   return `${PING_ENDPOINT}?${params}`;
 }
 
-export async function checkForUpdate(
-  binaryName: string,
-  dataDir?: string,
-): Promise<UpdateInfo | null> {
+export function buildCheckUrl(binaryName: string, dataDir?: string): string {
+  if (isDevOrTest()) return `${NPM_REGISTRY}/${binaryName}/latest`;
+  return buildVersionPingUrl(binaryName, dataDir);
+}
+
+function getCachedUpdateInfo(binaryName: string): UpdateInfo | null {
+  const cached = updateInfoCache.get(binaryName);
+  if (cached === undefined) return null;
+  const age = Date.now() - cached.cachedAt;
+  if (age >= 0 && age < VERSION_CHECK_CACHE_TTL_MS) return cached.info;
+  updateInfoCache.delete(binaryName);
+  return null;
+}
+
+function rememberUpdateInfo(binaryName: string, info: UpdateInfo | null): UpdateInfo | null {
+  if (info !== null) {
+    updateInfoCache.set(binaryName, {
+      cachedAt: Date.now(),
+      info,
+    });
+  }
+  return info;
+}
+
+async function fetchUpdateInfo(binaryName: string, url: string): Promise<UpdateInfo | null> {
   const current = getCurrentVersion(binaryName);
-  const parse = async (res: Response): Promise<UpdateInfo | null> => {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
-    const data = (await res.json()) as { version: string };
+    const data = (await res.json()) as { version?: unknown };
+    if (typeof data.version !== "string") return null;
     return {
       current,
       latest: data.version,
       updateAvailable: isUpdateAvailable(data.version, current),
     };
-  };
-  try {
-    const res = await fetch(buildCheckUrl(binaryName, dataDir), {
-      signal: AbortSignal.timeout(5000),
-    });
-    const info = await parse(res);
-    if (info) return info;
-  } catch {
-    // fall through to npm fallback
-  }
-  // In dev/test the primary request WAS npm — don't retry the same host.
-  if (isDevOrTest()) return null;
-  try {
-    const res = await fetch(`${NPM_REGISTRY}/${binaryName}/latest`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    return await parse(res);
   } catch {
     return null;
   }
+}
+
+function startActiveUpdateCheck(
+  binaryName: string,
+  task: () => Promise<UpdateInfo | null>,
+): Promise<UpdateInfo | null> {
+  let operation: ActiveUpdateCheck;
+  const promise = Promise.resolve()
+    .then(task)
+    .then((info) => rememberUpdateInfo(binaryName, info))
+    .finally(() => {
+      if (activeUpdateChecks.get(binaryName) === operation) {
+        activeUpdateChecks.delete(binaryName);
+      }
+    });
+  operation = { promise };
+  activeUpdateChecks.set(binaryName, operation);
+  return promise;
+}
+
+function readLastPingAt(path: string): number | null {
+  try {
+    const timestamp = Date.parse(readFileSync(path, "utf-8").trim());
+    return Number.isFinite(timestamp) ? timestamp : null;
+  } catch {
+    return null;
+  }
+}
+
+function claimDailyVersionPing(dataDir: string): boolean {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    return withInterprocessFileLockSync(join(dataDir, VERSION_PING_LOCK), () => {
+      const now = Date.now();
+      const statePath = join(dataDir, LAST_VERSION_PING_AT_FILE);
+      const lastPingAt = readLastPingAt(statePath);
+      if (lastPingAt !== null && now - lastPingAt < VERSION_PING_INTERVAL_MS) return false;
+      atomicWriteFileSync(statePath, `${new Date(now).toISOString()}\n`);
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function fetchTelemetryUpdate(
+  binaryName: string,
+  dataDir: string,
+  priorResult?: UpdateInfo | null,
+): Promise<UpdateInfo | null> {
+  const pingResult = await fetchUpdateInfo(binaryName, buildVersionPingUrl(binaryName, dataDir));
+  if (pingResult !== null) return pingResult;
+  if (priorResult !== undefined) return priorResult;
+  const cached = getCachedUpdateInfo(binaryName);
+  if (cached !== null) return cached;
+  return fetchUpdateInfo(binaryName, `${NPM_REGISTRY}/${binaryName}/latest`);
+}
+
+export function checkForUpdate(binaryName: string, _dataDir?: string): Promise<UpdateInfo | null> {
+  const active = activeUpdateChecks.get(binaryName);
+  if (active !== undefined) return active.promise;
+  const cached = getCachedUpdateInfo(binaryName);
+  if (cached !== null) return Promise.resolve(cached);
+  return startActiveUpdateCheck(binaryName, () =>
+    fetchUpdateInfo(binaryName, `${NPM_REGISTRY}/${binaryName}/latest`),
+  );
+}
+
+export function checkForUpdateWithDailyTelemetry(
+  binaryName: string,
+  dataDir: string,
+): Promise<UpdateInfo | null> {
+  if (isDevOrTest() || !claimDailyVersionPing(dataDir)) return checkForUpdate(binaryName);
+  const active = activeUpdateChecks.get(binaryName);
+  if (active === undefined) {
+    return startActiveUpdateCheck(binaryName, () => fetchTelemetryUpdate(binaryName, dataDir));
+  }
+  return startActiveUpdateCheck(binaryName, async () => {
+    const priorResult = await active.promise;
+    return fetchTelemetryUpdate(binaryName, dataDir, priorResult);
+  });
+}
+
+export function __resetVersionCheckStateForTesting(): void {
+  updateInfoCache.clear();
+  activeUpdateChecks.clear();
 }
 
 /**

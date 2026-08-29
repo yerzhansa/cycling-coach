@@ -13,11 +13,11 @@ Access to a self-hosted Telegram bot is limited to an allowlist you control — 
 
 ### Update checks & usage counting
 
-To check whether a newer version exists, Cycling Coach makes one background HTTPS request to `ping.enduragent.icu`. That endpoint returns the latest published version (the same answer `registry.npmjs.org` gives) and records an anonymous usage count so the project can see roughly how many instances are running across install channels. The count contains no personal information.
+As part of its background version-check behavior, Cycling Coach can make an HTTPS request to `ping.enduragent.icu`. That endpoint returns the latest published version (the same answer `registry.npmjs.org` gives) and records an anonymous usage count so the project can see roughly how many instances are running across install channels. The count contains no personal information.
 
-The check runs on Telegram-mode startup and again every 24 hours (so a long-running deployment learns about new releases without a restart). The same request powers the "update available" notification and the `/whatsnew` and `/update` commands. In development and test the bot talks to `registry.npmjs.org` directly instead; if the `ping.enduragent.icu` endpoint is ever unreachable, the bot silently falls back to `registry.npmjs.org`, so update checks keep working either way.
+The bot attempts telemetry on Telegram-mode startup and again every 24 hours, but a timestamp in the installation data directory limits it to at most once in any 24-hour period even across restarts. The timestamp is saved before the request, so a crash or an unreachable endpoint cannot retry telemetry for 24 hours. If the endpoint is unavailable or rate-limited, the bot silently falls back to `registry.npmjs.org` for the version result.
 
-Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable the automatic background checks (both the startup check and the daily re-check). The operator-initiated `/update` and `/whatsnew` commands still query the endpoint — those are explicit requests, not background checks (and `/whatsnew` also reaches the GitHub Releases API for release notes). In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
+Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable the automatic background checks (both the startup check and the daily re-check). The operator-initiated `/update` and `/whatsnew` commands never initiate telemetry; their version lookups use `registry.npmjs.org` and reuse a recent or already-running result. `/whatsnew` also reaches the GitHub Releases API for release notes. In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
 
 Desktop does not fetch release notes in the background. Choosing **What’s new** explicitly contacts
 `registry.npmjs.org` for the latest published version and the GitHub Releases API for that exact
