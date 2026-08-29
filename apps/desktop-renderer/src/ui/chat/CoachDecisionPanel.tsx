@@ -93,6 +93,7 @@ export function CoachDecisionPanel(props: {
     if (decision?.status !== "unanswered" || phase !== "idle") return;
     const onShortcut = (event: KeyboardEvent): void => {
       if (event.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"]') !== null) return;
       if (event.key === "Escape") {
         event.preventDefault();
         skipDecision(decision.decisionId);

@@ -304,6 +304,7 @@ async function security() {
             "claudeCliStatus",
             "credentialRecoveryStatus",
             "credentialStatuses",
+            "deleteArchivedConversation",
             "deleteCredential",
             "disableTelegram",
             "enableTelegram",

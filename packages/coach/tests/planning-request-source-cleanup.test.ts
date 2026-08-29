@@ -207,4 +207,83 @@ describe("Planning request source cleanup", () => {
       sourceState: { status: "detached_open" },
     });
   });
+
+  it("cleans only sources selected by archived turn or attachment", async () => {
+    const crypto = createNodeCrypto();
+    const outbox = createChatPlanOutboxRepository(store, crypto);
+    const requests = createPlanningRequestRepository(store, crypto);
+    const selectedPending = payload("selected-pending", "turn-selected");
+    const unrelatedPending = payload("unrelated-pending", "turn-retained");
+    const selectedDelivered = payload("selected-delivered", "message-not-selected", {
+      source: {
+        chatId: "chat-1",
+        messageId: "message-not-selected",
+        attachmentId: "attachment-selected",
+      },
+      sourceSnapshot: {
+        ...payload("selected-delivered", "message-not-selected").sourceSnapshot,
+        attachment: {
+          attachmentId: "attachment-selected",
+          displayName: "tempo-3x12.mrc",
+          extension: "mrc",
+        },
+      },
+    });
+    const unrelatedDelivered = payload("unrelated-delivered", "message-retained");
+
+    await outbox.createOrGet({ payload: selectedPending, createdAtMs: 100 });
+    await outbox.createOrGet({ payload: unrelatedPending, createdAtMs: 101 });
+    for (const [createdAtMs, requestPayload] of [
+      [102, selectedDelivered],
+      [106, unrelatedDelivered],
+    ] as const) {
+      await outbox.createOrGet({ payload: requestPayload, createdAtMs });
+      await outbox.beginDelivery({
+        requestId: requestPayload.requestId,
+        attemptedAtMs: createdAtMs + 1,
+      });
+      await requests.createOrGet({
+        payload: requestPayload,
+        target: "active_plan",
+        createdAtMs: createdAtMs + 2,
+        deviceId: "device-1",
+        hlcPhysicalMs: createdAtMs + 2,
+        hlcCounter: 0,
+      });
+      await outbox.markDelivered({
+        requestId: requestPayload.requestId,
+        deliveredAtMs: createdAtMs + 3,
+      });
+    }
+
+    const cleanup = createPlanningRequestSourceCleanup({ outbox, requests, identity });
+    await cleanup("chat-1", {
+      messageIds: ["turn-selected"],
+      attachmentIds: ["attachment-selected"],
+    });
+
+    await expect(outbox.read("selected-pending")).resolves.toMatchObject({
+      state: "cancelled",
+      payload: null,
+    });
+    await expect(outbox.read("unrelated-pending")).resolves.toMatchObject({
+      state: "pending",
+      payload: unrelatedPending,
+    });
+    await expect(outbox.read("selected-delivered")).resolves.toMatchObject({
+      state: "delivered",
+      payload: null,
+    });
+    await expect(requests.read("selected-delivered")).resolves.toMatchObject({
+      sourceState: { status: "detached_open" },
+    });
+    await expect(outbox.read("unrelated-delivered")).resolves.toMatchObject({
+      state: "delivered",
+      payload: unrelatedDelivered,
+      sourceDeletedAtMs: null,
+    });
+    await expect(requests.read("unrelated-delivered")).resolves.toMatchObject({
+      sourceState: { status: "linked" },
+    });
+  });
 });

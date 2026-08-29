@@ -11,6 +11,8 @@ export const DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL =
 export const DESKTOP_TRANSCRIPT_PAGE_CHANNEL = "desktop:get-transcript-page" as const;
 export const DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL =
   "desktop:list-archived-conversations" as const;
+export const DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL =
+  "desktop:delete-archived-conversation" as const;
 export const DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL =
   "desktop:get-archived-transcript-page" as const;
 export const DESKTOP_PLANNING_READ_CHANNEL = "desktop:planning:read" as const;

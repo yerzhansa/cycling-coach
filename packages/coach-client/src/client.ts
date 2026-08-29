@@ -139,6 +139,7 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   hasSession: 30_000,
   getTranscriptPage: 30_000,
   listArchivedConversations: 30_000,
+  deleteArchivedConversation: 30_000,
   getArchivedTranscriptPage: 30_000,
   getAthleteState: 30_000,
   getPlanningReadModel: 30_000,

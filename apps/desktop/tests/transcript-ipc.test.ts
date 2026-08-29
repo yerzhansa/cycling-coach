@@ -14,6 +14,7 @@ import {
 import {
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
+  DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
 } from "../src/main/constants.js";
 import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
@@ -55,6 +56,10 @@ function setup(
   readPage = vi.fn(async () => page),
   readArchivedConversations = vi.fn(async () => conversations),
   readArchivedPage = vi.fn(async () => page),
+  deleteArchivedConversation = vi.fn(async () => ({
+    schemaVersion: 1 as const,
+    status: "deleted" as const,
+  })),
 ) {
   const handlers = new Map<string, Handler>();
   const ipcMain = {
@@ -69,6 +74,7 @@ function setup(
     currentWindow: () => window as never,
     readPage,
     readArchivedConversations,
+    deleteArchivedConversation,
     readArchivedPage,
   });
   return {
@@ -78,6 +84,7 @@ function setup(
     readPage,
     readArchivedConversations,
     readArchivedPage,
+    deleteArchivedConversation,
     trusted: { sender: webContents, senderFrame: mainFrame },
   };
 }
@@ -237,11 +244,56 @@ describe("desktop transcript IPC", () => {
     ).rejects.toThrow("desktop transcript unavailable");
   });
 
+  it("deletes one strict archived conversation from the trusted main frame", async () => {
+    const subject = setup();
+    const handler = subject.handlers.get(DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL)!;
+
+    await expect(handler(subject.trusted, { boundaryRef: BOUNDARY_REF })).resolves.toEqual({
+      schemaVersion: 1,
+      status: "deleted",
+    });
+    expect(subject.deleteArchivedConversation).toHaveBeenCalledWith({
+      boundaryRef: BOUNDARY_REF,
+    });
+
+    for (const args of [
+      [],
+      [{}],
+      [{ boundaryRef: BOUNDARY_REF.toUpperCase() }],
+      [{ boundaryRef: BOUNDARY_REF, extra: true }],
+      [{ boundaryRef: BOUNDARY_REF }, { extra: true }],
+    ]) {
+      await expect(handler(subject.trusted, ...args)).rejects.toThrow(
+        "invalid desktop transcript request",
+      );
+    }
+    await expect(
+      handler({ sender: {}, senderFrame: { url: RENDERER_URL } }, { boundaryRef: BOUNDARY_REF }),
+    ).rejects.toThrow("untrusted desktop transcript request");
+    expect(subject.deleteArchivedConversation).toHaveBeenCalledOnce();
+
+    const malformed = setup(
+      undefined,
+      undefined,
+      undefined,
+      vi.fn(async () => ({ schemaVersion: 1 as const, status: "missing" as never })),
+    );
+    await expect(
+      malformed.handlers.get(DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL)!(malformed.trusted, {
+        boundaryRef: BOUNDARY_REF,
+      }),
+    ).rejects.toThrow("desktop transcript unavailable");
+  });
+
   it("uses one deadline-aware client per archived read and closes it", async () => {
     const client = {
-      call: vi.fn(async (method: string) =>
-        method === "listArchivedConversations" ? conversations : page,
-      ),
+      call: vi.fn(async (method: string) => {
+        if (method === "listArchivedConversations") return conversations;
+        if (method === "deleteArchivedConversation") {
+          return { schemaVersion: 1 as const, status: "deleted" as const };
+        }
+        return page;
+      }),
       close: vi.fn(async () => {}),
     };
     const connect = vi.fn(async () => client);
@@ -255,16 +307,22 @@ describe("desktop transcript IPC", () => {
     );
 
     await expect(reader.listArchivedConversations({})).resolves.toEqual(conversations);
+    await expect(reader.deleteArchivedConversation({ boundaryRef: BOUNDARY_REF })).resolves.toEqual(
+      { schemaVersion: 1, status: "deleted" },
+    );
     await expect(
       reader.getArchivedTranscriptPage({ boundaryRef: BOUNDARY_REF, cursor: null, limit: 25 }),
     ).resolves.toEqual(page);
     expect(client.call).toHaveBeenNthCalledWith(1, "listArchivedConversations", {});
-    expect(client.call).toHaveBeenNthCalledWith(2, "getArchivedTranscriptPage", {
+    expect(client.call).toHaveBeenNthCalledWith(2, "deleteArchivedConversation", {
+      boundaryRef: BOUNDARY_REF,
+    });
+    expect(client.call).toHaveBeenNthCalledWith(3, "getArchivedTranscriptPage", {
       boundaryRef: BOUNDARY_REF,
       cursor: null,
       limit: 25,
     });
-    expect(client.close).toHaveBeenCalledTimes(2);
+    expect(client.close).toHaveBeenCalledTimes(3);
   });
 
   it("removes every transcript channel during shutdown", () => {
@@ -273,6 +331,7 @@ describe("desktop transcript IPC", () => {
     for (const channel of [
       DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
       DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
+      DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
       DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
     ]) {
       expect(subject.handlers.has(channel)).toBe(false);

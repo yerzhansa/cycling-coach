@@ -17,6 +17,7 @@ export interface ArchivedConversationList {
 
 export type ArchiveListStatus = "idle" | "loading" | "ready" | "failed";
 export type ArchiveReadingStatus = "loading" | "ready" | "failed" | "unavailable";
+export type ArchiveDeletionStatus = "confirming" | "deleting" | "failed";
 
 export interface ArchiveReadingState {
   readonly boundaryRef: string;
@@ -26,11 +27,22 @@ export interface ArchiveReadingState {
   readonly hasEarlier: boolean;
 }
 
+export interface ArchiveDeletionState {
+  readonly boundaryRef: string;
+  readonly status: ArchiveDeletionStatus;
+}
+
+export interface DeleteArchivedConversationResult {
+  readonly schemaVersion: 1;
+  readonly status: "deleted" | "not-found";
+}
+
 export interface ArchiveViewState {
   readonly listStatus: ArchiveListStatus;
   readonly conversations: readonly ArchivedConversationEntry[];
   readonly truncated: boolean;
   readonly reading: ArchiveReadingState | null;
+  readonly deletion: ArchiveDeletionState | null;
 }
 
 export interface ArchiveView {
@@ -43,6 +55,9 @@ export interface ArchiveController {
   close(): void;
   loadEarlier(): Promise<void>;
   retry(): Promise<void>;
+  requestDeletion(boundaryRef: string): void;
+  cancelDeletion(): void;
+  confirmDeletion(): Promise<void>;
   dispose(): void;
 }
 
@@ -51,6 +66,7 @@ export const EMPTY_ARCHIVE_SURFACE: ArchiveViewState = Object.freeze({
   conversations: Object.freeze([]),
   truncated: false,
   reading: null,
+  deletion: null,
 });
 
 function uniqueTurns(
@@ -72,13 +88,16 @@ export function createArchiveController(input: {
     readonly cursor: string | null;
     readonly limit: number;
   }) => Promise<TranscriptPage>;
+  readonly deleteConversation: (boundaryRef: string) => Promise<DeleteArchivedConversationResult>;
   readonly view: ArchiveView;
 }): ArchiveController {
   let state = EMPTY_ARCHIVE_SURFACE;
   let disposed = false;
   let readerEpoch = 0;
+  let listEpoch = 0;
   let listTask: Promise<void> | undefined;
   let pageTask: Promise<void> | undefined;
+  let deletionTask: Promise<void> | undefined;
   let nextCursor: string | null = null;
   let failedCursor: string | null | undefined;
 
@@ -95,11 +114,12 @@ export function createArchiveController(input: {
   const loadList = (): Promise<void> => {
     if (disposed) return Promise.resolve();
     if (listTask !== undefined) return listTask;
+    const requestEpoch = listEpoch;
     publish({ ...state, listStatus: "loading" });
     const pending = (async () => {
       try {
         const listed = await input.listConversations();
-        if (disposed) return;
+        if (disposed || listEpoch !== requestEpoch) return;
         publish({
           ...state,
           listStatus: "ready",
@@ -107,7 +127,9 @@ export function createArchiveController(input: {
           truncated: listed.truncated,
         });
       } catch {
-        if (!disposed) publish({ ...state, listStatus: "failed" });
+        if (!disposed && listEpoch === requestEpoch) {
+          publish({ ...state, listStatus: "failed" });
+        }
       }
     })();
     listTask = pending;
@@ -173,7 +195,7 @@ export function createArchiveController(input: {
       return loadList();
     },
     open(boundaryRef) {
-      if (disposed) return Promise.resolve();
+      if (disposed || state.deletion?.status === "deleting") return Promise.resolve();
       readerEpoch += 1;
       pageTask = undefined;
       nextCursor = null;
@@ -181,6 +203,7 @@ export function createArchiveController(input: {
       const entry = state.conversations.find((value) => value.boundaryRef === boundaryRef);
       publish({
         ...state,
+        deletion: null,
         reading: {
           boundaryRef,
           boundaryAt: entry?.boundaryAt ?? null,
@@ -192,12 +215,14 @@ export function createArchiveController(input: {
       return loadPage(boundaryRef, null);
     },
     close() {
-      if (disposed || state.reading === null) return;
+      if (disposed || state.reading === null || state.deletion?.status === "deleting") {
+        return;
+      }
       readerEpoch += 1;
       pageTask = undefined;
       nextCursor = null;
       failedCursor = undefined;
-      publish({ ...state, reading: null });
+      publish({ ...state, reading: null, deletion: null });
     },
     loadEarlier() {
       const reading = state.reading;
@@ -214,11 +239,62 @@ export function createArchiveController(input: {
       }
       return state.listStatus === "failed" ? loadList() : Promise.resolve();
     },
+    requestDeletion(boundaryRef) {
+      if (disposed || deletionTask !== undefined || state.reading?.boundaryRef !== boundaryRef) {
+        return;
+      }
+      publish({ ...state, deletion: { boundaryRef, status: "confirming" } });
+    },
+    cancelDeletion() {
+      if (disposed || state.deletion === null || state.deletion.status === "deleting") return;
+      publish({ ...state, deletion: null });
+    },
+    confirmDeletion() {
+      if (disposed) return Promise.resolve();
+      if (deletionTask !== undefined) return deletionTask;
+      const deletion = state.deletion;
+      if (deletion === null || deletion.status === "deleting") return Promise.resolve();
+      const boundaryRef = deletion.boundaryRef;
+      publish({ ...state, deletion: { boundaryRef, status: "deleting" } });
+      const pending = (async () => {
+        try {
+          await input.deleteConversation(boundaryRef);
+          if (disposed || state.deletion?.boundaryRef !== boundaryRef) return;
+          readerEpoch += 1;
+          pageTask = undefined;
+          nextCursor = null;
+          failedCursor = undefined;
+          listEpoch += 1;
+          listTask = undefined;
+          publish({
+            ...state,
+            listStatus: "idle",
+            conversations: state.conversations.filter(
+              (conversation) => conversation.boundaryRef !== boundaryRef,
+            ),
+            reading: null,
+            deletion: null,
+          });
+          await loadList();
+        } catch {
+          if (!disposed && state.deletion?.boundaryRef === boundaryRef) {
+            publish({ ...state, deletion: { boundaryRef, status: "failed" } });
+          }
+        }
+      })();
+      deletionTask = pending;
+      void pending.finally(() => {
+        if (deletionTask === pending) deletionTask = undefined;
+      });
+      return pending;
+    },
     dispose() {
       disposed = true;
       readerEpoch += 1;
+      listEpoch += 1;
       listTask = undefined;
       pageTask = undefined;
+      deletionTask = undefined;
     },
   };
 }

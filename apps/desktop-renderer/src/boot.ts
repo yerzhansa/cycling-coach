@@ -314,6 +314,8 @@ export function bootRenderer(): Disposer {
   const archiveController = createArchiveController({
     listConversations: () => window.enduragentAuth.listArchivedConversations(),
     readPage: (request) => window.enduragentAuth.getArchivedTranscriptPage(request),
+    deleteConversation: (boundaryRef) =>
+      window.enduragentAuth.deleteArchivedConversation(boundaryRef),
     view: archiveAdapter.view,
   });
   store.getState().bindArchiveActions({
@@ -322,6 +324,9 @@ export function bootRenderer(): Disposer {
     close: () => archiveController.close(),
     loadEarlier: () => void archiveController.loadEarlier(),
     retry: () => void archiveController.retry(),
+    requestDeletion: (boundaryRef) => archiveController.requestDeletion(boundaryRef),
+    cancelDeletion: () => archiveController.cancelDeletion(),
+    confirmDeletion: () => void archiveController.confirmDeletion(),
   });
 
   const firstSyncController = createFirstSyncController({

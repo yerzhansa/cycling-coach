@@ -195,7 +195,7 @@ describe("completed activity attachments", () => {
     const activityId = String(
       (await value.store.get("SELECT session_key FROM session LIMIT 1"))?.session_key,
     );
-    await value.attachments.cleanupConversation("chat-1");
+    await value.attachments.cleanupAttachments("chat-1", [value.attachmentId]);
     expect(await value.repository.readAttachment(value.attachmentId)).toBeUndefined();
     expect(
       await value.store.get("SELECT session_key FROM session WHERE session_key=?", [activityId]),

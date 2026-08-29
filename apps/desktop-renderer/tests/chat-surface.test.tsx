@@ -428,6 +428,50 @@ describe("chat surface", () => {
       expect(screen.getByRole("button", { name: "Show training context" })).toBeInTheDocument();
     });
 
+    it("keeps compact drawer focus trapped and lets Escape restore its trigger", async () => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(private readonly callback: ResizeObserverCallback) {}
+
+          observe(): void {
+            this.callback(
+              [{ contentRect: { width: 760 } } as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            );
+          }
+
+          disconnect(): void {}
+
+          unobserve(): void {}
+        },
+      );
+      const user = userEvent.setup();
+      setChat({ decision: unansweredDecision(), sendDisabled: true, inputDisabled: false });
+
+      try {
+        render(<Harness />);
+        const trigger = await screen.findByRole("button", { name: "Show training context" });
+        await user.click(trigger);
+        const dialog = screen.getByRole("dialog", { name: "Training context" });
+
+        expect(dialog.contains(document.activeElement)).toBe(true);
+        await user.tab();
+        await user.tab();
+        await user.tab({ shift: true });
+        await user.tab({ shift: true });
+        expect(dialog).toBeInTheDocument();
+        expect(trigger).not.toHaveFocus();
+        await user.keyboard("{Escape}");
+
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        expect(trigger).toHaveFocus();
+        expect(actions.skipDecision).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it("projects only available workout, Load, and cycling-anchor facts", () => {
       act(() => {
         useEnduragentStore.setState({
@@ -695,7 +739,51 @@ describe("chat surface", () => {
       expect(form?.nextElementSibling).toBe(disclaimer);
       expect(disclaimer.parentElement).toHaveClass("composer-wrap");
       expect(disclaimer.parentElement).toHaveClass("bg-bg");
+      expect(disclaimer.parentElement).toHaveClass("max-h-full", "overflow-hidden");
       expect(disclaimer).toHaveClass("mt-inset", "text-xs");
+      expect(document.querySelector(".composer-projections")).toHaveClass(
+        "min-h-0",
+        "overflow-y-auto",
+        "overscroll-contain",
+      );
+    });
+
+    it("orders decision, attachment, and queued work before the composer", () => {
+      setChat({
+        decision: unansweredDecision(),
+        sendDisabled: true,
+        inputDisabled: false,
+        attachmentBusy: true,
+        queued: [{ id: "queued-1", text: "Later work", command: false, restored: false }],
+      });
+      render(<Harness />);
+
+      const projections = document.querySelector(".composer-projections");
+      const decision = screen
+        .getByText("Coach needs your answer")
+        .closest("section")?.parentElement;
+      const attachment = screen.getByText("Adding files…").parentElement;
+      const queue = screen.getByRole("region", { name: "Queued messages, 1 queued message" });
+      const form = composer().closest("form");
+
+      if (
+        !(projections instanceof HTMLElement) ||
+        !(decision instanceof HTMLElement) ||
+        !(attachment instanceof HTMLElement) ||
+        !(form instanceof HTMLFormElement)
+      ) {
+        throw new TypeError("Composer projections are incomplete.");
+      }
+      expect(decision.parentElement).toBe(projections);
+      expect(attachment.parentElement).toBe(projections);
+      expect(queue.parentElement).toBe(projections);
+      expect(
+        decision.compareDocumentPosition(attachment) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        attachment.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(projections.nextElementSibling).toBe(form);
     });
 
     it("focuses the enabled composer when Chat mounts after required setup", () => {

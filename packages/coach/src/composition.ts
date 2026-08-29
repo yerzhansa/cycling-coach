@@ -589,6 +589,9 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   readonly getArchivedTranscriptPage: (
     request: GetArchivedTranscriptPageRpcParams,
   ) => Promise<GetArchivedTranscriptPageRpcResult>;
+  readonly withChatStore: <T>(
+    operation: (store: ConversationStorePort) => Promise<T>,
+  ) => Promise<T>;
   replace<T>(
     prepare: () => T | Promise<T>,
     commit: (prepared: T) => RuntimeBundle | Promise<RuntimeBundle>,
@@ -659,6 +662,7 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
       run(async (bundle) =>
         bundle.chatStore.readArchivedConversationPage("desktop", boundaryRef, request),
       ),
+    withChatStore: (operation) => run((bundle) => operation(bundle.chatStore)),
     async replace(prepare, commit) {
       pendingReplacements += 1;
       const previousAdmission = admission;
@@ -1042,7 +1046,9 @@ export async function createLocalCoachComposition(
     const observeAttachment = (observation: AttachmentObservation): void => {
       observeChatAttachment(logger, observation);
     };
-    let cleanupPlanningRequestSources: ((conversationId: string) => Promise<void>) | undefined;
+    let cleanupPlanningRequestSources:
+      | ReturnType<typeof createPlanningRequestSourceCleanup>
+      | undefined;
     const attachmentRepository = createChatAttachmentRepository(input.context.store);
     const attachmentObjects = createManagedChatAttachmentStore({
       archiveDir: input.home.archiveDir,
@@ -1829,6 +1835,26 @@ export async function createLocalCoachComposition(
         readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
         readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
         readArchivedTranscriptPage: (request) => reconfigurable.getArchivedTranscriptPage(request),
+        deleteArchivedConversation: ({ boundaryRef }) =>
+          reconfigurable.withChatStore(async (chatStore) => {
+            const manifest = chatStore.inspectArchivedConversation("desktop", boundaryRef);
+            if (manifest === null) {
+              return { schemaVersion: 1, status: "not-found" };
+            }
+            if (cleanupPlanningRequestSources === undefined) {
+              throw new Error("Planning request source cleanup is unavailable.");
+            }
+            await cleanupPlanningRequestSources("desktop", {
+              messageIds: manifest.turnIds,
+              attachmentIds: manifest.attachmentIds,
+            });
+            await attachmentOperations.cleanupAttachments("desktop", manifest.attachmentIds);
+            const deleted = chatStore.finalizeArchivedConversationDeletion("desktop", manifest);
+            return {
+              schemaVersion: 1,
+              status: deleted ? "deleted" : "not-found",
+            };
+          }),
         applyRuntimeConfig,
         verifyIntervalsCredential,
         intervalsVerificationPending,

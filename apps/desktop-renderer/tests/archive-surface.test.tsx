@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,6 +23,9 @@ function archiveActions(): ArchiveActions {
     close: vi.fn(),
     loadEarlier: vi.fn(),
     retry: vi.fn(),
+    requestDeletion: vi.fn(),
+    cancelDeletion: vi.fn(),
+    confirmDeletion: vi.fn(),
   };
 }
 
@@ -77,6 +80,7 @@ const LISTED: ArchiveViewState = {
   ],
   truncated: false,
   reading: null,
+  deletion: null,
 };
 
 function reading(patch: Partial<ArchiveReadingState> = {}): ArchiveViewState {
@@ -261,6 +265,79 @@ describe("past chats reader", () => {
       "This conversation is no longer available.",
     );
     expect(region.querySelector("button.archive-retry")).toHaveAttribute("hidden");
+  });
+
+  it("explains permanent deletion, focuses Cancel, and restores the trigger on Escape", async () => {
+    const user = userEvent.setup();
+    let actions!: ArchiveActions;
+    const requestDeletion = vi.fn((boundaryRef: string) => {
+      set(
+        {
+          ...reading(),
+          deletion: { boundaryRef, status: "confirming" },
+        },
+        actions,
+      );
+    });
+    const cancelDeletion = vi.fn(() => {
+      set(reading(), actions);
+    });
+    actions = { ...archiveActions(), requestDeletion, cancelDeletion };
+    render(<ArchiveView />);
+    set(reading(), actions);
+
+    const trigger = screen.getByRole("button", { name: "Delete conversation" });
+    await user.click(trigger);
+
+    expect(requestDeletion).toHaveBeenCalledWith(NEWER);
+    const dialog = screen.getByRole("dialog", { name: "Delete this conversation?" });
+    expect(dialog).toHaveTextContent(
+      "This permanently removes this past conversation and its original attachments from this computer. Imported activities in Training and work in Plan stay.",
+    );
+    const buttons = within(dialog).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual(["Cancel", "Delete conversation"]);
+    await waitFor(() => expect(buttons[0]).toHaveFocus());
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(cancelDeletion).toHaveBeenCalledOnce();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps deletion modal while busy and offers an explicit retry after failure", async () => {
+    const user = userEvent.setup();
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    set(
+      {
+        ...reading(),
+        deletion: { boundaryRef: NEWER, status: "deleting" },
+      },
+      actions,
+    );
+
+    let dialog = screen.getByRole("dialog", { name: "Delete this conversation?" });
+    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Delete conversation" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Delete this conversation?" })).toBeInTheDocument();
+    expect(actions.cancelDeletion).not.toHaveBeenCalled();
+
+    set(
+      {
+        ...reading(),
+        deletion: { boundaryRef: NEWER, status: "failed" },
+      },
+      actions,
+    );
+    dialog = screen.getByRole("dialog", { name: "Delete this conversation?" });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "Deletion could not finish. Try again to complete it.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Try again" }));
+    expect(actions.confirmDeletion).toHaveBeenCalledOnce();
   });
 });
 

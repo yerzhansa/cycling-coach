@@ -811,7 +811,7 @@ async function runDesktop(): Promise<void> {
       const binding = activeRuntimeBinding;
       const lifecycleState = daemonLifecycle?.snapshot();
       if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
-      const page = await read(binding.transcript);
+      const value = await read(binding.transcript);
       const currentLifecycleState = daemonLifecycle?.snapshot();
       if (
         activeRuntimeBinding !== binding ||
@@ -820,7 +820,7 @@ async function runDesktop(): Promise<void> {
       ) {
         throw new TypeError();
       }
-      return page;
+      return value;
     };
     const readActivePlanning = async () => {
       const binding = activeRuntimeBinding;
@@ -1272,6 +1272,8 @@ async function runDesktop(): Promise<void> {
       readPage: (request) => readActiveTranscript((reader) => reader.getTranscriptPage(request)),
       readArchivedConversations: (request) =>
         readActiveTranscript((reader) => reader.listArchivedConversations(request)),
+      deleteArchivedConversation: (request) =>
+        readActiveTranscript((reader) => reader.deleteArchivedConversation(request)),
       readArchivedPage: (request) =>
         readActiveTranscript((reader) => reader.getArchivedTranscriptPage(request)),
     });
@@ -1290,7 +1292,7 @@ async function runDesktop(): Promise<void> {
           planning.executePlanTransition(request, (event) => {
             if (isCurrent()) onEvent(event);
           }),
-         ),
+        ),
     });
     disposeTrainingExportIpc = installDesktopTrainingExportIpc({
       ipcMain,

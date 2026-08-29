@@ -43,6 +43,7 @@ export interface ManagedChatAttachmentOperations {
   saveDraftText(conversationId: string, text: string): Promise<void>;
   retryDraftAttachment(conversationId: string, attachmentId: string): Promise<void>;
   clearDraft(conversationId: string): Promise<void>;
+  cleanupAttachments(conversationId: string, attachmentIds: readonly string[]): Promise<void>;
   cleanupConversation(conversationId: string): Promise<void>;
   reconcile(): Promise<void>;
 }
@@ -333,6 +334,40 @@ export function createManagedChatAttachmentOperations(
           updatedAtMs: now(),
         });
       });
+    },
+
+    async cleanupAttachments(conversationId, attachmentIds) {
+      const startedAt = now();
+      try {
+        const count = await input.runExclusive(async () => {
+          const objects = await input.repository.prepareAttachmentCleanup({
+            conversationId,
+            attachmentIds,
+          });
+          for (const object of objects) await input.objects.removeObject(object.relative_path);
+          await input.repository.finalizeAttachmentCleanup({
+            conversationId,
+            attachmentIds,
+            removedObjectIds: objects.map((object) => object.id),
+          });
+          return attachmentIds.length;
+        });
+        input.observe?.({
+          operation: "cleanup",
+          kind: "unknown",
+          result: "succeeded",
+          count,
+          durationMs: now() - startedAt,
+        });
+      } catch (error) {
+        input.observe?.({
+          operation: "cleanup",
+          kind: "unknown",
+          result: "failed",
+          durationMs: now() - startedAt,
+        });
+        throw error;
+      }
     },
 
     async cleanupConversation(conversationId) {

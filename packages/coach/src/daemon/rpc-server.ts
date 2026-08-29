@@ -521,6 +521,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "hasSession",
   "getTranscriptPage",
   "listArchivedConversations",
+  "deleteArchivedConversation",
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getPlanningReadModel",
@@ -1294,6 +1295,17 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                   generic.data.params,
                 );
               result = await input.operations.listArchivedConversations(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "deleteArchivedConversation":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.deleteArchivedConversation.requestSchema.parse(
+                  generic.data.params,
+                );
+              result = await input.operations.deleteArchivedConversation(request);
             } catch (error) {
               invocationFailure = { error };
             }

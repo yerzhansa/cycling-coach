@@ -1,11 +1,15 @@
 import { connectCoachClient, type CoachClient } from "@enduragent/coach-client";
 import {
+  DeleteArchivedConversationRpcParamsSchema,
+  DeleteArchivedConversationRpcResultSchema,
   GetArchivedTranscriptPageRpcParamsSchema,
   GetArchivedTranscriptPageRpcResultSchema,
   GetTranscriptPageRpcParamsSchema,
   GetTranscriptPageRpcResultSchema,
   ListArchivedConversationsRpcParamsSchema,
   ListArchivedConversationsRpcResultSchema,
+  type DeleteArchivedConversationRpcParams,
+  type DeleteArchivedConversationRpcResult,
   type GetArchivedTranscriptPageRpcParams,
   type GetArchivedTranscriptPageRpcResult,
   type GetTranscriptPageRpcParams,
@@ -18,6 +22,7 @@ import type { ZodType } from "zod";
 import {
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
+  DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
 } from "./constants.js";
 import { isTrustedConnectionRequest } from "./security.js";
@@ -27,6 +32,9 @@ export interface DesktopTranscriptReader {
   listArchivedConversations(
     request: ListArchivedConversationsRpcParams,
   ): Promise<ListArchivedConversationsRpcResult>;
+  deleteArchivedConversation(
+    request: DeleteArchivedConversationRpcParams,
+  ): Promise<DeleteArchivedConversationRpcResult>;
   getArchivedTranscriptPage(
     request: GetArchivedTranscriptPageRpcParams,
   ): Promise<GetArchivedTranscriptPageRpcResult>;
@@ -58,6 +66,9 @@ export function createConnectionTranscriptReader(
     },
     listArchivedConversations(request) {
       return call((client) => client.call("listArchivedConversations", request));
+    },
+    deleteArchivedConversation(request) {
+      return call((client) => client.call("deleteArchivedConversation", request));
     },
     getArchivedTranscriptPage(request) {
       return call((client) => client.call("getArchivedTranscriptPage", request));
@@ -98,6 +109,9 @@ export function installDesktopTranscriptIpc(input: {
   readonly readArchivedConversations: (
     request: ListArchivedConversationsRpcParams,
   ) => Promise<ListArchivedConversationsRpcResult>;
+  readonly deleteArchivedConversation: (
+    request: DeleteArchivedConversationRpcParams,
+  ) => Promise<DeleteArchivedConversationRpcResult>;
   readonly readArchivedPage: (
     request: GetArchivedTranscriptPageRpcParams,
   ) => Promise<GetArchivedTranscriptPageRpcResult>;
@@ -105,6 +119,7 @@ export function installDesktopTranscriptIpc(input: {
   const channels = [
     DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
     DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
+    DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
     DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   ] as const;
   input.ipcMain.handle(
@@ -125,6 +140,16 @@ export function installDesktopTranscriptIpc(input: {
       ListArchivedConversationsRpcResultSchema,
       input.readArchivedConversations,
       0,
+    ),
+  );
+  input.ipcMain.handle(
+    DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
+    readHandler(
+      input.currentWindow,
+      DeleteArchivedConversationRpcParamsSchema,
+      DeleteArchivedConversationRpcResultSchema,
+      input.deleteArchivedConversation,
+      1,
     ),
   );
   input.ipcMain.handle(

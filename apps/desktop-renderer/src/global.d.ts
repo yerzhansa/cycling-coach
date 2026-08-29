@@ -11,6 +11,7 @@ interface EnduragentAuth {
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
   listArchivedConversations(): Promise<DesktopArchivedConversationList>;
+  deleteArchivedConversation(boundaryRef: string): Promise<DesktopArchivedConversationDeleteResult>;
   getArchivedTranscriptPage(input: {
     readonly boundaryRef: string;
     readonly cursor: string | null;
@@ -159,6 +160,11 @@ interface DesktopArchivedConversationList {
   readonly schemaVersion: 1;
   readonly conversations: readonly DesktopArchivedConversationSummary[];
   readonly truncated: boolean;
+}
+
+interface DesktopArchivedConversationDeleteResult {
+  readonly schemaVersion: 1;
+  readonly status: "deleted" | "not-found";
 }
 
 type DesktopTranscriptPage =

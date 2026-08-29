@@ -10,8 +10,10 @@ import type {
 } from "@enduragent/engine";
 import { archiveAndResetDurably, ChatStore } from "./chat-store.js";
 import {
+  ArchivedConversationDeletionConflictError,
   TranscriptBoundaryTargetUnchangedError,
   TranscriptStore,
+  type ArchivedConversationDeletionManifest,
   type ArchivedConversationList,
   type ResetIntentRecord,
   type TranscriptTurnRecord,
@@ -69,6 +71,14 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
     boundaryRef: string,
     request: TranscriptPageRequest,
   ): TranscriptPageResult;
+  inspectArchivedConversation(
+    chatId: string,
+    boundaryRef: string,
+  ): ArchivedConversationDeletionManifest | null;
+  finalizeArchivedConversationDeletion(
+    chatId: string,
+    manifest: ArchivedConversationDeletionManifest,
+  ): boolean;
   reconcileChatQueue(chatId: string): ChatQueueSnapshot;
 }
 
@@ -226,6 +236,24 @@ export class ConversationStore implements ConversationStorePort {
     request: TranscriptPageRequest,
   ) {
     return this.transcriptStore.readArchivedConversationPage(chatId, boundaryRef, request);
+  }
+
+  inspectArchivedConversation(chatId: string, boundaryRef: string) {
+    return this.transcriptStore.inspectArchivedConversation(chatId, boundaryRef);
+  }
+
+  finalizeArchivedConversationDeletion(
+    chatId: string,
+    manifest: ArchivedConversationDeletionManifest,
+  ): boolean {
+    this.recoverBeforeAccess(chatId);
+    const current = this.transcriptStore.inspectArchivedConversation(chatId, manifest.boundaryRef);
+    if (current === null) return false;
+    if (JSON.stringify(current) !== JSON.stringify(manifest)) {
+      throw new ArchivedConversationDeletionConflictError();
+    }
+    this.chatStore.deleteResetArchive(chatId, manifest.boundaryRef, manifest.boundaryAt);
+    return this.transcriptStore.finalizeArchivedConversationDeletion(chatId, manifest);
   }
 
   getChatQueue(chatId: string): ChatQueueSnapshot {

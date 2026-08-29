@@ -95,6 +95,7 @@ const operations: CoachOperations = {
     conversations: [],
     truncated: false,
   }),
+  deleteArchivedConversation: async () => ({ schemaVersion: 1, status: "deleted" }),
   getArchivedTranscriptPage: async () => ({
     schemaVersion: 1,
     status: "page",

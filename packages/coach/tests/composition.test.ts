@@ -711,6 +711,71 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("deletes one archived Desktop conversation through the application operation", async () => {
+    const home = await freshHome();
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+    const lineage = {
+      templateHash: "template",
+      assembledHash: "assembled",
+      provider: "synthetic",
+      model: "synthetic",
+      lineageVersion: "1",
+    };
+    const seedArchivedTurn = (turnId: string, boundaryAt: string): void => {
+      engineInput.ports.chatStore.appendTurn("desktop", turnId, `coach-${turnId}`, lineage);
+      engineInput.ports.transcriptWriter.appendCompletedTurn({
+        chatId: "desktop",
+        turnId,
+        completedAt: boundaryAt,
+        athleteText: turnId,
+        coachText: `coach-${turnId}`,
+      });
+      engineInput.ports.chatStore.resetConversation({
+        chatId: "desktop",
+        boundaryAt,
+        reason: "explicit-reset",
+      });
+    };
+    seedArchivedTurn("turn-first", "1998-07-06T00:00:01.000Z");
+    seedArchivedTurn("turn-second", "1998-07-06T00:00:02.000Z");
+    const archive = await lifecycle.operations.listArchivedConversations({});
+    const firstBoundary = await Promise.all(
+      archive.conversations.map(async (conversation) => ({
+        boundaryRef: conversation.boundaryRef,
+        page: await lifecycle.operations.getArchivedTranscriptPage({
+          boundaryRef: conversation.boundaryRef,
+          cursor: null,
+          limit: 25,
+        }),
+      })),
+    ).then((entries) =>
+      entries.find(({ page }) => page.turns.some((turn) => turn.turnId === "turn-first")),
+    );
+    if (firstBoundary === undefined) throw new Error("Expected the first archived conversation.");
+
+    await expect(
+      lifecycle.operations.deleteArchivedConversation({
+        boundaryRef: firstBoundary.boundaryRef,
+      }),
+    ).resolves.toEqual({ schemaVersion: 1, status: "deleted" });
+    await expect(
+      lifecycle.operations.deleteArchivedConversation({
+        boundaryRef: firstBoundary.boundaryRef,
+      }),
+    ).resolves.toEqual({ schemaVersion: 1, status: "not-found" });
+    await expect(lifecycle.operations.listArchivedConversations({})).resolves.toMatchObject({
+      conversations: [{ turnCount: 1 }],
+    });
+    await expect(
+      lifecycle.operations.getArchivedTranscriptPage({
+        boundaryRef: firstBoundary.boundaryRef,
+        cursor: null,
+        limit: 25,
+      }),
+    ).resolves.toMatchObject({ status: "restart-required", turns: [] });
+    await lifecycle.close();
+  });
+
   it.each([
     { skewHours: -2, expiresFromServerNowMs: -60 * 60_000, rejectedByServer: true },
     { skewHours: 2, expiresFromServerNowMs: 60 * 60_000, rejectedByServer: false },

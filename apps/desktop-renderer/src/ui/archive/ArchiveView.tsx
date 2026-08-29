@@ -1,13 +1,27 @@
-import { useEffect, type ReactElement } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 import type { ArchiveReadingState } from "../../archive/controller.js";
 import type { TranscriptTurn } from "../../chat/hydration.js";
 import { Button } from "../../components/ui/button.js";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../../components/ui/dialog.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "../chat/AthleteMessage.js";
 import { CoachMessage } from "../chat/CoachMessage.js";
 import { Page } from "../shared/Page.js";
 import {
   ARCHIVE_BACK_COPY,
+  ARCHIVE_DELETE_COPY,
+  ARCHIVE_DELETE_DESCRIPTION,
+  ARCHIVE_DELETE_FAILURE_COPY,
+  ARCHIVE_DELETE_TITLE,
   ARCHIVE_EMPTY_CONVERSATION_COPY,
   ARCHIVE_EMPTY_COPY,
   ARCHIVE_LIST_FAILURE_COPY,
@@ -117,9 +131,14 @@ function ArchiveList(): ReactElement {
 
 function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactElement {
   const actions = useEnduragentStore((state) => state.archiveActions);
+  const deletion = useEnduragentStore((state) => state.archive.deletion);
+  const cancelDelete = useRef<HTMLButtonElement>(null);
   const reading = props.reading;
   const failed = reading.status === "failed";
   const unavailable = reading.status === "unavailable";
+  const deleteOpen = deletion?.boundaryRef === reading.boundaryRef;
+  const deletePending = deleteOpen && deletion.status === "deleting";
+  const deleteFailed = deleteOpen && deletion.status === "failed";
 
   return (
     <>
@@ -139,6 +158,71 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
         <p className={`${NOTE_CLASS} archive-reading-when mb-0`}>
           {reading.boundaryAt === null ? "" : archiveTimestampCopy(reading.boundaryAt)}
         </p>
+        <Dialog
+          open={deleteOpen}
+          onOpenChange={(open) => {
+            if (open) actions?.requestDeletion(reading.boundaryRef);
+            else if (!deletePending) actions?.cancelDeletion();
+          }}
+        >
+          <DialogTrigger
+            render={
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="archive-delete ml-auto"
+                disabled={actions === null}
+              />
+            }
+          >
+            {ARCHIVE_DELETE_COPY}
+          </DialogTrigger>
+          <DialogContent
+            className="archive-delete-dialog w-[min(460px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+            showCloseButton={false}
+            initialFocus={cancelDelete}
+            aria-busy={deletePending ? "true" : undefined}
+          >
+            <DialogHeader className="gap-2.5">
+              <DialogTitle className="m-0 text-xl">{ARCHIVE_DELETE_TITLE}</DialogTitle>
+              <DialogDescription className="m-0 leading-[1.5]">
+                {ARCHIVE_DELETE_DESCRIPTION}
+                {deleteFailed ? (
+                  <span className="mt-2 block text-destructive" role="alert">
+                    {ARCHIVE_DELETE_FAILURE_COPY}
+                  </span>
+                ) : null}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">
+              <DialogClose
+                render={
+                  <Button
+                    ref={cancelDelete}
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    disabled={deletePending}
+                  />
+                }
+              >
+                Cancel
+              </DialogClose>
+              <Button
+                type="button"
+                variant="destructive-solid"
+                size="lg"
+                disabled={deletePending}
+                onClick={() => {
+                  actions?.confirmDeletion();
+                }}
+              >
+                {deleteFailed ? ARCHIVE_RETRY_COPY : ARCHIVE_DELETE_COPY}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
       <p className={`${NOTE_CLASS} archive-note`}>{ARCHIVE_READ_ONLY_NOTE}</p>
       <p

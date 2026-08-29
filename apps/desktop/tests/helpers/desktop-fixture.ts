@@ -40,6 +40,7 @@ export interface RunningDesktopFixture {
   evaluate<T>(source: string): Promise<T>;
   screenshot(path: string): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
+  pressKey(key: "Escape" | "Tab", options?: { readonly shift?: boolean }): Promise<void>;
   readCapturedSurface(name: "location" | "console" | "stdout" | "stderr" | "dom"): string;
   close(): Promise<{
     readonly livePids: readonly number[];
@@ -354,6 +355,11 @@ export async function launchDesktopFixture(input: {
         ReturnType<CoachOperations["getArchivedTranscriptPage"]>
       >;
     },
+    async deleteArchivedConversation(request) {
+      return finalFrame(await invoke("deleteArchivedConversation", request)) as Awaited<
+        ReturnType<CoachOperations["deleteArchivedConversation"]>
+      >;
+    },
     async getActivityAnalysis(request) {
       return finalFrame(await invoke("getActivityAnalysis", request)) as Awaited<
         ReturnType<NonNullable<CoachOperations["getActivityAnalysis"]>>
@@ -576,6 +582,29 @@ export async function launchDesktopFixture(input: {
         height,
         deviceScaleFactor: 1,
         mobile: false,
+      });
+      await refreshSurfaces();
+    },
+    async pressKey(key, options) {
+      if (closed || cdp === undefined) throw new Error("desktop fixture is closed");
+      const virtualKeyCode = key === "Tab" ? 9 : 27;
+      const code = key === "Tab" ? "Tab" : "Escape";
+      const modifiers = options?.shift === true ? 8 : 0;
+      await cdp.call("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key,
+        code,
+        windowsVirtualKeyCode: virtualKeyCode,
+        nativeVirtualKeyCode: virtualKeyCode,
+        modifiers,
+      });
+      await cdp.call("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key,
+        code,
+        windowsVirtualKeyCode: virtualKeyCode,
+        nativeVirtualKeyCode: virtualKeyCode,
+        modifiers,
       });
       await refreshSurfaces();
     },

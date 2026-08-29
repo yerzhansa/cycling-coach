@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
+  DialogTrigger,
 } from "../../components/ui/dialog.js";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { AttachmentPanel } from "./AttachmentPanel.js";
@@ -58,9 +59,7 @@ export function ChatView(): ReactElement {
   const hydrationStatus = useEnduragentStore((state) => state.chat.hydrationStatus);
   const hasEarlier = useEnduragentStore((state) => state.chat.hydrationHasEarlier);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
-  const planningRequestFocusId = useEnduragentStore(
-    (state) => state.chat.planningRequestFocusId,
-  );
+  const planningRequestFocusId = useEnduragentStore((state) => state.chat.planningRequestFocusId);
   const actions = useEnduragentStore((state) => state.chatActions);
   const mountedView = useRef(activeView);
 
@@ -144,16 +143,40 @@ export function ChatView(): ReactElement {
     >
       <header className="flex items-center justify-between border-b border-line px-[calc(var(--inset)*3)] max-[760px]:px-[calc(var(--inset)*2)]">
         <h1 className="m-0 text-sm font-semibold">Chat</h1>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={contextExpanded ? "Hide training context" : "Show training context"}
-          aria-expanded={contextExpanded}
-          onClick={toggleContext}
-        >
-          {contextExpanded && !compact ? <PanelRightClose /> : <PanelRightOpen />}
-        </Button>
+        {compact ? (
+          <Dialog open={contextDrawerOpen} onOpenChange={setContextDrawerOpen}>
+            <DialogTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={contextExpanded ? "Hide training context" : "Show training context"}
+                />
+              }
+            >
+              <PanelRightOpen />
+            </DialogTrigger>
+            <DialogContent className="top-0 right-0 left-auto h-full max-h-none w-[min(320px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 content-start overflow-auto rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+              <DialogTitle className="sr-only">Training context</DialogTitle>
+              <DialogDescription className="sr-only">
+                Training data available to Coach.
+              </DialogDescription>
+              <TrainingContextPanel className="h-full border-l-0 pt-12" />
+            </DialogContent>
+          </Dialog>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={contextExpanded ? "Hide training context" : "Show training context"}
+            aria-expanded={contextExpanded}
+            onClick={toggleContext}
+          >
+            {contextExpanded ? <PanelRightClose /> : <PanelRightOpen />}
+          </Button>
+        )}
       </header>
       <div
         className={`chat-layout row-start-2 grid min-h-0 min-w-0 ${contextOpen && !compact ? "grid-cols-[minmax(0,1fr)_300px]" : "grid-cols-[minmax(0,1fr)]"}`}
@@ -171,44 +194,32 @@ export function ChatView(): ReactElement {
               <FirstSyncCard />
             </div>
           </main>
-          <div className="composer-wrap z-2 bg-bg bg-[linear-gradient(transparent,var(--bg)_22%)] px-[max(24px,calc((100%-720px)/2))] pt-[calc(var(--inset)*3)] pb-row max-[760px]:px-[calc(var(--inset)*2)]">
-            <div className="chat-notice-host empty:hidden">
-              <p
-                className="new-conversation-status m-0 text-sm text-ink-2 not-empty:px-3.5 not-empty:pb-inset"
-                role="status"
-                aria-live="polite"
-              >
-                {announcement ?? ""}
-              </p>
-              <SpendNotice />
-              <Notice />
-              <RetryBar />
+          <div className="composer-wrap z-2 grid max-h-full min-h-0 grid-rows-[minmax(0,1fr)_auto_auto] overflow-hidden bg-bg bg-[linear-gradient(transparent,var(--bg)_22%)] px-[max(24px,calc((100%-720px)/2))] pt-[calc(var(--inset)*3)] pb-row max-[760px]:px-[calc(var(--inset)*2)]">
+            <div className="composer-projections min-h-0 overflow-y-auto overscroll-contain empty:hidden">
+              <div className="chat-notice-host empty:hidden">
+                <p
+                  className="new-conversation-status m-0 text-sm text-ink-2 not-empty:px-3.5 not-empty:pb-inset"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {announcement ?? ""}
+                </p>
+                <SpendNotice />
+                <Notice />
+                <RetryBar />
+              </div>
+              <div className="mb-2.5 empty:hidden">
+                <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
+              </div>
+              <AttachmentPanel />
+              <QueuedMessages />
             </div>
-            <div className="mb-2.5 empty:hidden">
-              <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
-            </div>
-            <QueuedMessages />
-            <AttachmentPanel />
             <Composer handle={composer} hidden={decisionCustomOpen} />
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>
         </div>
         {contextOpen && !compact ? <TrainingContextPanel /> : null}
       </div>
-      <Dialog
-        open={compact && contextDrawerOpen}
-        onOpenChange={(open) => {
-          setContextDrawerOpen(open);
-        }}
-      >
-        <DialogContent className="top-0 right-0 left-auto h-full max-h-none w-[min(320px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 content-start overflow-auto rounded-none rounded-l-card border-y-0 border-r-0 p-0">
-          <DialogTitle className="sr-only">Training context</DialogTitle>
-          <DialogDescription className="sr-only">
-            Training data available to Coach.
-          </DialogDescription>
-          <TrainingContextPanel className="h-full border-l-0 pt-12" />
-        </DialogContent>
-      </Dialog>
       <NewConversationDialog
         onComposerReset={() => {
           composer.current?.reset();

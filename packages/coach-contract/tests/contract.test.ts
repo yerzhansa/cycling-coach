@@ -114,8 +114,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 30", () => {
-    expect(PROTOCOL_VERSION).toBe(31);
+  it("is 32", () => {
+    expect(PROTOCOL_VERSION).toBe(32);
   });
 
   it("requires Stop to name the exact active turn", () => {
