@@ -1,0 +1,635 @@
+import { createServer } from "node:net";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  CHAT_ATTACHMENT_LIMITS,
+  type AttachmentCapabilitiesReadModel,
+  type CreatePlanningRequestPayload,
+  type PlanningRequestOperations,
+} from "@enduragent/coach-contract";
+import { createConversationStore, type ConversationStorePort } from "@enduragent/core";
+import {
+  createPlanningRequestRepository,
+  type PlanningRequestRepository,
+} from "@enduragent/kernel/planning";
+import {
+  createChatAttachmentRepository,
+  createChatPlanOutboxRepository,
+  runMigrations,
+  type ChatAttachmentRepository,
+  type ChatPlanOutboxRepository,
+  type MigratorStore,
+  type SqlStore,
+} from "@enduragent/kernel/store";
+import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { createManagedChatAttachmentStore } from "@enduragent/kernel-node/chat-attachments";
+import { createNodeCrypto } from "@enduragent/kernel-node/ingest";
+import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
+import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
+import { createManagedWorkoutReader } from "@enduragent/sport-cycling/workout-import";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createAttachmentComposerOperations,
+  type AttachmentComposerOperations,
+} from "../../../packages/coach/src/attachment-composer-operations.js";
+import {
+  createManagedChatAttachmentOperations,
+  type ManagedChatAttachmentOperations,
+} from "../../../packages/coach/src/attachment-operations.js";
+import { createPlanningRequestDeliveryService } from "../../../packages/coach/src/planning-request-delivery.js";
+import {
+  createWorkoutAttachmentOperations,
+  type WorkoutAttachmentOperations,
+} from "../../../packages/coach/src/workout-attachment-operations.js";
+import {
+  launchDesktopFixture,
+  type DesktopFixtureScript,
+  type RunningDesktopFixture,
+} from "./helpers/desktop-fixture.js";
+import { createPlanQaFixtureScript } from "./helpers/plan-qa-live.js";
+
+const hasLoopback = await new Promise<boolean>((resolveAvailability) => {
+  const server = createServer();
+  server.once("error", () => resolveAvailability(false));
+  server.listen({ host: "127.0.0.1", port: 0 }, () => {
+    server.close(() => resolveAvailability(true));
+  });
+});
+
+const token = "r".repeat(43);
+const chatId = "desktop";
+const decisionId = "decision-recovery";
+const queuedMessageId = "queued-recovery";
+const queuedMessageText = "Also preserve my easy Friday ride.";
+const requestId = "request-recovery";
+const attachmentDraftText = "Compare this workout with my current week.";
+const decisionQuestion = "Which priority should guide the next workout?";
+const fixtures: RunningDesktopFixture[] = [];
+const backends: RecoveryBackend[] = [];
+const scratchPaths: string[] = [];
+
+const capabilities: AttachmentCapabilitiesReadModel = {
+  schemaVersion: 1,
+  active: { provider: "codex-agent", model: "fixture", transport: "codex-agent" },
+  documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+  completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+  plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+  images: {
+    enabled: false,
+    mediaTypes: [],
+    reason: "transport_incompatible",
+    source: "transport_blocked",
+    checkedAt: "1998-08-22T08:00:00.000Z",
+  },
+};
+
+const workoutLimits = {
+  candidates: CHAT_ATTACHMENT_LIMITS.workoutCandidates,
+  segmentsPerWorkout: CHAT_ATTACHMENT_LIMITS.workoutSegments,
+  durationSeconds: CHAT_ATTACHMENT_LIMITS.workoutDurationSeconds,
+  diagnostics: CHAT_ATTACHMENT_LIMITS.workoutDiagnostics,
+  diagnosticChars: CHAT_ATTACHMENT_LIMITS.workoutDiagnosticChars,
+  titleChars: CHAT_ATTACHMENT_LIMITS.workoutTitleChars,
+  purposeChars: CHAT_ATTACHMENT_LIMITS.workoutPurposeChars,
+} as const;
+
+const workout = `<workout_file>
+  <name>Recovery tempo</name>
+  <description>Controlled aerobic pressure</description>
+  <sportType>bike</sportType>
+  <workout>
+    <Warmup Duration="300" PowerLow="0.5" PowerHigh="0.7" />
+    <SteadyState Duration="1200" Power="0.8" />
+    <Cooldown Duration="300" PowerLow="0.6" PowerHigh="0.4" />
+  </workout>
+</workout_file>`;
+
+interface ScriptRequest {
+  readonly jsonrpc: "2.0";
+  readonly method: string;
+  readonly params: Record<string, unknown>;
+}
+
+function response(value: unknown): readonly string[] {
+  return [JSON.stringify(value)];
+}
+
+function planningPayload(): CreatePlanningRequestPayload {
+  return {
+    requestId,
+    kind: "plan_change",
+    intent: "Review the saved recovery workout in Plan.",
+    source: { chatId, messageId: "message-plan-recovery" },
+    sourceSnapshot: {
+      capturedAt: "1998-08-24T08:00:00.000Z",
+      attachment: null,
+      selectedWorkout: null,
+    },
+    requestedDate: "1998-08-26",
+  };
+}
+
+class RecoveryBackend {
+  readonly calls: ScriptRequest[] = [];
+  readonly script: DesktopFixtureScript;
+  private store: (SqlStore & MigratorStore) | undefined;
+  private conversation: ConversationStorePort | undefined;
+  private attachmentRepository: ChatAttachmentRepository | undefined;
+  private attachmentOperations: ManagedChatAttachmentOperations | undefined;
+  private workoutOperations: WorkoutAttachmentOperations | undefined;
+  private attachmentComposer: AttachmentComposerOperations | undefined;
+  private outbox: ChatPlanOutboxRepository | undefined;
+  private requests: PlanningRequestRepository | undefined;
+  private planning: PlanningRequestOperations | undefined;
+  private instant = Date.UTC(1998, 7, 24, 8);
+  private idSequence = 0;
+  private attachmentId: string | undefined;
+  private workoutId: string | undefined;
+
+  constructor(
+    private readonly databasePath: string,
+    private readonly conversationDir: string,
+    private readonly archiveDir: string,
+  ) {
+    const base = createPlanQaFixtureScript("PL-S004");
+    this.script = {
+      onRequest: async (value) => {
+        const request = value as ScriptRequest;
+        this.calls.push(request);
+        if (request.method === "getChatQueue") {
+          return response(this.requireConversation().getChatQueue(chatId));
+        }
+        if (request.method === "getCoachDecision") {
+          return response({ decision: this.requireConversation().getDecision(chatId) });
+        }
+        if (request.method === "getChatAttachmentComposer") {
+          return response(await this.requireAttachmentComposer().read(chatId));
+        }
+        if (request.method === "resumePlanningRequests") {
+          return response(await this.requirePlanning().resumePlanningRequests?.({}));
+        }
+        if (request.method === "listPlanningRequests") {
+          return response(await this.requirePlanning().listPlanningRequests?.({ chatId }));
+        }
+        if (request.method === "getPlanningRequest") {
+          return response(
+            await this.requirePlanning().getPlanningRequest?.({
+              requestId: String(request.params.requestId),
+            }),
+          );
+        }
+        return base.onRequest(value);
+      },
+    };
+  }
+
+  async open(): Promise<void> {
+    await mkdir(this.archiveDir, { recursive: true, mode: 0o700 });
+    await mkdir(this.conversationDir, { recursive: true, mode: 0o700 });
+    const store = openSqliteStorage(this.databasePath);
+    await runMigrations(store, MIGRATIONS);
+    this.store = store;
+    this.conversation = createConversationStore(this.conversationDir);
+    this.attachmentRepository = createChatAttachmentRepository(store);
+    const objects = createManagedChatAttachmentStore({
+      archiveDir: this.archiveDir,
+      kindByteLimits: {
+        document: CHAT_ATTACHMENT_LIMITS.documentBytes,
+        activity: CHAT_ATTACHMENT_LIMITS.activityBytes,
+        workout: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+        image: CHAT_ATTACHMENT_LIMITS.imageBytes,
+      },
+    });
+    this.workoutOperations = createWorkoutAttachmentOperations({
+      repository: this.attachmentRepository,
+      reader: createManagedWorkoutReader({
+        objects,
+        limits: {
+          ...workoutLimits,
+          workoutBytes: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      limits: workoutLimits,
+      runExclusive: (work) => work(),
+      now: () => this.now(),
+    });
+    this.attachmentOperations = createManagedChatAttachmentOperations({
+      repository: this.attachmentRepository,
+      objects,
+      runExclusive: (work) => work(),
+      now: () => this.now(),
+      randomId: () => `recovery-id-${++this.idSequence}`,
+      onAdmitted: this.workoutOperations.preprocessAdmitted,
+    });
+    this.attachmentComposer = createAttachmentComposerOperations({
+      repository: this.attachmentRepository,
+      attachments: this.attachmentOperations,
+      activities: {
+        readPreview: async () => {
+          throw new TypeError("activity preview is unavailable in this fixture");
+        },
+      },
+      workouts: this.workoutOperations,
+      capabilities: async () => capabilities,
+    });
+    const crypto = createNodeCrypto();
+    this.outbox = createChatPlanOutboxRepository(store, crypto);
+    this.requests = createPlanningRequestRepository(store, crypto);
+    this.planning = createPlanningRequestDeliveryService({
+      outbox: this.outbox,
+      requests: this.requests,
+      identity: this.identity(),
+      resolveTarget: async () => "active_plan",
+    });
+  }
+
+  async establishDurableState(): Promise<void> {
+    const sourcePath = join(this.conversationDir, "recovery-tempo.zwo");
+    await writeFile(sourcePath, workout, { mode: 0o600 });
+    const admission = await this.requireAttachmentOperations().admit({
+      chatId,
+      selectionId: "selection-recovery",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath },
+    });
+    if (admission.status !== "accepted") throw new TypeError("workout admission failed");
+    this.attachmentId = admission.attachmentId;
+    const set = await this.requireWorkoutOperations().readWorkoutSet(admission.attachmentId);
+    const selected = set.workouts[0];
+    if (selected === undefined) throw new TypeError("parsed workout is missing");
+    this.workoutId = selected.workoutId;
+    await this.requireWorkoutOperations().selectWorkout({
+      conversationId: chatId,
+      attachmentId: admission.attachmentId,
+      workoutId: selected.workoutId,
+    });
+    await this.requireAttachmentOperations().saveDraftText(chatId, attachmentDraftText);
+
+    const conversation = this.requireConversation();
+    conversation.enqueueChatMessage(
+      chatId,
+      "submission-recovery",
+      queuedMessageText,
+      queuedMessageId,
+      "message-queue-recovery",
+    );
+    conversation.appendDecisionRequested({
+      turnId: "turn-decision-recovery",
+      toolCallId: "tool-decision-recovery",
+      athleteText: "Help me choose the next workout priority.",
+      requestedAt: "1998-08-24T08:00:00.000Z",
+      decision: {
+        status: "unanswered",
+        decisionId,
+        chatId,
+        messageId: "message-decision-recovery",
+        question: decisionQuestion,
+        options: [
+          {
+            id: "recover",
+            label: "Protect recovery",
+            description: "Keep the next session controlled.",
+            recommended: true,
+            consequence: "The next workout stays controlled.",
+          },
+          {
+            id: "progress",
+            label: "Progress intensity",
+            description: "Add more work if recovery supports it.",
+            recommended: false,
+            consequence: "The next workout adds intensity.",
+          },
+        ],
+      },
+    });
+
+    const plan = await this.requirePlanning().createPlanningRequest?.({
+      payload: planningPayload(),
+    });
+    if (plan?.status !== "accepted" || plan.delivery.state !== "delivered") {
+      throw new TypeError("Planning request delivery failed");
+    }
+  }
+
+  async reopen(): Promise<void> {
+    await this.closeStore();
+    await this.open();
+  }
+
+  async close(): Promise<void> {
+    await this.closeStore();
+  }
+
+  async snapshot() {
+    const attachment = await this.requireAttachmentComposer().read(chatId);
+    const planningRequest = await this.requireRequests().read(requestId);
+    const outbox = await this.requireOutbox().read(requestId);
+    return {
+      queue: this.requireConversation().getChatQueue(chatId),
+      decision: this.requireConversation().getDecision(chatId),
+      attachment,
+      planningRequest,
+      outbox,
+      attachmentId: this.attachmentId,
+      workoutId: this.workoutId,
+    };
+  }
+
+  private identity(): AuthoredIdentity {
+    return {
+      deviceId: async () => "device-recovery",
+      newUlid: () => "01J60HFQ7T0000000000000002",
+      hlcStamp: () => ({ physicalMs: this.now(), counter: 0 }),
+    };
+  }
+
+  private now(): number {
+    return ++this.instant;
+  }
+
+  private requireConversation(): ConversationStorePort {
+    if (this.conversation === undefined) throw new TypeError("Conversation store is closed");
+    return this.conversation;
+  }
+
+  private requireAttachmentOperations(): ManagedChatAttachmentOperations {
+    if (this.attachmentOperations === undefined) {
+      throw new TypeError("Attachment operations are closed");
+    }
+    return this.attachmentOperations;
+  }
+
+  private requireWorkoutOperations(): WorkoutAttachmentOperations {
+    if (this.workoutOperations === undefined) {
+      throw new TypeError("Workout operations are closed");
+    }
+    return this.workoutOperations;
+  }
+
+  private requireAttachmentComposer(): AttachmentComposerOperations {
+    if (this.attachmentComposer === undefined) {
+      throw new TypeError("Attachment composer is closed");
+    }
+    return this.attachmentComposer;
+  }
+
+  private requireOutbox(): ChatPlanOutboxRepository {
+    if (this.outbox === undefined) throw new TypeError("Planning outbox is closed");
+    return this.outbox;
+  }
+
+  private requireRequests(): PlanningRequestRepository {
+    if (this.requests === undefined) throw new TypeError("Planning requests are closed");
+    return this.requests;
+  }
+
+  private requirePlanning(): PlanningRequestOperations {
+    if (this.planning === undefined) throw new TypeError("Planning operations are closed");
+    return this.planning;
+  }
+
+  private async closeStore(): Promise<void> {
+    const store = this.store;
+    this.store = undefined;
+    this.conversation = undefined;
+    this.attachmentRepository = undefined;
+    this.attachmentOperations = undefined;
+    this.workoutOperations = undefined;
+    this.attachmentComposer = undefined;
+    this.outbox = undefined;
+    this.requests = undefined;
+    this.planning = undefined;
+    if (store !== undefined) await store.close();
+  }
+}
+
+async function readRecoverySurface(fixture: RunningDesktopFixture) {
+  return fixture.evaluate<{
+    readonly questionCount: number;
+    readonly attachmentCount: number;
+    readonly selectedWorkoutCount: number;
+    readonly queueCount: number;
+    readonly planRequestCount: number;
+    readonly planAction: string;
+    readonly draft: string;
+    readonly sendDisabled: boolean;
+    readonly inputDisabled: boolean;
+    readonly projectionOrder: readonly string[];
+  }>(`
+    const question = ${JSON.stringify(decisionQuestion)};
+    const queueText = ${JSON.stringify(queuedMessageText)};
+    const draftText = ${JSON.stringify(attachmentDraftText)};
+    const requestId = ${JSON.stringify(requestId)};
+    const deadline = Date.now() + 10000;
+    let decision;
+    let attachment;
+    let queue;
+    let plan;
+    let composer;
+    while (Date.now() < deadline) {
+      decision = [...document.querySelectorAll(".composer-projections section")].find(
+        (element) => element.textContent?.includes(question),
+      );
+      attachment = document.querySelector('section[aria-label="recovery-tempo.zwo attachment"]');
+      queue = document.querySelector("section.chat-queue");
+      plan = document.querySelector('[data-planning-request-id="' + requestId + '"]');
+      composer = document.querySelector("#message");
+      if (
+        decision instanceof HTMLElement &&
+        attachment instanceof HTMLElement &&
+        queue instanceof HTMLElement &&
+        queue.textContent?.includes(queueText) &&
+        plan instanceof HTMLElement &&
+        composer instanceof HTMLTextAreaElement &&
+        composer.value === draftText
+      ) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    if (!(decision instanceof HTMLElement)) throw new Error("Recovered decision missing");
+    if (!(attachment instanceof HTMLElement)) throw new Error("Recovered attachment missing");
+    if (!(queue instanceof HTMLElement)) throw new Error("Recovered queue missing");
+    if (!(plan instanceof HTMLElement)) throw new Error("Recovered Plan request missing");
+    if (!(composer instanceof HTMLTextAreaElement)) throw new Error("Recovered composer missing");
+    const send = document.querySelector('button[aria-label="Send message"]');
+    if (!(send instanceof HTMLButtonElement)) throw new Error("Send action missing");
+    const projections = document.querySelector(".composer-projections");
+    if (!(projections instanceof HTMLElement)) throw new Error("Composer projections missing");
+    const projectionOrder = [...projections.querySelectorAll("section")]
+      .filter(
+        (element) =>
+          element === decision || element === attachment || element === queue,
+      )
+      .map((element) =>
+        element === decision ? "decision" : element === attachment ? "attachment" : "queue",
+      );
+    return {
+      questionCount: [...document.querySelectorAll(".composer-projections section")].filter(
+        (element) => element.textContent?.includes(question),
+      ).length,
+      attachmentCount: document.querySelectorAll(
+        'section[aria-label="recovery-tempo.zwo attachment"]',
+      ).length,
+      selectedWorkoutCount: attachment.querySelectorAll('button[aria-pressed="true"]').length,
+      queueCount: [...queue.querySelectorAll(".chat-queue__item")].filter(
+        (element) => element.textContent?.includes(queueText),
+      ).length,
+      planRequestCount: document.querySelectorAll(
+        '[data-planning-request-id="' + requestId + '"]',
+      ).length,
+      planAction: plan.querySelector("button")?.textContent?.trim() ?? "",
+      draft: composer.value,
+      sendDisabled: send.disabled,
+      inputDisabled: composer.disabled,
+      projectionOrder,
+    };
+  `);
+}
+
+afterEach(async () => {
+  await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
+  await Promise.all(backends.splice(0).map((backend) => backend.close()));
+  await Promise.all(
+    scratchPaths
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+  );
+});
+
+describe.skipIf(process.platform !== "darwin" || !hasLoopback)(
+  "Chat durable recovery relaunch",
+  () => {
+    it("restores queue, decision, attachment draft, and Plan request once in blocking order", async () => {
+      const scratch = await mkdtemp(join(await realpath(tmpdir()), "chat-recovery-"));
+      scratchPaths.push(scratch);
+      const backend = new RecoveryBackend(
+        join(scratch, "recovery.sqlite"),
+        join(scratch, "conversation"),
+        join(scratch, "attachments"),
+      );
+      backends.push(backend);
+      await backend.open();
+
+      const fixture = await launchDesktopFixture({
+        script: backend.script,
+        token,
+        width: 1180,
+        height: 820,
+        colorScheme: "light",
+        reducedMotion: true,
+        hidden: process.env.REC_01_VISIBLE === "1" ? false : true,
+        routeChatAttachmentComposer: true,
+      });
+      fixtures.push(fixture);
+
+      expect(
+        await fixture.evaluate(`
+          const deadline = Date.now() + 5000;
+          while (document.querySelector(".chat-surface") === null && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          return {
+            projections: document.querySelectorAll(".composer-projections section").length,
+            planningRequests: document.querySelectorAll("[data-planning-request-id]").length,
+            draft: document.querySelector("#message")?.value ?? null,
+          };
+        `),
+      ).toEqual({ projections: 0, planningRequests: 0, draft: "" });
+
+      await backend.establishDurableState();
+      const persisted = await backend.snapshot();
+      expect(persisted).toMatchObject({
+        queue: {
+          items: [
+            {
+              queuedMessageId,
+              messageId: "message-queue-recovery",
+              restored: false,
+            },
+          ],
+        },
+        decision: { decisionId, status: "unanswered" },
+        attachment: {
+          draft: {
+            chatId,
+            text: attachmentDraftText,
+            attachments: [
+              {
+                attachmentId: persisted.attachmentId,
+                preview: { selectedWorkoutId: persisted.workoutId },
+              },
+            ],
+          },
+        },
+        planningRequest: { request: { requestId, revision: 1, lifecycle: "open" } },
+        outbox: { state: "delivered", attemptCount: 1 },
+      });
+
+      await fixture.relaunch(() => backend.reopen());
+      const firstSurface = await readRecoverySurface(fixture);
+      expect(firstSurface).toEqual({
+        questionCount: 1,
+        attachmentCount: 1,
+        selectedWorkoutCount: 1,
+        queueCount: 1,
+        planRequestCount: 1,
+        planAction: "Continue in Plan",
+        draft: attachmentDraftText,
+        sendDisabled: true,
+        inputDisabled: false,
+        projectionOrder: ["decision", "attachment", "queue"],
+      });
+      const firstRecovery = await backend.snapshot();
+      expect(firstRecovery).toMatchObject({
+        queue: {
+          items: [
+            {
+              queuedMessageId,
+              messageId: "message-queue-recovery",
+              restored: true,
+            },
+          ],
+        },
+        decision: { decisionId, status: "unanswered" },
+        attachment: {
+          draft: {
+            text: attachmentDraftText,
+            attachments: [
+              {
+                attachmentId: persisted.attachmentId,
+                preview: { selectedWorkoutId: persisted.workoutId },
+              },
+            ],
+          },
+        },
+        planningRequest: { request: { requestId, revision: 1, lifecycle: "open" } },
+        outbox: { state: "delivered", attemptCount: 1 },
+      });
+
+      await fixture.relaunch(() => backend.reopen());
+      expect(await readRecoverySurface(fixture)).toEqual(firstSurface);
+      expect(await backend.snapshot()).toMatchObject({
+        queue: { items: [{ queuedMessageId, restored: true }] },
+        decision: { decisionId, status: "unanswered" },
+        attachment: {
+          draft: {
+            text: attachmentDraftText,
+            attachments: [
+              {
+                attachmentId: persisted.attachmentId,
+                preview: { selectedWorkoutId: persisted.workoutId },
+              },
+            ],
+          },
+        },
+        planningRequest: { request: { requestId, revision: 1, lifecycle: "open" } },
+        outbox: { state: "delivered", attemptCount: 1 },
+      });
+
+      expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
+      fixtures.splice(fixtures.indexOf(fixture), 1);
+    }, 120_000);
+  },
+);
