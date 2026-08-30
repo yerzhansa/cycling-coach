@@ -11,6 +11,7 @@ import type {
   SpendOperations,
   OperationProgressEvent,
   PlanningOperations,
+  PlanningRequestOperations,
   PlanProgressEvent,
   TelegramControlSnapshot,
   TurnEvent,
@@ -319,7 +320,7 @@ export async function launchDesktopFixture(input: {
       >;
     },
   };
-  const operations: CoachOperations & PlanningOperations = {
+  const operations: CoachOperations & PlanningOperations & PlanningRequestOperations = {
     async importFiles(request, onEvent) {
       const frames = await invoke("importFiles", request);
       for (const event of eventFrames(frames)) onEvent?.(event as OperationProgressEvent);
@@ -386,6 +387,36 @@ export async function launchDesktopFixture(input: {
         value: "metric" | "imperial";
         source: "cycling";
       };
+    },
+    async createPlanningRequest(request) {
+      return finalFrame(await invoke("createPlanningRequest", request)) as Awaited<
+        ReturnType<NonNullable<PlanningRequestOperations["createPlanningRequest"]>>
+      >;
+    },
+    async createWorkoutPlanningRequest(request) {
+      return finalFrame(await invoke("createWorkoutPlanningRequest", request)) as Awaited<
+        ReturnType<NonNullable<PlanningRequestOperations["createWorkoutPlanningRequest"]>>
+      >;
+    },
+    async getPlanningRequest(request) {
+      return finalFrame(await invoke("getPlanningRequest", request)) as Awaited<
+        ReturnType<NonNullable<PlanningRequestOperations["getPlanningRequest"]>>
+      >;
+    },
+    async retryPlanningRequest(request) {
+      return finalFrame(await invoke("retryPlanningRequest", request)) as Awaited<
+        ReturnType<NonNullable<PlanningRequestOperations["retryPlanningRequest"]>>
+      >;
+    },
+    async resumePlanningRequests(request) {
+      return finalFrame(await invoke("resumePlanningRequests", request)) as Awaited<
+        ReturnType<NonNullable<PlanningRequestOperations["resumePlanningRequests"]>>
+      >;
+    },
+    async listPlanningRequests(request) {
+      return finalFrame(await invoke("listPlanningRequests", request)) as Awaited<
+        ReturnType<NonNullable<PlanningRequestOperations["listPlanningRequests"]>>
+      >;
     },
     async getPlanState(request) {
       return finalFrame(await invoke("getPlanState", request)) as Awaited<
