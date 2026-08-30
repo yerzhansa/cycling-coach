@@ -324,6 +324,45 @@ describe("durable chat queue controller", () => {
     expect(states.at(-1)?.queued).toEqual([]);
   });
 
+  it("opens New chat for a restored queue-only command", async () => {
+    const queued: ChatQueueSnapshot = {
+      schemaVersion: 1,
+      revision: 1,
+      items: [
+        {
+          queuedMessageId: "command-1",
+          messageId: "message-command-1",
+          submissionId: "submission-1",
+          text: "/review",
+          kind: "slash-command",
+          attachmentIds: [],
+          position: 0,
+          restored: true,
+        },
+      ],
+    };
+    const client: CoachClient = {
+      handshake: {} as CoachClient["handshake"],
+      call: vi.fn(async (method) => {
+        if (method === "getCoachDecision") return { decision: null } as never;
+        if (method === "hasSession") return { hasSession: false } as never;
+        if (method === "getChatQueue") return queued as never;
+        throw new TypeError(String(method));
+      }),
+      close: vi.fn(async () => {}),
+    };
+    const { controller, states } = harness(client);
+
+    await controller.start();
+
+    expect(states.at(-1)).toMatchObject({
+      messages: [],
+      queued: [{ id: "command-1" }],
+      session: { presence: "absent" },
+    });
+    expect(controller.openNewConversation()).toBe(true);
+  });
+
   it("auto-resumes restored ordinary work and discards a blocked no-response run", async () => {
     const queued: ChatQueueSnapshot = {
       schemaVersion: 1,
@@ -460,6 +499,46 @@ describe("durable chat queue controller", () => {
 
     removal.resolve({ schemaVersion: 1, revision: 2, items: [] });
     await vi.waitFor(() => expect(states.at(-1)?.queued).toEqual([]));
+  });
+
+  it("waits for durable queue removal before opening New chat", async () => {
+    const removal = deferred<ChatQueueSnapshot>();
+    const queued: ChatQueueSnapshot = {
+      schemaVersion: 1,
+      revision: 1,
+      items: [
+        {
+          queuedMessageId: "command-1",
+          messageId: "message-command-1",
+          submissionId: "submission-1",
+          text: "/review",
+          kind: "slash-command",
+          attachmentIds: [],
+          position: 0,
+          restored: true,
+        },
+      ],
+    };
+    const client: CoachClient = {
+      handshake: {} as CoachClient["handshake"],
+      call: vi.fn((method) => {
+        if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
+        if (method === "hasSession") return Promise.resolve({ hasSession: true }) as never;
+        if (method === "getChatQueue") return Promise.resolve(queued) as never;
+        if (method === "removeQueuedChatMessage") return removal.promise as never;
+        throw new TypeError(String(method));
+      }),
+      close: vi.fn(async () => {}),
+    };
+    const { controller, states } = harness(client);
+    await controller.start();
+
+    controller.removeQueued("command-1");
+    expect(controller.openNewConversation()).toBe(false);
+
+    removal.resolve({ schemaVersion: 1, revision: 2, items: [] });
+    await vi.waitFor(() => expect(states.at(-1)?.queued).toEqual([]));
+    expect(controller.openNewConversation()).toBe(true);
   });
 
   it("keeps a queued row and reports visible feedback when durable removal fails", async () => {

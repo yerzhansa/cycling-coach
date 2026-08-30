@@ -182,6 +182,7 @@ export function nextDrainGroup(state: ChatState): ChatDrainGroup | null {
 export function hasClearableConversation(state: ChatState): boolean {
   return (
     state.session.presence === "present" ||
+    state.queued.length > 0 ||
     state.messages.some((message) => message.role === "athlete" || /\S/u.test(message.text))
   );
 }
@@ -483,8 +484,7 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         !action.hasAttachmentDraft &&
         !hasClearableConversation(state)) ||
         state.session.resetPhase !== "idle" ||
-        state.status === "streaming" ||
-        state.queued.length > 0
+        state.status === "streaming"
         ? state
         : {
             ...state,

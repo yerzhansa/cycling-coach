@@ -222,6 +222,16 @@ describe("Coach decision controller", () => {
     ]);
   });
 
+  it("opens New chat while preserving an unanswered decision", async () => {
+    const { controller, states, controls } = subject();
+    await controller.submit("What should I do tomorrow?");
+    const decision = controls.at(-1)?.decision?.value;
+
+    expect(controller.openNewConversation()).toBe(true);
+    expect(states.at(-1)?.session.resetPhase).toBe("confirming");
+    expect(controls.at(-1)?.decision?.value).toEqual(decision);
+  });
+
   it("continues a selected answer without creating a second athlete message", async () => {
     const { controller, states, controls } = subject();
     await controller.submit("What should I do tomorrow?");
@@ -273,6 +283,43 @@ describe("Coach decision controller", () => {
         delivery: "complete",
       });
     });
+  });
+
+  it("keeps New chat blocked while a saved continuation is resuming", async () => {
+    const pending: Extract<CoachDecisionReadModel, { status: "answered" }> = {
+      ...unanswered(),
+      status: "answered",
+      answer: { kind: "option", optionId: "recovery" },
+      consequence: "Tomorrow becomes a recovery day.",
+      continuation: { continuationId: "continuation-1", status: "pending" },
+    };
+    const release = deferred<void>();
+    const { controller, call } = subject(pending, async (method, options) => {
+      emit(options, method, { type: "turn-start", turnId: "turn-2", chatId: "desktop" }, 2);
+      await release.promise;
+      const decision = completed();
+      if (decision.continuation.status !== "completed") {
+        throw new Error("completed fixture required");
+      }
+      emit(
+        options,
+        method,
+        { type: "final-text", turnId: "turn-2", text: decision.continuation.coachText },
+        2,
+      );
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { decision } });
+      return { decision };
+    });
+
+    const starting = controller.start();
+    await vi.waitFor(() => {
+      expect(call.mock.calls.filter(([method]) => method === "resumeCoachDecision")).toHaveLength(
+        1,
+      );
+    });
+    expect(controller.openNewConversation()).toBe(false);
+    release.resolve();
+    await starting;
   });
 
   it("stops a decision continuation and resumes it with the same client", async () => {
