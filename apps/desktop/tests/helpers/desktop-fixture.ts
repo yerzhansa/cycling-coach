@@ -39,6 +39,7 @@ export interface DesktopFixturePaths {
 export interface RunningDesktopFixture {
   readonly paths: DesktopFixturePaths;
   evaluate<T>(source: string): Promise<T>;
+  relaunch(beforeLaunch?: () => void | Promise<void>): Promise<void>;
   screenshot(path: string): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
   pressKey(key: "Escape" | "Tab", options?: { readonly shift?: boolean }): Promise<void>;
@@ -464,7 +465,6 @@ export async function launchDesktopFixture(input: {
     request: createHealthzRequestHandler({ appVersion: "0.0.1" }),
     upgrade: rpc.handleUpgrade,
   });
-  const debuggerPort = await reservePort();
   const executable =
     input.applicationBundle === undefined
       ? (input.executable ?? (require("electron") as string))
@@ -475,33 +475,11 @@ export async function launchDesktopFixture(input: {
         ? [desktopRoot]
         : []
       : ["-n", "-W", input.applicationBundle, "--args"];
-  const child = spawn(
-    executable,
-    [...applicationArgs, `--remote-debugging-port=${debuggerPort}`, `--user-data-dir=${userData}`],
-    {
-      env: {
-        ...process.env,
-        ...input.extraEnv,
-        ENDURAGENT_HOME: athleteHome,
-        ENDURAGENT_ACCEPTANCE_HIDDEN: input.hidden === false ? "0" : "1",
-        ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND: "memory",
-        ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT: "1",
-        FORCE_COLOR: undefined,
-        NO_COLOR: undefined,
-        CLICOLOR_FORCE: undefined,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk) => {
-    stdout += String(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr += String(chunk);
-  });
+  let child: ChildProcess | undefined;
   let cdp: Awaited<ReturnType<typeof connectCdp>> | undefined;
+  const processIds = new Set<number>();
   const surfaces: Record<"location" | "console" | "stdout" | "stderr" | "dom", string> = {
     location: "",
     console: "",
@@ -526,22 +504,64 @@ export async function launchDesktopFixture(input: {
     surfaces.stdout = stdout;
     surfaces.stderr = stderr;
   };
-  let closed = false;
-  try {
+  const stopApplication = async (): Promise<void> => {
+    const activeCdp = cdp;
+    cdp = undefined;
+    if (activeCdp !== undefined && activeCdp.socket.readyState === WebSocket.OPEN) {
+      await activeCdp.call("Browser.close").catch(() => {});
+      activeCdp.socket.close();
+    }
+    const activeChild = child;
+    child = undefined;
+    if (activeChild !== undefined) await stopProcess(activeChild).catch(() => {});
+  };
+  const launchApplication = async (): Promise<void> => {
+    const debuggerPort = await reservePort();
+    const nextChild = spawn(
+      executable,
+      [
+        ...applicationArgs,
+        `--remote-debugging-port=${debuggerPort}`,
+        `--user-data-dir=${userData}`,
+      ],
+      {
+        env: {
+          ...process.env,
+          ...input.extraEnv,
+          ENDURAGENT_HOME: athleteHome,
+          ENDURAGENT_ACCEPTANCE_HIDDEN: input.hidden === false ? "0" : "1",
+          ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND: "memory",
+          ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT: "1",
+          FORCE_COLOR: undefined,
+          NO_COLOR: undefined,
+          CLICOLOR_FORCE: undefined,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    child = nextChild;
+    if (nextChild.pid !== undefined) processIds.add(nextChild.pid);
+    nextChild.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    nextChild.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
     const debuggerUrl = await waitForPage(debuggerPort, {
       timeoutMs: DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS,
     });
-    cdp = await connectCdp(debuggerUrl, (message) => {
+    const nextCdp = await connectCdp(debuggerUrl, (message) => {
       if (message.method !== "Runtime.consoleAPICalled") return;
       const args =
         (message.params as { readonly args?: readonly { readonly value?: unknown }[] } | undefined)
           ?.args ?? [];
       consoleMessages.push(args.map((arg) => String(arg.value ?? "")).join(" "));
     });
+    cdp = nextCdp;
     await Promise.all([
-      cdp.call("Runtime.enable"),
-      cdp.call("Page.enable"),
-      cdp.call("Emulation.setEmulatedMedia", {
+      nextCdp.call("Runtime.enable"),
+      nextCdp.call("Page.enable"),
+      nextCdp.call("Emulation.setEmulatedMedia", {
         features: [
           { name: "prefers-color-scheme", value: input.colorScheme },
           {
@@ -550,7 +570,7 @@ export async function launchDesktopFixture(input: {
           },
         ],
       }),
-      cdp.call("Emulation.setDeviceMetricsOverride", {
+      nextCdp.call("Emulation.setDeviceMetricsOverride", {
         width: input.width,
         height: input.height,
         deviceScaleFactor: 1,
@@ -558,12 +578,20 @@ export async function launchDesktopFixture(input: {
       }),
     ]);
     await refreshSurfaces();
-  } catch (error) {
-    await stopProcess(child).catch(() => {});
+  };
+  const cleanupFixture = async (): Promise<void> => {
+    await stopApplication();
     await binding.close().catch(() => {});
     await rpc.close().catch(() => {});
     await lock.release().catch(() => {});
     await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  };
+  let closed = false;
+  try {
+    await launchApplication();
+  } catch (error) {
+    closed = true;
+    await cleanupFixture();
     throw error;
   }
   return {
@@ -598,6 +626,18 @@ export async function launchDesktopFixture(input: {
       }
       await refreshSurfaces();
       return remote?.value as T;
+    },
+    async relaunch(beforeLaunch) {
+      if (closed) throw new Error("desktop fixture is closed");
+      try {
+        await stopApplication();
+        await beforeLaunch?.();
+        await launchApplication();
+      } catch (error) {
+        closed = true;
+        await cleanupFixture();
+        throw error;
+      }
     },
     async screenshot(path: string) {
       if (closed || cdp === undefined) throw new Error("desktop fixture is closed");
@@ -648,17 +688,8 @@ export async function launchDesktopFixture(input: {
     async close() {
       if (closed) return { livePids: [], listenerCount: 0 };
       closed = true;
-      const pid = child.pid;
-      if (cdp !== undefined && cdp.socket.readyState === WebSocket.OPEN) {
-        await cdp.call("Browser.close").catch(() => {});
-        cdp.socket.close();
-      }
-      await stopProcess(child).catch(() => {});
-      await binding.close().catch(() => {});
-      await rpc.close().catch(() => {});
-      await lock.release().catch(() => {});
-      await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      const livePids = pid !== undefined && processAlive(pid) ? [pid] : [];
+      await cleanupFixture();
+      const livePids = [...processIds].filter(processAlive);
       return { livePids, listenerCount: 0 };
     },
   };
