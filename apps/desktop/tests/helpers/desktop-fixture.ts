@@ -173,6 +173,7 @@ export async function launchDesktopFixture(input: {
   readonly executable?: string;
   readonly applicationBundle?: string;
   readonly hidden?: boolean;
+  readonly routeChatAttachmentComposer?: boolean;
   readonly seedConfig?: boolean;
   readonly sessionTimezonePinned?: false | "embedded" | "legacy";
   readonly extraEnv?: Readonly<Record<string, string>>;
@@ -383,6 +384,15 @@ export async function launchDesktopFixture(input: {
         source: "cycling" | "athlete" | "default";
       };
     },
+    ...(input.routeChatAttachmentComposer === true
+      ? {
+          async getChatAttachmentComposer(request) {
+            return finalFrame(await invoke("getChatAttachmentComposer", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["getChatAttachmentComposer"]>>
+            >;
+          },
+        }
+      : {}),
     async setUnitsPreference(request) {
       return finalFrame(await invoke("setUnitsPreference", request)) as {
         value: "metric" | "imperial";
