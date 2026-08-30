@@ -697,6 +697,29 @@ describe("chat scroll anchor", () => {
     expect(element.scrollTop).toBe(100);
   });
 
+  it("preserves the reading position while a connected host is hidden", () => {
+    const anchor = createChatScrollAnchor();
+    const element = host(1200, 400, 500);
+    document.body.append(element);
+    anchor.attach(element);
+    anchor.reanchor();
+    element.scrollTop = 500;
+
+    grow(element, 0);
+    resize(element, 0);
+    anchor.capture();
+    anchor.apply({ hydrationChanged: false, hydrationChange: "none" });
+
+    expect(element.scrollTop).toBe(500);
+
+    grow(element, 1400);
+    resize(element, 400);
+    anchor.reanchor();
+
+    expect(element.scrollTop).toBe(500);
+    element.remove();
+  });
+
   it("jumps to the newest message on the initial hydration", () => {
     const anchor = createChatScrollAnchor();
     const element = host(1000, 400, 0);
@@ -711,8 +734,14 @@ describe("chat scroll anchor", () => {
 
   it("reanchors a hidden initial hydration after the host becomes visible", () => {
     const anchor = createChatScrollAnchor();
-    const element = host(0, 0, 0);
+    const element = host(400, 400, 0);
+    document.body.append(element);
     anchor.attach(element);
+    anchor.reanchor();
+
+    grow(element, 0);
+    resize(element, 0);
+    element.scrollTop = 0;
 
     anchor.capture();
     anchor.apply({ hydrationChanged: true, hydrationChange: "initial" });
@@ -726,6 +755,7 @@ describe("chat scroll anchor", () => {
     anchor.reanchor();
 
     expect(element.scrollTop).toBe(600);
+    element.remove();
   });
 
   it("does not reanchor a visible initial hydration", () => {

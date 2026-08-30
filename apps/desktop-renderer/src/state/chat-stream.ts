@@ -131,6 +131,7 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
         initialPending = host.clientHeight === 0 && host.scrollHeight === 0;
         return;
       }
+      if (host.isConnected && host.clientHeight === 0 && host.scrollHeight === 0) return;
       if (input.hydrationChanged && input.hydrationChange === "prepend") {
         const row = metrics.row;
         host.scrollTop =
