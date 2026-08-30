@@ -40,7 +40,7 @@ export function RetryBar(): ReactElement {
   return (
     <Button
       type="button"
-      className="chat-retry justify-self-start"
+      className="chat-retry mt-row mb-row justify-self-start"
       variant="outline"
       size="sm"
       hidden={!interrupted || retryRequired !== null}
