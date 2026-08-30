@@ -391,6 +391,225 @@ describe("chat view adapter", () => {
     ]);
   });
 
+  it("keeps a stopped decision continuation visibly pending during failed hydration", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const decision = {
+      decisionId: "decision-stopped",
+      chatId: "desktop",
+      messageId: "message-stopped",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+        {
+          id: "tempo",
+          label: "Keep tempo",
+          description: "Keep the planned workout.",
+          recommended: false,
+          consequence: "Tomorrow keeps tempo.",
+        },
+      ],
+    };
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 1,
+          change: "initial",
+          entries: [
+            {
+              kind: "decision-requested",
+              recordedAt: "1998-08-24T08:00:00.000Z",
+              athleteText: "What should I do tomorrow?",
+              decision,
+            },
+            {
+              kind: "decision-answered",
+              recordedAt: "1998-08-24T08:01:00.000Z",
+              decisionId: decision.decisionId,
+              answer: { kind: "option", optionId: "recovery" },
+              consequence: "Tomorrow becomes a recovery day.",
+              continuationId: "continuation-stopped",
+            },
+            {
+              kind: "turn",
+              turnId: "turn-stopped",
+              completedAt: "1998-08-24T08:02:00.000Z",
+              athleteText: "",
+              coachText: "Keep tomorrow easy while",
+              delivery: "interrupted",
+            },
+          ],
+        },
+        decisionLoadError: "Reconnect to restore the saved choice.",
+      }),
+    );
+
+    expect(published.at(-1)?.timeline).toEqual([
+      {
+        kind: "message",
+        message: {
+          id: "history:decision-athlete:decision-stopped",
+          role: "athlete",
+          delivery: "complete",
+          historical: true,
+          text: "What should I do tomorrow?",
+        },
+      },
+      {
+        kind: "message",
+        message: {
+          id: "history:coach:turn-stopped",
+          turnId: "turn-stopped",
+          role: "coach",
+          delivery: "interrupted",
+          historical: true,
+          text: "Keep tomorrow easy while",
+        },
+      },
+    ]);
+    expect(published.at(-1)).toMatchObject({ sendDisabled: true, inputDisabled: false });
+  });
+
+  it("places a saved choice immediately before its completed continuation", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const decision = {
+      decisionId: "decision-stopped",
+      chatId: "desktop",
+      messageId: "message-stopped",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+      ],
+    };
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 1,
+          change: "initial",
+          entries: [
+            {
+              kind: "decision-requested",
+              recordedAt: "1998-08-24T08:00:00.000Z",
+              athleteText: "What should I do tomorrow?",
+              decision,
+            },
+            {
+              kind: "decision-answered",
+              recordedAt: "1998-08-24T08:01:00.000Z",
+              decisionId: decision.decisionId,
+              answer: { kind: "option", optionId: "recovery" },
+              consequence: "Tomorrow becomes a recovery day.",
+              continuationId: "continuation-stopped",
+            },
+            {
+              kind: "turn",
+              turnId: "turn-stopped",
+              completedAt: "1998-08-24T08:02:00.000Z",
+              athleteText: "",
+              coachText: "Keep tomorrow easy while",
+              delivery: "interrupted",
+            },
+            {
+              kind: "decision-continuation-completed",
+              recordedAt: "1998-08-24T08:03:00.000Z",
+              completedAt: "1998-08-24T08:03:00.000Z",
+              decisionId: decision.decisionId,
+              continuationId: "continuation-stopped",
+              turnId: "turn-resumed",
+              coachText: "Keep tomorrow easy, then reassess.",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      published.at(-1)?.timeline.map((item) => {
+        if (item.kind === "choice") return "choice";
+        if (item.kind === "planning-request") return "planning-request";
+        return item.message.role === "athlete" ? "athlete" : item.message.delivery;
+      }),
+    ).toEqual(["athlete", "interrupted", "choice", "complete"]);
+  });
+
+  it("suppresses generic interrupted recovery while a decision continuation is pending", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    let stopped = reduceChatState(EMPTY_CHAT_STATE, {
+      type: "submit",
+      requestKey: 1,
+      userMessage: "",
+      userMessageId: "unused-athlete",
+      assistantMessageId: "decision-continuation",
+      includeUser: false,
+    });
+    stopped = reduceChatState(stopped, {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "interrupted",
+        turnId: "turn-stopped",
+        chatId: "desktop",
+        text: "Keep tomorrow easy while",
+      },
+    });
+
+    adapter.view.render(
+      stopped,
+      controls({
+        decision: {
+          value: {
+            decisionId: "decision-stopped",
+            chatId: "desktop",
+            messageId: "message-stopped",
+            question: "Choose tomorrow’s priority.",
+            status: "answered",
+            options: [],
+            answer: { kind: "custom", text: "Protect recovery" },
+            consequence: "Protect recovery.",
+            continuation: {
+              continuationId: "continuation-stopped",
+              status: "pending",
+            },
+          },
+          phase: "recovering",
+          answerLabel: "Protect recovery",
+          error: "Response stopped. Your partial response is preserved.",
+        },
+      }),
+    );
+
+    expect(published.at(-1)).toMatchObject({
+      status: "interrupted",
+      interrupted: false,
+      notice: null,
+      sendDisabled: true,
+    });
+  });
+
   it("deduplicates a live decision when its persisted entries hydrate later", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });

@@ -182,6 +182,20 @@ export function processAlive(pid: number): boolean {
   }
 }
 
+export async function visibleQaCheckpoint(name: string): Promise<void> {
+  const gateDirectory = process.env.ENDURAGENT_VISIBLE_QA_GATE_DIR;
+  if (gateDirectory === undefined) return;
+  if (!/^[a-z0-9-]+$/.test(name)) throw new TypeError("invalid visible QA checkpoint name");
+  await mkdir(gateDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(join(gateDirectory, `${name}.ready`), "ready\n", { mode: 0o600 });
+  const releasePath = join(gateDirectory, `${name}.release`);
+  const deadline = Date.now() + 600_000;
+  while (!existsSync(releasePath)) {
+    if (Date.now() >= deadline) throw new Error(`visible QA checkpoint timed out: ${name}`);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+}
+
 export async function stopProcess(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");

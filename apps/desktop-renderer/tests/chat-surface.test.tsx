@@ -327,6 +327,41 @@ describe("chat surface", () => {
       expect(screen.getByText(/was saved before Enduragent reopened/u)).toBeVisible();
     });
 
+    it("shows a settled retry state when a saved continuation stops", async () => {
+      const user = userEvent.setup();
+      const pending: CoachDecisionReadModel = {
+        ...unansweredDecision(),
+        status: "answered",
+        answer: { kind: "option", optionId: "recovery" },
+        consequence: "Tomorrow becomes a recovery day.",
+        continuation: { continuationId: "continuation-1", status: "pending" },
+      };
+      setChat({
+        decision: pending,
+        decisionPhase: "recovering",
+        decisionAnswerLabel: "Prioritize recovery",
+        decisionError: "Response stopped. Your partial response is preserved.",
+        sendDisabled: true,
+        inputDisabled: false,
+      });
+      render(<Harness />);
+
+      const title = screen.getByText("Your choice is saved");
+      const panel = title.closest("section");
+      expect(panel).not.toBeNull();
+      expect(panel).not.toHaveAttribute("aria-busy");
+      expect(panel?.querySelector(".animate-spin")).toBeNull();
+      expect(screen.getByText("Prioritize recovery")).toBeVisible();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Response stopped. Your partial response is preserved.",
+      );
+      expect(screen.queryByText(/before Enduragent reopened/u)).toBeNull();
+      expect(screen.queryByText("Finishing your saved choice…")).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(actions.retryDecision).toHaveBeenCalledOnce();
+    });
+
     it("surfaces a decision hydration failure with a reconnect action", async () => {
       const user = userEvent.setup();
       setChat({
