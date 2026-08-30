@@ -1411,6 +1411,35 @@ describe("chat surface", () => {
       expect(retry().hidden).toBe(true);
     });
 
+    it("groups interrupted recovery above later queued messages", () => {
+      setChat({
+        notice: "Response stopped. Your partial response is preserved.",
+        interrupted: true,
+        queued: [
+          {
+            id: "queued-1",
+            text: "Also account for Sunday’s long ride.",
+            command: false,
+            restored: false,
+          },
+          { id: "queued-2", text: "/status", command: true, restored: false },
+        ],
+      });
+      render(<Harness />);
+
+      const host = document.querySelector(".chat-notice-host");
+      const queue = screen.getByRole("region", { name: "Queued messages, 2 queued messages" });
+      if (!(host instanceof HTMLElement)) throw new TypeError("notice host missing");
+
+      expect(host).toContainElement(notice());
+      expect(host).toContainElement(retry());
+      expect(queue).not.toContainElement(retry());
+      expect(retry()).toHaveClass("mt-row", "mb-row");
+      expect(
+        retry().compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
     it("keeps the retry bar inert until the chat actions are bound", () => {
       act(() => {
         useEnduragentStore.setState({ chatActions: null });
