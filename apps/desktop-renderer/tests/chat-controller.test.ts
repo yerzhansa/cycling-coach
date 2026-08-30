@@ -173,16 +173,29 @@ function client(
 ): CoachClient {
   let queueRevision = 0;
   const queued: QueuedChatMessage[] = [];
+  let retryRequired: ChatQueueSnapshot["retryRequired"];
+  let claimSequence = 0;
   const snapshot = (): ChatQueueSnapshot => ({
     schemaVersion: 1,
     revision: queueRevision,
     items: queued.map((item, position) => ({ ...item, position })),
+    ...(retryRequired === undefined ? {} : { retryRequired }),
   });
   const acknowledge = (items: readonly QueuedChatMessage[]): void => {
     const ids = new Set(items.map((item) => item.queuedMessageId));
     for (let index = queued.length - 1; index >= 0; index -= 1) {
       if (ids.has(queued[index]!.queuedMessageId)) queued.splice(index, 1);
     }
+    queueRevision += 1;
+  };
+  const requireRetry = (items: readonly QueuedChatMessage[], turnId: string): void => {
+    const ids = items.map((item) => item.queuedMessageId);
+    retryRequired = {
+      claimId: retryRequired?.claimId ?? `claim-${++claimSequence}`,
+      queuedMessageIds: ids,
+      turnId,
+      status: "retry-required",
+    };
     queueRevision += 1;
   };
   const call = vi.fn((method, request, options) => {
@@ -282,18 +295,37 @@ function client(
       acknowledge(queued.filter((item) => item.queuedMessageId === value.queuedMessageId));
       return Promise.resolve(snapshot()) as never;
     }
-    if (method === "resumeChatQueue" || method === "runQueuedCommand") {
+    if (
+      method === "resumeChatQueue" ||
+      method === "runQueuedCommand" ||
+      method === "retryQueuedTurn"
+    ) {
       hideQueueCall();
-      const head = queued[0];
-      if (head === undefined) return Promise.resolve({ snapshot: snapshot() }) as never;
-      const commandIndex = queued.findIndex((item) => item.kind === "slash-command");
-      const group =
-        head.kind === "slash-command"
+      const group = (() => {
+        if (method === "retryQueuedTurn") {
+          const claimId = (request as { claimId: string }).claimId;
+          if (retryRequired?.claimId !== claimId) return [];
+          const ids = new Set(retryRequired.queuedMessageIds);
+          return queued.filter((item) => ids.has(item.queuedMessageId));
+        }
+        const head = queued[0];
+        if (head === undefined) return [];
+        const commandIndex = queued.findIndex((item) => item.kind === "slash-command");
+        return head.kind === "slash-command"
           ? [head]
           : queued.slice(0, commandIndex === -1 ? queued.length : commandIndex);
+      })();
+      if (group.length === 0) return Promise.resolve({ snapshot: snapshot() }) as never;
+      let turnId = retryRequired?.turnId ?? "turn-1";
+      let interrupted = false;
       const queueOptions = {
         ...(options as CoachClientCallOptions<"chat">),
         requestMethod: method,
+        onEvent(event: TurnEvent) {
+          turnId = event.turnId;
+          if (event.type === "interrupted") interrupted = true;
+          (options as CoachClientCallOptions<"chat"> | undefined)?.onEvent?.(event);
+        },
       };
       const response = call(
         "chat",
@@ -302,11 +334,16 @@ function client(
       ) as Promise<{ text: string }>;
       return response.then(
         (value) => {
-          acknowledge(group);
+          if (interrupted) {
+            requireRetry(group, turnId);
+          } else {
+            retryRequired = undefined;
+            acknowledge(group);
+          }
           return { snapshot: snapshot(), response: value };
         },
         (error: unknown) => {
-          acknowledge(group);
+          requireRetry(group, turnId);
           throw error;
         },
       ) as never;
@@ -659,7 +696,8 @@ describe("chat controller", () => {
     });
     expect(firstOptions?.signal?.aborted).toBe(false);
 
-    await controller.retryInterrupted();
+    expect(states.at(-1)?.retryRequired?.claimId).toBe("claim-1");
+    await controller.retryQueuedTurn("claim-1");
 
     expect(provider.reconnect).not.toHaveBeenCalled();
     expect(states.at(-1)?.messages.at(-1)).toMatchObject({
@@ -971,27 +1009,27 @@ describe("chat controller", () => {
   });
 
   it("preserves a disconnected draft and retries explicitly without duplicating the user row", async () => {
-    const first = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-      throw new CoachClientDisconnectedError(1006, "synthetic");
-    });
-    const second = client(async (_request, options) => {
+    let attempt = 0;
+    const fake = client(async (_request, options) => {
+      attempt += 1;
+      if (attempt === 1) {
+        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+        throw new CoachClientDisconnectedError(1006, "synthetic");
+      }
       deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
       options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
       return { text: "Recovered" };
     });
-    const { controller, provider, states, refresh } = subject(first, second);
+    const { controller, provider, states, refresh } = subject(fake);
     await controller.submit("Same message");
     expect(states.at(-1)?.progress).toBe(CHAT_CONNECTION_INTERRUPTED_COPY);
-    const retry = controller.retryInterrupted();
+    expect(states.at(-1)?.retryRequired?.claimId).toBe("claim-1");
+    const retry = controller.retryQueuedTurn("claim-1");
     expect(states.at(-1)?.progress).toBe(CHAT_WORKING_COPY);
     expect(states.at(-1)?.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
     await retry;
-    expect(provider.reconnect).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(second.call).mock.calls[0]?.[1]).toEqual({
-      chatId: "desktop",
-      message: "Same message",
-    });
+    expect(provider.reconnect).not.toHaveBeenCalled();
+    expect(chatMessages(fake)).toEqual(["Same message", "Same message"]);
     expect(states.at(-1)?.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
     expect(refresh).toHaveBeenCalledTimes(2);
   });
@@ -1002,11 +1040,13 @@ describe("chat controller", () => {
   ])(
     "preserves a draft after $name and makes one new call only on explicit retry",
     async (failure) => {
-      const first = client(async (_request, options) => {
-        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-        throw failure;
-      });
-      const second = client(async (_request, options) => {
+      let attempt = 0;
+      const fake = client(async (_request, options) => {
+        attempt += 1;
+        if (attempt === 1) {
+          deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+          throw failure;
+        }
         deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
         options?.onTerminalEnvelope?.({
           jsonrpc: "2.0",
@@ -1015,20 +1055,21 @@ describe("chat controller", () => {
         });
         return { text: "Recovered" };
       });
-      const { controller, provider, states } = subject(first, second);
+      const { controller, provider, states } = subject(fake);
 
       await controller.submit("Same message");
 
       expect(states.at(-1)?.status).toBe("interrupted");
       expect(states.at(-1)?.progress).toBe(CHAT_CONNECTION_INTERRUPTED_COPY);
       expect(states.at(-1)?.messages.at(-1)?.text).toBe("Partial");
-      expect(first.call).toHaveBeenCalledTimes(1);
-      expect(second.call).not.toHaveBeenCalled();
+      expect(chatMessages(fake)).toHaveLength(1);
       expect(provider.reconnect).not.toHaveBeenCalled();
 
-      await controller.retryInterrupted();
+      expect(states.at(-1)?.retryRequired?.claimId).toBe("claim-1");
+      await controller.retryQueuedTurn("claim-1");
 
-      expect(second.call).toHaveBeenCalledTimes(1);
+      expect(chatMessages(fake)).toHaveLength(2);
+      expect(provider.reconnect).not.toHaveBeenCalled();
       expect(states.at(-1)?.messages.filter((message) => message.role === "athlete")).toHaveLength(
         1,
       );
@@ -1036,36 +1077,22 @@ describe("chat controller", () => {
     },
   );
 
-  it("reuses a shared recovered client when retrying a stale interrupted turn", async () => {
-    let current: CoachClient;
-    const recovered = client(async (_request, options) => {
+  it("retries a durable interrupted turn through the current client", async () => {
+    let attempt = 0;
+    const fake = client(async (_request, options) => {
+      attempt += 1;
+      if (attempt === 1) throw new CoachClientDisconnectedError(1006, "synthetic");
       deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
       options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
       return { text: "Recovered" };
     });
-    const failed = client(async () => {
-      current = recovered;
-      throw new CoachClientDisconnectedError(1006, "synthetic");
-    });
-    current = failed;
-    const provider: DesktopCoachClientProvider = {
-      getClient: vi.fn(async () => current),
-      reconnect: vi.fn(async () => recovered),
-      close: vi.fn(async () => {}),
-    };
-    const states: ChatState[] = [];
-    const controller = createChatController({
-      clients: provider,
-      view: { render: (state) => states.push(structuredClone(state)) },
-      refreshTrainingContext: vi.fn(async () => {}),
-      refreshSpend: vi.fn(async () => {}),
-      initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
-    });
+    const { controller, provider, states } = subject(fake);
     await controller.submit("Same message");
     await vi.waitFor(() => expect(states.at(-1)?.status).toBe("interrupted"));
-    await controller.retryInterrupted();
+    expect(states.at(-1)?.retryRequired?.claimId).toBe("claim-1");
+    await controller.retryQueuedTurn("claim-1");
     expect(provider.reconnect).not.toHaveBeenCalled();
-    expect(recovered.call).toHaveBeenCalledTimes(1);
+    expect(chatMessages(fake)).toHaveLength(2);
     expect(states.at(-1)?.messages.at(-1)?.text).toBe("Recovered");
   });
 
@@ -1075,11 +1102,13 @@ describe("chat controller", () => {
       release = resolve;
     });
     let refreshCalls = 0;
-    const first = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-      throw new CoachClientDisconnectedError(1006, "synthetic");
-    });
-    const second = client(async (_request, options) => {
+    let attempt = 0;
+    const fake = client(async (_request, options) => {
+      attempt += 1;
+      if (attempt === 1) {
+        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+        throw new CoachClientDisconnectedError(1006, "synthetic");
+      }
       deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
       options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
       return { text: "Recovered" };
@@ -1089,8 +1118,8 @@ describe("chat controller", () => {
       interrupted = resolve;
     });
     const provider: DesktopCoachClientProvider = {
-      getClient: vi.fn(async () => first),
-      reconnect: vi.fn(async () => second),
+      getClient: vi.fn(async () => fake),
+      reconnect: vi.fn(async () => fake),
       close: vi.fn(async () => {}),
     };
     let latestState = EMPTY_CHAT_STATE;
@@ -1111,15 +1140,16 @@ describe("chat controller", () => {
     });
     const submission = controller.submit("Same message");
     await interruptedState;
-    const retry = controller.retryInterrupted();
-    const duplicate = controller.retryInterrupted();
+    expect(latestState.retryRequired?.claimId).toBe("claim-1");
+    const retry = controller.retryQueuedTurn("claim-1");
+    const duplicate = controller.retryQueuedTurn("claim-1");
     expect(latestState.progress).toBe(CHAT_WORKING_COPY);
     expect(latestState.messages.filter((message) => message.role === "athlete")).toHaveLength(1);
     expect(controller.openNewConversation()).toBe(false);
     release();
     await Promise.all([submission, retry, duplicate]);
-    expect(provider.reconnect).toHaveBeenCalledTimes(1);
-    expect(second.call).toHaveBeenCalledTimes(1);
+    expect(provider.reconnect).not.toHaveBeenCalled();
+    expect(chatMessages(fake)).toHaveLength(2);
   });
 
   it("allows one in-flight call and treats client protocol rejection as explicit-retry state", async () => {
@@ -1800,33 +1830,35 @@ describe("chat controller", () => {
     );
   });
 
-  it("blocks submit and retry while confirmation is open, then cancel permits retry", async () => {
-    const interrupted = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-      throw new CoachClientDisconnectedError(1006, "synthetic");
-    });
-    const recovered = client(async (_request, options) => {
+  it("blocks new conversation until durable retry resolves, then confirmation blocks submit", async () => {
+    let attempt = 0;
+    const fake = client(async (_request, options) => {
+      attempt += 1;
+      if (attempt === 1) {
+        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+        throw new CoachClientDisconnectedError(1006, "synthetic");
+      }
       deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
       options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
       return { text: "Recovered" };
     });
-    const { controller } = subject(interrupted, recovered);
+    const { controller, states } = subject(fake);
     await controller.submit("Original");
+    expect(controller.openNewConversation()).toBe(false);
+    expect(states.at(-1)?.retryRequired?.claimId).toBe("claim-1");
+    await controller.retryQueuedTurn("claim-1");
     expect(controller.openNewConversation()).toBe(true);
-    vi.mocked(interrupted.call).mockClear();
+    vi.mocked(fake.call).mockClear();
 
     await Promise.all([controller.submit("Blocked"), controller.retryInterrupted()]);
-    expect(interrupted.call).not.toHaveBeenCalled();
-    expect(recovered.call).not.toHaveBeenCalled();
+    expect(fake.call).not.toHaveBeenCalled();
 
     controller.cancelNewConversation();
     expect(controller.openNewConversation()).toBe(true);
     controller.cancelNewConversation();
-    await controller.retryInterrupted();
-    expect(recovered.call).toHaveBeenCalledTimes(1);
-    expect(
-      vi.mocked(interrupted.call).mock.calls.filter(([method]) => method === "resetSession"),
-    ).toEqual([]);
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
+      [],
+    );
   });
 
   it.each([
@@ -1921,26 +1953,36 @@ describe("chat controller", () => {
     ).toHaveLength(0);
   });
 
-  it("preserves interrupted retry ownership after an uncertain reset", async () => {
-    const interrupted = client(
+  it("blocks reset while a durable retry is unresolved and preserves retry ownership", async () => {
+    let attempt = 0;
+    const fake = client(
       async (_request, options) => {
-        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-        throw new CoachClientDisconnectedError(1006, "synthetic");
+        attempt += 1;
+        if (attempt === 1) {
+          deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+          throw new CoachClientDisconnectedError(1006, "synthetic");
+        }
+        deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { text: "Recovered" },
+        });
+        return { text: "Recovered" };
       },
       { resetSession: async () => Promise.reject(new Error("uncertain")) },
     );
-    const recovered = client(async (_request, options) => {
-      deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
-      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 2, result: { text: "Recovered" } });
-      return { text: "Recovered" };
-    });
-    const { controller, provider, states } = subject(interrupted, recovered);
+    const { controller, provider, states } = subject(fake);
     await controller.submit("Original");
-    expect(controller.openNewConversation()).toBe(true);
+    expect(controller.openNewConversation()).toBe(false);
     await controller.confirmNewConversation();
-    await controller.retryInterrupted();
+    expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
+      [],
+    );
+    expect(states.at(-1)?.retryRequired?.claimId).toBe("claim-1");
+    await controller.retryQueuedTurn("claim-1");
 
-    expect(provider.reconnect).toHaveBeenCalledTimes(1);
+    expect(provider.reconnect).not.toHaveBeenCalled();
     expect(states.at(-1)?.messages.at(-1)?.text).toBe("Recovered");
   });
 
@@ -1949,13 +1991,7 @@ describe("chat controller", () => {
     const resetGate = new Promise<{ memoryFlushed: boolean }>((resolve) => {
       settleReset = resolve;
     });
-    const fake = client(
-      async (_request, options) => {
-        deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
-        throw new CoachClientDisconnectedError(1006, "synthetic");
-      },
-      { resetSession: async () => resetGate },
-    );
+    const fake = client(replies(), { resetSession: async () => resetGate });
     const { controller } = subject(fake);
     await controller.submit("Original");
     expect(controller.openNewConversation()).toBe(true);

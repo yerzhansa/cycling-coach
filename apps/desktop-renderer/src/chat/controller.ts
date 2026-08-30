@@ -158,9 +158,27 @@ interface QueuedRetry {
   readonly token: object;
 }
 
+type ChatQueueCall =
+  | {
+      readonly method: "runQueuedCommand";
+      readonly queuedMessageId: string;
+      readonly queuedMessageIds: readonly string[];
+    }
+  | {
+      readonly method: "retryQueuedTurn";
+      readonly claimId: string;
+      readonly queuedMessageIds: readonly string[];
+    }
+  | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] };
+
+interface InterruptedQueueOrigin {
+  readonly requestKey: number;
+  readonly call: ChatQueueCall;
+}
+
 interface ChatRun {
   readonly task: Promise<void>;
-  completed(): boolean;
+  shouldDrain(): boolean;
 }
 
 interface ActiveStopRequest {
@@ -209,6 +227,7 @@ export function createChatController(input: {
   let activeTask: Promise<void> | undefined;
   const outstandingChatTasks = new Set<Promise<void>>();
   let queuedRetry: QueuedRetry | undefined;
+  let interruptedQueueOrigin: InterruptedQueueOrigin | undefined;
   let retryClient: CoachClient | undefined;
   let probeTask: Promise<void> | undefined;
   let resetTask: Promise<void> | undefined;
@@ -354,25 +373,15 @@ export function createChatController(input: {
     userMessage: string,
     includeUser: boolean,
     reconnect: boolean,
-    queueCall?:
-      | {
-          readonly method: "runQueuedCommand";
-          readonly queuedMessageId: string;
-          readonly queuedMessageIds: readonly string[];
-        }
-      | {
-          readonly method: "retryQueuedTurn";
-          readonly claimId: string;
-          readonly queuedMessageIds: readonly string[];
-        }
-      | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
+    queueCall?: ChatQueueCall,
     attachments: readonly ChatSentAttachment[] = [],
+    reconnectQueueOrigin?: ChatQueueCall,
   ): ChatRun => {
     epoch += 1;
     const requestKey = Number(nextId("request").slice("request-".length));
     const userMessageId = nextId("message");
     const assistantMessageId = nextId("message");
-    let completed = false;
+    let shouldDrain = false;
     reduce({
       type: "submit",
       requestKey,
@@ -384,6 +393,8 @@ export function createChatController(input: {
     });
     let callStarted = false;
     const task = (async () => {
+      const immutableQueueOrigin = queueCall ?? reconnectQueueOrigin;
+      let activeQueueCall = immutableQueueOrigin;
       let boundRequestId: string | number | undefined;
       let boundTurnId: string | undefined;
       let pendingEnvelope: CoachTurnEventNotificationEnvelope | undefined;
@@ -400,6 +411,12 @@ export function createChatController(input: {
       let stopRequested = false;
       let stopTask: Promise<void> | undefined;
       const current = (): boolean => !disposed && state.activeTurn?.requestKey === requestKey;
+      const preserveInterruptedQueueOrigin = (): void => {
+        interruptedQueueOrigin =
+          immutableQueueOrigin === undefined
+            ? undefined
+            : { requestKey, call: immutableQueueOrigin };
+      };
       const failProtocol = (): void => {
         if (protocolFault) return;
         protocolFault = true;
@@ -429,6 +446,40 @@ export function createChatController(input: {
           client = await input.clients.getClient();
         }
         if (!current()) return;
+        if (reconnect || reconnectQueueOrigin !== undefined) {
+          const snapshot = await refreshQueue(client);
+          if (reconnectQueueOrigin !== undefined) {
+            const originIds = reconnectQueueOrigin.queuedMessageIds;
+            const matchesOrigin = (ids: readonly string[]): boolean =>
+              ids.length === originIds.length && ids.every((id, index) => id === originIds[index]);
+            const recovery = snapshot.retryRequired;
+            if (recovery !== undefined && matchesOrigin(recovery.queuedMessageIds)) {
+              activeQueueCall = {
+                method: "retryQueuedTurn",
+                claimId: recovery.claimId,
+                queuedMessageIds: recovery.queuedMessageIds,
+              };
+            } else if (
+              recovery === undefined &&
+              matchesOrigin(
+                snapshot.items.slice(0, originIds.length).map((item) => item.queuedMessageId),
+              )
+            ) {
+              activeQueueCall = reconnectQueueOrigin;
+            } else if (
+              recovery === undefined &&
+              originIds.every((id) => !snapshot.items.some((item) => item.queuedMessageId === id))
+            ) {
+              interruptedQueueOrigin = undefined;
+              reduce({ type: "discard-submission", requestKey });
+              shouldDrain = true;
+              return;
+            } else {
+              throw new CoachClientProtocolError();
+            }
+          }
+        }
+        if (!current()) return;
         callStarted = true;
         const callOptions = {
           signal: callAbortController.signal,
@@ -436,7 +487,7 @@ export function createChatController(input: {
             if (!current() || protocolFault) return;
             if (
               envelope.method !== "coach.turnEvent" ||
-              envelope.params.requestMethod !== (queueCall?.method ?? "chat") ||
+              envelope.params.requestMethod !== (activeQueueCall?.method ?? "chat") ||
               envelope.params.turnId.length === 0
             ) {
               failProtocol();
@@ -484,8 +535,8 @@ export function createChatController(input: {
                 return;
               }
               startSeen = true;
-              if (queueCall !== undefined) {
-                reduce({ type: "queue-claimed", ids: queueCall.queuedMessageIds });
+              if (activeQueueCall !== undefined) {
+                reduce({ type: "queue-claimed", ids: activeQueueCall.queuedMessageIds });
               }
             }
             let appendDelta: ChatAppendDelta | undefined;
@@ -543,18 +594,21 @@ export function createChatController(input: {
           },
         } satisfies CoachClientCallOptions<"chat">;
         const queuedResult =
-          queueCall?.method === "resumeChatQueue"
+          activeQueueCall?.method === "resumeChatQueue"
             ? await client.call("resumeChatQueue", { chatId: DESKTOP_CHAT_ID }, callOptions)
-            : queueCall?.method === "runQueuedCommand"
+            : activeQueueCall?.method === "runQueuedCommand"
               ? await client.call(
                   "runQueuedCommand",
-                  { chatId: DESKTOP_CHAT_ID, queuedMessageId: queueCall.queuedMessageId },
+                  {
+                    chatId: DESKTOP_CHAT_ID,
+                    queuedMessageId: activeQueueCall.queuedMessageId,
+                  },
                   callOptions,
                 )
-              : queueCall?.method === "retryQueuedTurn"
+              : activeQueueCall?.method === "retryQueuedTurn"
                 ? await client.call(
                     "retryQueuedTurn",
-                    { chatId: DESKTOP_CHAT_ID, claimId: queueCall.claimId },
+                    { chatId: DESKTOP_CHAT_ID, claimId: activeQueueCall.claimId },
                     callOptions,
                   )
                 : undefined;
@@ -573,7 +627,14 @@ export function createChatController(input: {
           queuedResult.response === undefined &&
           boundTurnId === undefined
         ) {
+          interruptedQueueOrigin = undefined;
           reduce({ type: "discard-submission", requestKey });
+          shouldDrain =
+            activeQueueCall?.method === "retryQueuedTurn" &&
+            queuedResult.snapshot.retryRequired === undefined &&
+            activeQueueCall.queuedMessageIds.every(
+              (id) => !queuedResult.snapshot.items.some((item) => item.queuedMessageId === id),
+            );
           return;
         }
         if (interruptedText !== undefined) {
@@ -586,12 +647,14 @@ export function createChatController(input: {
           ) {
             retryClient = client;
             retryReconnect = true;
+            preserveInterruptedQueueOrigin();
             reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
             return;
           }
           retryClient = undefined;
           retryReconnect = false;
-          completed = true;
+          preserveInterruptedQueueOrigin();
+          shouldDrain = true;
           return;
         }
         if (requestedDecision !== undefined) {
@@ -604,9 +667,11 @@ export function createChatController(input: {
             retryClient = client;
             retryReconnect = true;
             decision = null;
+            preserveInterruptedQueueOrigin();
             reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
             return;
           }
+          interruptedQueueOrigin = undefined;
           reduce({ type: "discard", requestKey });
           return;
         }
@@ -621,20 +686,23 @@ export function createChatController(input: {
         ) {
           retryClient = client;
           retryReconnect = true;
+          preserveInterruptedQueueOrigin();
           reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
           return;
         }
         if (!/\S/u.test(finalText)) {
           retryClient = client;
           retryReconnect = true;
+          preserveInterruptedQueueOrigin();
           reduce({ type: "interrupt", requestKey, copy: CHAT_EMPTY_RESPONSE_COPY });
           return;
         }
+        interruptedQueueOrigin = undefined;
         reduce({ type: "complete", requestKey });
-        completed = state.status === "idle" && state.activeTurn?.requestKey === requestKey;
+        shouldDrain = state.status === "idle" && state.activeTurn?.requestKey === requestKey;
       } catch (error) {
         if (!current()) return;
-        if (queueCall !== undefined && client !== undefined) {
+        if (activeQueueCall !== undefined && client !== undefined) {
           try {
             applyQueueSnapshot(await client.call("getChatQueue", { chatId: DESKTOP_CHAT_ID }));
           } catch {}
@@ -642,6 +710,7 @@ export function createChatController(input: {
         if (protocolFault || error instanceof CoachClientProtocolError) {
           retryClient = client;
           retryReconnect = true;
+          preserveInterruptedQueueOrigin();
           reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
         } else if (
           error instanceof CoachClientDisconnectedError ||
@@ -650,8 +719,10 @@ export function createChatController(input: {
         ) {
           retryClient = client;
           retryReconnect = true;
+          preserveInterruptedQueueOrigin();
           reduce({ type: "interrupt", requestKey, copy: CHAT_CONNECTION_INTERRUPTED_COPY });
         } else {
+          interruptedQueueOrigin = undefined;
           reduce({ type: "fail", requestKey, copy: CHAT_FAILURE_COPY });
         }
       } finally {
@@ -676,32 +747,22 @@ export function createChatController(input: {
       }
       if (released) render();
     });
-    return { task, completed: () => completed };
+    return { task, shouldDrain: () => shouldDrain };
   };
 
   const dispatch = (
     userMessage: string,
     includeUser: boolean,
     reconnect: boolean,
+    queueOrigin?: ChatQueueCall,
   ): Promise<void> => {
-    const chatRun = run(userMessage, includeUser, reconnect);
-    return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
+    const chatRun = run(userMessage, includeUser, reconnect, undefined, [], queueOrigin);
+    return chatRun.task.then(() => (chatRun.shouldDrain() ? drain() : undefined));
   };
 
   const dispatchQueue = (
     userMessage: string,
-    queueCall:
-      | {
-          readonly method: "runQueuedCommand";
-          readonly queuedMessageId: string;
-          readonly queuedMessageIds: readonly string[];
-        }
-      | {
-          readonly method: "retryQueuedTurn";
-          readonly claimId: string;
-          readonly queuedMessageIds: readonly string[];
-        }
-      | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
+    queueCall: ChatQueueCall,
     includeUser = true,
   ): Promise<void> => {
     const attachments = queueCall.queuedMessageIds
@@ -709,7 +770,7 @@ export function createChatController(input: {
       .map((id) => attachmentSummaries.get(id))
       .filter((attachment): attachment is ChatSentAttachment => attachment !== undefined);
     const chatRun = run(userMessage, includeUser, false, queueCall, attachments);
-    return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
+    return chatRun.task.then(() => (chatRun.shouldDrain() ? drain() : undefined));
   };
 
   const answerLabel = (
@@ -740,14 +801,15 @@ export function createChatController(input: {
     return decision;
   };
 
-  const refreshQueue = async (client?: CoachClient): Promise<void> => {
+  const refreshQueue = async (client?: CoachClient): Promise<ChatQueueSnapshot> => {
     const activeClient = client ?? (await input.clients.getClient());
     const snapshot = await activeClient.call("getChatQueue", { chatId: DESKTOP_CHAT_ID });
-    if (disposed) return;
+    if (disposed) return snapshot;
     applyQueueSnapshot(snapshot);
     queueLoaded = true;
     queueLoadError = null;
     render();
+    return snapshot;
   };
 
   const refreshAttachments = async (client?: CoachClient): Promise<void> => {
@@ -1653,8 +1715,13 @@ export function createChatController(input: {
         return activeTask ?? Promise.resolve();
       }
       const { requestKey, userMessage } = state.activeTurn;
+      const queueOrigin =
+        interruptedQueueOrigin?.requestKey === requestKey ? interruptedQueueOrigin.call : undefined;
       if (queuedRetry?.requestKey === requestKey) return queuedRetry.promise;
-      if (activeTask === undefined) return dispatch(userMessage, false, retryReconnect);
+      if (activeTask === undefined) {
+        interruptedQueueOrigin = undefined;
+        return dispatch(userMessage, false, retryReconnect, queueOrigin);
+      }
       const currentTask = activeTask;
       const token = {};
       const pending = currentTask
@@ -1667,7 +1734,8 @@ export function createChatController(input: {
           ) {
             return;
           }
-          return dispatch(userMessage, false, retryReconnect);
+          interruptedQueueOrigin = undefined;
+          return dispatch(userMessage, false, retryReconnect, queueOrigin);
         })
         .finally(() => {
           if (queuedRetry?.token === token) {
@@ -1756,6 +1824,7 @@ export function createChatController(input: {
           sequence += 1;
           retryClient = undefined;
           queuedRetry = undefined;
+          interruptedQueueOrigin = undefined;
           decision = null;
           decisionLoaded = true;
           decisionLoadError = null;
@@ -1836,6 +1905,7 @@ export function createChatController(input: {
     dispose() {
       disposed = true;
       activeStopRequest = undefined;
+      interruptedQueueOrigin = undefined;
       hydrator.dispose();
       decision = null;
       epoch += 1;

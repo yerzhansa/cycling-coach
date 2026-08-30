@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TurnEvent } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createCoachEngine } from "../src/index.js";
 import type { EngineHostPorts, ModelTransportRequest } from "../src/host-ports.js";
@@ -462,6 +463,166 @@ describe("engine durable chat queue", () => {
 
     expect(await engine.getChatQueue!({ chatId: "desktop" })).toMatchObject({ items: [] });
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("hands an active recovery claim to a fresh retry before later ordinary work", async () => {
+    let announceStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      announceStarted = resolve;
+    });
+    const requests: ModelTransportRequest[] = [];
+    const generate = vi.fn((request: ModelTransportRequest): Promise<GenerateResult> => {
+      requests.push(request);
+      if (requests.length === 1) {
+        request.options.onTextDelta?.("Partial");
+        announceStarted();
+        return new Promise<GenerateResult>((_resolve, reject) => {
+          request.options.signal?.addEventListener("abort", () => reject(new Error("stopped")), {
+            once: true,
+          });
+        });
+      }
+      return Promise.resolve(generated(requests.length === 2 ? "Recovered" : "Later reply"));
+    });
+    const { engine } = setup(undefined, generate);
+    await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s1", text: "First" });
+    const activeEvents: TurnEvent[] = [];
+    const running = engine.resumeChatQueue!({ chatId: "desktop" }, (event) =>
+      activeEvents.push(event),
+    );
+    await started;
+    await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "s2",
+      text: "Later 1",
+    });
+    await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "s3",
+      text: "Later 2",
+    });
+
+    const recovery = await engine.getChatQueue!({ chatId: "desktop" });
+    expect(recovery.items.map((item) => item.text)).toEqual(["First", "Later 1", "Later 2"]);
+    expect(recovery.retryRequired).toMatchObject({
+      queuedMessageIds: [recovery.items[0]!.queuedMessageId],
+    });
+
+    const retryEvents: TurnEvent[] = [];
+    const retrying = engine.retryQueuedTurn!(
+      { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
+      (event) => retryEvents.push(event),
+    );
+    await expect(running).resolves.toMatchObject({
+      response: { text: "Partial" },
+      snapshot: { retryRequired: { claimId: recovery.retryRequired!.claimId } },
+    });
+    const retried = await retrying;
+    expect(retried.response?.text).toBe("Recovered");
+    expect(retried.snapshot.items.map((item) => item.text)).toEqual(["Later 1", "Later 2"]);
+    expect(retried.snapshot.retryRequired).toBeUndefined();
+    const firstTurnId = activeEvents.find((event) => event.type === "turn-start")?.turnId;
+    const retryTurnId = retryEvents.find((event) => event.type === "turn-start")?.turnId;
+    expect(retryTurnId).toBeDefined();
+    expect(retryTurnId).not.toBe(firstTurnId);
+    expect(retryEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
+
+    const later = await engine.resumeChatQueue!({ chatId: "desktop" });
+    expect(later.response?.text).toBe("Later reply");
+    expect(later.snapshot.items).toEqual([]);
+    expect(requests[1]?.options.messages?.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("First"),
+    });
+    expect(requests[2]?.options.messages?.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("Later 1\n\nLater 2"),
+    });
+    expect(generate).toHaveBeenCalledTimes(3);
+  });
+
+  it("coalesces a duplicate retry after its turn starts and preserves different-claim behavior", async () => {
+    const failure = new Error("terminal queue failure");
+    let announceRetryStarted!: () => void;
+    const retryStarted = new Promise<void>((resolve) => {
+      announceRetryStarted = resolve;
+    });
+    let completeRetry!: () => void;
+    let attempts = 0;
+    const generate = vi.fn((request: ModelTransportRequest): Promise<GenerateResult> => {
+      attempts += 1;
+      if (attempts === 1) return Promise.reject(failure);
+      return new Promise<GenerateResult>((resolve, reject) => {
+        completeRetry = () => resolve(generated("Recovered"));
+        request.options.signal?.addEventListener("abort", () => reject(new Error("restarted")), {
+          once: true,
+        });
+        announceRetryStarted();
+      });
+    });
+    const { engine } = setup(undefined, generate);
+    await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s1", text: "Queued" });
+    await expect(engine.resumeChatQueue!({ chatId: "desktop" })).rejects.toBe(failure);
+    const recovery = await engine.getChatQueue!({ chatId: "desktop" });
+
+    const retryEvents: TurnEvent[] = [];
+    const first = engine.retryQueuedTurn!(
+      { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
+      (event) => retryEvents.push(event),
+    );
+    await retryStarted;
+    const duplicateEvents: TurnEvent[] = [];
+    const duplicate = engine.retryQueuedTurn!(
+      { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
+      (event) => duplicateEvents.push(event),
+    );
+    expect(duplicate).toBe(first);
+
+    const different = engine.retryQueuedTurn!({ chatId: "desktop", claimId: "stale-claim" });
+    expect(different).not.toBe(first);
+    await expect(different).resolves.toMatchObject({
+      snapshot: { retryRequired: { claimId: recovery.retryRequired!.claimId } },
+    });
+
+    completeRetry();
+    const [firstResult, duplicateResult] = await Promise.all([first, duplicate]);
+    expect(duplicateResult).toBe(firstResult);
+    expect(firstResult).toMatchObject({ response: { text: "Recovered" }, snapshot: { items: [] } });
+    expect(retryEvents.filter((event) => event.type === "turn-start")).toHaveLength(1);
+    expect(retryEvents.filter((event) => event.type === "final-text")).toHaveLength(1);
+    expect(duplicateEvents).toEqual([]);
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a thrown queue claim unchanged while direct chat succeeds", async () => {
+    const failure = new Error("terminal queue failure");
+    let attempts = 0;
+    const generate = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw failure;
+      return generated(attempts === 2 ? "Direct reply" : "Recovered");
+    });
+    const { engine } = setup(undefined, generate);
+    await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s1", text: "Queued" });
+
+    await expect(engine.resumeChatQueue!({ chatId: "desktop" })).rejects.toBe(failure);
+    const beforeDirect = await engine.getChatQueue!({ chatId: "desktop" });
+    expect(beforeDirect.retryRequired).toMatchObject({
+      queuedMessageIds: [beforeDirect.items[0]!.queuedMessageId],
+    });
+
+    await expect(engine.chat({ chatId: "desktop", message: "Independent" })).resolves.toEqual({
+      text: "Direct reply",
+    });
+    expect(await engine.getChatQueue!({ chatId: "desktop" })).toEqual(beforeDirect);
+
+    await expect(
+      engine.retryQueuedTurn!({
+        chatId: "desktop",
+        claimId: beforeDirect.retryRequired!.claimId,
+      }),
+    ).resolves.toMatchObject({ response: { text: "Recovered" }, snapshot: { items: [] } });
+    expect(generate).toHaveBeenCalledTimes(3);
   });
 
   it("Stop marks only the active claim retry-required and never drains the command behind it", async () => {
