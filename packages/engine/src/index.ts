@@ -95,6 +95,10 @@ export interface CreateCoachEngineInput {
 export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
   const agent = new CoachAgent(input.sport, input.ports);
   const queueRuns = new Map<string, Promise<ChatQueueRunResult>>();
+  const queueRetryRuns = new Map<
+    string,
+    { readonly claimId: string; readonly task: Promise<ChatQueueRunResult> }
+  >();
   const deferredPlanTurns = new Map<string, DeferredPlanTurn>();
   const deferredKey = (chatId: string, turnId: string): string => `${chatId}:${turnId}`;
   const queueAuthorities = new Map<string, Promise<void>>();
@@ -151,7 +155,27 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
     onEvent: ((event: TurnEvent) => void) | undefined,
   ): Promise<ChatQueueRunResult> => {
     const active = queueRuns.get(chatId);
-    if (active !== undefined) return active;
+    if (active !== undefined) {
+      if (mode !== "retry" || exactId === undefined) return active;
+      const existing = queueRetryRuns.get(chatId);
+      if (existing?.claimId === exactId) return existing.task;
+      if (existing !== undefined) return snapshot(chatId).then((value) => ({ snapshot: value }));
+      const task = (async (): Promise<ChatQueueRunResult> => {
+        const before = await snapshot(chatId);
+        const recovery = before.retryRequired;
+        if (recovery === undefined || recovery.claimId !== exactId) return { snapshot: before };
+        agent.stopChat(chatId, recovery.turnId);
+        await active.catch(() => undefined);
+        if (queueRuns.get(chatId) === active) queueRuns.delete(chatId);
+        return runQueue(chatId, "retry", exactId, onEvent);
+      })();
+      queueRetryRuns.set(chatId, { claimId: exactId, task });
+      const release = (): void => {
+        if (queueRetryRuns.get(chatId)?.task === task) queueRetryRuns.delete(chatId);
+      };
+      void task.then(release, release);
+      return task;
+    }
     const task = withQueueAuthority(chatId, async (): Promise<ChatQueueRunResult> => {
       const before = await snapshot(chatId);
       const pendingDecision = input.ports.coachDecisions?.getDecision(chatId);
@@ -305,6 +329,13 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       if (queueRuns.get(chatId) === task) queueRuns.delete(chatId);
     };
     void task.then(release, release);
+    if (mode === "retry" && exactId !== undefined && queueRetryRuns.get(chatId) === undefined) {
+      queueRetryRuns.set(chatId, { claimId: exactId, task });
+      const releaseRetry = (): void => {
+        if (queueRetryRuns.get(chatId)?.task === task) queueRetryRuns.delete(chatId);
+      };
+      void task.then(releaseRetry, releaseRetry);
+    }
     return task;
   };
   return {

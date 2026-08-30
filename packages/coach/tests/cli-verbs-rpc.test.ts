@@ -1,5 +1,8 @@
 import { createServer, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +11,23 @@ import {
   connectCoachClient,
   type CoachClient,
 } from "@enduragent/coach-client";
+import {
+  Memory,
+  classifyFailure,
+  createConversationStore,
+  createMissingPlatformCalendarMutations,
+  engineConfigFromConfig,
+  extractRetryAfterMs,
+  type Config,
+} from "@enduragent/core";
+import {
+  createCoachEngine,
+  type EngineHostPorts,
+  type ModelTransportDecorator,
+  type ModelTransportRequest,
+} from "@enduragent/engine";
+import type { GenerateResult } from "@enduragent/engine/sport";
+import { cyclingSport } from "@enduragent/sport-cycling";
 import {
   CoachRemoteError,
   connectCoachVerbTransport,
@@ -256,6 +276,187 @@ async function closeTransport(transport: CoachVerbTransport | undefined): Promis
 }
 
 describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
+  it("recovers a detached active queue claim and drains later ordinary work once", async () => {
+    const dataDir = await mkdtemp(join(await realpath(tmpdir()), "coach-queue-rpc-"));
+    await mkdir(join(dataDir, "memory"), { recursive: true });
+    const requests: ModelTransportRequest[] = [];
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const generated = (text: string): GenerateResult => {
+      const usage = {
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        outputTokenDetails: { textTokens: 1, reasoningTokens: 0 },
+      };
+      return { text, toolCalls: [], finishReason: "stop", usage, totalUsage: usage, steps: 1 };
+    };
+    const modelTransportDecorator: ModelTransportDecorator = () => ({
+      generate(request): Promise<GenerateResult> {
+        requests.push(request);
+        if (requests.length === 1) {
+          request.options.onTextDelta?.("Partial");
+          started();
+          return new Promise<GenerateResult>((_resolve, reject) => {
+            request.options.signal?.addEventListener("abort", () => reject(new Error("stopped")), {
+              once: true,
+            });
+          });
+        }
+        return Promise.resolve(generated(requests.length === 2 ? "Recovered" : "Later reply"));
+      },
+    });
+    const config: Config = {
+      dataSource: "platform",
+      llm: {
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        apiKey: "",
+        authProfile: "openai-codex",
+      },
+      intervals: { apiKey: "", athleteId: "0" },
+      telegram: { botToken: "" },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "UTC",
+      },
+      contextWindowTokens: 272_000,
+      dataDir,
+    };
+    const conversation = createConversationStore(dataDir);
+    let idSequence = 0;
+    const ports: EngineHostPorts = {
+      config: engineConfigFromConfig(config),
+      memory: new Memory(dataDir, "UTC"),
+      chatStore: conversation,
+      transcriptWriter: conversation,
+      coachDecisions: conversation,
+      secrets: { resolve: async () => "" },
+      platform: {
+        legacyClient: null,
+        athleteData: undefined,
+        calendarMutations: createMissingPlatformCalendarMutations(),
+      },
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      },
+      usage: { append: () => {} },
+      stateReader: {
+        getAthleteState: async () => {
+          throw new Error("Athlete state is unavailable in this test.");
+        },
+      },
+      readReferenceState: () => ({ errorState: null, latest: null }),
+      getAccessToken: async () => "token",
+      classifyFailure,
+      extractRetryAfterMs,
+      now: () => 0,
+      randomId: () => `rpc-queue-${++idSequence}`,
+      modelTransportDecorator,
+    };
+    const queueEngine = createCoachEngine({ sport: cyclingSport, ports });
+    const running = await startRpc(queueEngine);
+    const clients: CoachClient[] = [];
+    const chatId = "desktop";
+    let firstTurnId: string | undefined;
+    try {
+      const first = await connectCoachClient({ url: running.url, token });
+      clients.push(first);
+      await first.call("enqueueChatMessage", {
+        chatId,
+        submissionId: "submission-first",
+        text: "First",
+      });
+      const firstEvents: TurnEvent[] = [];
+      const firstRun = first.call(
+        "resumeChatQueue",
+        { chatId },
+        {
+          onEvent: (event) => {
+            firstEvents.push(event);
+            if (event.type === "turn-start") firstTurnId = event.turnId;
+          },
+        },
+      );
+      const firstOutcome = firstRun.catch((error: unknown) => error);
+      await firstStarted;
+      await vi.waitFor(() =>
+        expect(firstEvents.map((event) => event.type)).toEqual(["turn-start", "text_delta"]),
+      );
+      expect(firstTurnId).toBeDefined();
+      expect(firstEvents[1]).toMatchObject({ type: "text_delta", delta: "Partial" });
+      await first.call("enqueueChatMessage", {
+        chatId,
+        submissionId: "submission-later-one",
+        text: "Later one",
+      });
+      await first.call("enqueueChatMessage", {
+        chatId,
+        submissionId: "submission-later-two",
+        text: "Later two",
+      });
+
+      const serverObservedDisconnect = running.nextClientDisconnect();
+      await first.close();
+      await serverObservedDisconnect;
+      expect(await firstOutcome).toBeInstanceOf(CoachClientDisconnectedError);
+
+      const recovered = await connectCoachClient({ url: running.url, token });
+      clients.push(recovered);
+      const recovery = await recovered.call("getChatQueue", { chatId });
+      expect(recovery.items.map((item) => item.text)).toEqual(["First", "Later one", "Later two"]);
+      expect(recovery.retryRequired).toMatchObject({
+        queuedMessageIds: [recovery.items[0]!.queuedMessageId],
+        status: "retry-required",
+      });
+
+      const retryEvents: TurnEvent[] = [];
+      const retried = await recovered.call(
+        "retryQueuedTurn",
+        { chatId, claimId: recovery.retryRequired!.claimId },
+        { onEvent: (event) => retryEvents.push(event) },
+      );
+      expect(retried.response?.text).toBe("Recovered");
+      expect(retried.snapshot.retryRequired).toBeUndefined();
+      expect(retried.snapshot.items.map((item) => item.text)).toEqual(["Later one", "Later two"]);
+      expect(retryEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
+      expect(retryEvents[0]?.turnId).not.toBe(firstTurnId);
+
+      const laterEvents: TurnEvent[] = [];
+      const drained = await recovered.call(
+        "resumeChatQueue",
+        { chatId },
+        { onEvent: (event) => laterEvents.push(event) },
+      );
+      expect(drained.response?.text).toBe("Later reply");
+      expect(drained.snapshot.items).toEqual([]);
+      expect(laterEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
+      const userMessages = requests.map(
+        (request) =>
+          request.options.messages?.at(-1) as { readonly role: string; readonly content: string },
+      );
+      expect(userMessages.map((message) => message.role)).toEqual(["user", "user", "user"]);
+      expect(userMessages.map((message) => message.content.split("\nCurrent time:", 1)[0])).toEqual(
+        ["First", "First", "Later one\n\nLater two"],
+      );
+    } finally {
+      if (firstTurnId !== undefined) {
+        await queueEngine.stopChat?.({ chatId, turnId: firstTurnId }).catch(() => undefined);
+      }
+      await closeServer(running, clients);
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs all five verbs, preserves stream envelopes, and serves warm state under 500 ms", async () => {
     const chatCalls: Parameters<CoachEngine["chat"]>[0][] = [];
     const getAthleteState = vi.fn<CoachEngine["getAthleteState"]>(async () => state);
