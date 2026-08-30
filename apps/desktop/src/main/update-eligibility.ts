@@ -9,20 +9,19 @@ export type DesktopUpdatePlatform = (typeof DESKTOP_UPDATE_SUPPORTED_PLATFORMS)[
 export const DESKTOP_UPDATE_PLATFORM_ACTIVATION: Readonly<Record<DesktopUpdatePlatform, boolean>> =
   Object.freeze({ darwin: true, win32: false });
 
-export function isDesktopUpdateReleaseEligible(input: {
+interface OfficialDesktopReleaseInput {
   readonly isPackaged: boolean;
   readonly platform: NodeJS.Platform;
   readonly securitySmokeMode: boolean;
   readonly appPath: string;
   readonly currentVersion: string;
   readonly readPackageJson?: (path: string) => string;
-  readonly platformActivation?: Readonly<Record<DesktopUpdatePlatform, boolean>>;
-}): boolean {
-  const platformActivation = input.platformActivation ?? DESKTOP_UPDATE_PLATFORM_ACTIVATION;
+}
+
+export function isOfficialDesktopRelease(input: OfficialDesktopReleaseInput): boolean {
   if (
     !input.isPackaged ||
     !DESKTOP_UPDATE_SUPPORTED_PLATFORMS.includes(input.platform as DesktopUpdatePlatform) ||
-    platformActivation[input.platform as DesktopUpdatePlatform] !== true ||
     input.securitySmokeMode ||
     !isStableDesktopVersion(input.currentVersion)
   ) {
@@ -46,4 +45,19 @@ export function isDesktopUpdateReleaseEligible(input: {
   } catch {
     return false;
   }
+}
+
+export function isDesktopUpdateReleaseEligible(
+  input: OfficialDesktopReleaseInput & {
+    readonly platformActivation?: Readonly<Record<DesktopUpdatePlatform, boolean>>;
+  },
+): boolean {
+  const platformActivation = input.platformActivation ?? DESKTOP_UPDATE_PLATFORM_ACTIVATION;
+  if (
+    !DESKTOP_UPDATE_SUPPORTED_PLATFORMS.includes(input.platform as DesktopUpdatePlatform) ||
+    platformActivation[input.platform as DesktopUpdatePlatform] !== true
+  ) {
+    return false;
+  }
+  return isOfficialDesktopRelease(input);
 }

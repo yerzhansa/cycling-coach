@@ -148,23 +148,28 @@ local estimate, not a billing control — set limits with your provider too.
 
 ## Your data stays on your device
 
-There is no Enduragent account, no server holding your training history, and no analytics in the
-product. Nowhere for us to look, because we did not build the place to look.
+There is no Enduragent account, no server holding your training history, and no behavioral
+analytics in the product. Nowhere for us to look at your rides or conversations, because we did
+not build the place to look.
 
-**Files you can open.** Everything lives under `~/.enduragent`: a local SQLite store, an archive
-of the raw data it read, plain-Markdown memory files, and your transcripts. Delete the folder and
-it is gone.
+**Files you can open.** Your athlete data lives under `~/.enduragent`: a local SQLite store, an
+archive of the raw data it read, plain-Markdown memory files, and your transcripts. Desktop also
+keeps preferences, its random installation UUID, and encrypted credentials under
+`~/Library/Application Support/Enduragent` on macOS or `%LOCALAPPDATA%\Enduragent` on Windows.
+Delete both locations to remove all locally stored Enduragent data.
 
 **Keys encrypted at rest.** API keys are encrypted with macOS secure storage, keyed from your
 Keychain. If secure storage is unavailable, the app refuses to save the key rather than writing it
 in the clear.
 
 **What does leave.** Your prompt and the training numbers in it go to the model provider you
-chose. Your intervals.icu key goes to intervals.icu. The self-hosted Telegram bot may contact
-`ping.enduragent.icu` at startup and on its daily timer, but at most once per installation in any
-24 hours — no athlete data, no credentials; set `CYCLING_COACH_NO_UPDATE_CHECK=1` to switch it off.
-Manual commands never initiate telemetry. Version lookups use npm; `/whatsnew` also queries GitHub
-for release notes. The desktop app never makes that request.
+chose. Your intervals.icu key goes to intervals.icu. The self-hosted Telegram bot and official
+Desktop releases may contact `ping.enduragent.icu` at startup and on a daily timer, but at most
+once per installation in any 24 hours. The request contains the product, version, install channel,
+and a random installation UUID — no athlete data, messages, or credentials. Set
+`CYCLING_COACH_NO_UPDATE_CHECK=1` for the bot or `ENDURAGENT_NO_USAGE_PING=1` for Desktop to switch
+it off. Manual commands never initiate telemetry; Desktop update checks remain separate and go
+directly to GitHub.
 
 Full policy: [enduragent.icu/privacy.html](https://enduragent.icu/privacy.html).
 

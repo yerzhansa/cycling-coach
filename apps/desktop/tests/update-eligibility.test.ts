@@ -4,6 +4,7 @@ import {
   DESKTOP_UPDATE_PLATFORM_ACTIVATION,
   DESKTOP_UPDATE_SUPPORTED_PLATFORMS,
   isDesktopUpdateReleaseEligible,
+  isOfficialDesktopRelease,
   type DesktopUpdatePlatform,
 } from "../src/main/update-eligibility.js";
 
@@ -22,6 +23,51 @@ function eligibility(
     ...overrides,
   });
 }
+
+function officialEligibility(
+  overrides: Partial<Parameters<typeof isOfficialDesktopRelease>[0]> = {},
+): boolean {
+  return isOfficialDesktopRelease({
+    isPackaged: true,
+    platform: "darwin",
+    securitySmokeMode: false,
+    appPath,
+    currentVersion: "0.1.0",
+    readPackageJson: () => JSON.stringify({ version: "0.1.0", enduragentDesktopRelease: true }),
+    ...overrides,
+  });
+}
+
+describe("official desktop release eligibility", () => {
+  it("accepts marked macOS and Windows packages independently of updater activation", () => {
+    expect(officialEligibility({ platform: "darwin" })).toBe(true);
+    expect(officialEligibility({ platform: "win32" })).toBe(true);
+  });
+
+  it.each([
+    { isPackaged: false },
+    { platform: "linux" as const },
+    { securitySmokeMode: true },
+    { currentVersion: "0.1.0-beta.1" },
+  ])("rejects a non-release runtime: %o", (runtime) => {
+    const readPackageJson = vi.fn(() => {
+      throw new Error("must not read");
+    });
+    expect(officialEligibility({ ...runtime, readPackageJson })).toBe(false);
+    expect(readPackageJson).not.toHaveBeenCalled();
+  });
+
+  it("requires the exact release marker and matching packaged version", () => {
+    expect(
+      officialEligibility({ readPackageJson: () => JSON.stringify({ version: "0.1.0" }) }),
+    ).toBe(false);
+    expect(
+      officialEligibility({
+        readPackageJson: () => JSON.stringify({ version: "0.1.1", enduragentDesktopRelease: true }),
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("desktop update release eligibility", () => {
   it("keeps Windows supported but inactive by default", () => {
