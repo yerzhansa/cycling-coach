@@ -23,6 +23,7 @@ import {
   dialog,
   ipcMain,
   nativeTheme,
+  net,
   powerMonitor,
   safeStorage,
   session,
@@ -152,9 +153,14 @@ import {
   installDesktopTerminationSignalHandler,
 } from "./quit-coordinator.js";
 import { createDesktopUpdateController } from "./update-controller.js";
-import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
+import { isDesktopUpdateReleaseEligible, isOfficialDesktopRelease } from "./update-eligibility.js";
 import { installDesktopUpdateIpc } from "./update-ipc.js";
 import { createDesktopUpdateVersionFloor } from "./update-version-floor.js";
+import {
+  createDesktopUsagePingController,
+  desktopUsagePingChannelForPlatform,
+} from "./desktop-usage-ping.js";
+import { createDesktopUsagePingStateStore } from "./desktop-usage-ping-state.js";
 import {
   createTelegramControlCoordinator,
   type TelegramDaemonBinding,
@@ -383,6 +389,26 @@ async function runDesktop(): Promise<void> {
     },
     requestQuit: () => app.quit(),
   });
+  const desktopUsagePingChannel = desktopUsagePingChannelForPlatform(process.platform);
+  const desktopUsagePingController =
+    desktopUsagePingChannel === undefined
+      ? undefined
+      : createDesktopUsagePingController({
+          releaseEligible:
+            !desktopAcceptanceHidden &&
+            environment.ENDURAGENT_NO_USAGE_PING !== "1" &&
+            isOfficialDesktopRelease({
+              isPackaged: app.isPackaged,
+              platform: process.platform,
+              securitySmokeMode,
+              appPath: app.getAppPath(),
+              currentVersion: app.getVersion(),
+            }),
+          version: app.getVersion(),
+          channel: desktopUsagePingChannel,
+          state: createDesktopUsagePingStateStore({ root: desktopPreferencesRoot }),
+          request: (url, init) => net.fetch(url, init),
+        });
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       const closingResidency = residency;
@@ -422,6 +448,7 @@ async function runDesktop(): Promise<void> {
       await closeTelegramCoordinator?.();
       closeTelegramCoordinator = undefined;
       await reportSecuritySmokeShutdownStage("telegram-coordinator-closed");
+      desktopUsagePingController?.close();
       updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
@@ -1401,6 +1428,7 @@ async function runDesktop(): Promise<void> {
     }
     const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
     void updateController.start();
+    void desktopUsagePingController?.start();
 
     if (securitySmokeMode) {
       if (initialWindow === undefined) throw new TypeError("security smoke requires a window");

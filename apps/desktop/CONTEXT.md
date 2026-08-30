@@ -71,7 +71,7 @@ _Avoid_: Recovery snapshot, startup status
 ## Windows release and updater
 
 **Release marker**:
-`enduragentDesktopRelease: true` in the packaged `package.json`; required by `isDesktopUpdateReleaseEligible`.
+`enduragentDesktopRelease: true` in the packaged `package.json`; required by `isOfficialDesktopRelease` and therefore by `isDesktopUpdateReleaseEligible`.
 _Avoid_: Release flag, Windows marker
 
 **Platform activation**:
@@ -113,7 +113,7 @@ _Avoid_: Install directory, application directory
 - When the encryption key is missing and only unverified envelopes survive, **Credential recovery** may replace one slot while preserving every other artifact.
 - An **Orphan encryption key** may be removed without losing a credential.
 - **Recovery status** is derived from both vaults whenever it is requested.
-- The **Release marker** admits a packaged build to `isDesktopUpdateReleaseEligible`; **Platform activation** independently decides whether update checks run on the current platform.
+- The **Release marker** admits a packaged build to `isOfficialDesktopRelease`; **Platform activation** independently decides whether update checks run on the current platform.
 - A **Windows release envelope** is produced, verified, uploaded, and round-trip-checked by its named scripts.
 - **Authenticode pending mode** does not authorise an unsigned installer for a GitHub release or the website.
 - **Windows release provenance** binds a verified installer to the release tag commit, updater publisher, and canonical packaged updater metadata before upload; the uploader compares the supplied `app-update.yml` bytes with the digest sealed in the signed installer.
