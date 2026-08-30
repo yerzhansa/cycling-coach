@@ -260,7 +260,7 @@ describe("archive controller reader", () => {
     expect(subject.current().conversations).toHaveLength(2);
   });
 
-  it("drops duplicate turn ids while prepending an earlier page", async () => {
+  it("drops exact duplicate turns while prepending an overlapping earlier page", async () => {
     const readPage = vi.fn(async (request: { readonly cursor: string | null }) =>
       request.cursor === null ? page(["turn-2"], "cursor-1") : page(["turn-1", "turn-2"]),
     );
@@ -273,6 +273,35 @@ describe("archive controller reader", () => {
     expect(subject.current().reading?.turns.map((turn) => turn.turnId)).toEqual([
       "turn-1",
       "turn-2",
+    ]);
+  });
+
+  it("preserves distinct delivery attempts that share one logical turn id", async () => {
+    const interrupted = {
+      ...page(["turn-recovered"]).turns[0]!,
+      coachText: "Partial",
+      delivery: "interrupted" as const,
+    };
+    const recovered = {
+      ...page(["turn-recovered"]).turns[0]!,
+      completedAt: "1998-07-19T07:01:00.000Z",
+      coachText: "Recovered",
+    };
+    const subject = harness({
+      readPage: async () => ({
+        schemaVersion: 1,
+        status: "page",
+        turns: [interrupted, recovered],
+        nextCursor: null,
+      }),
+    });
+
+    await subject.controller.refresh();
+    await subject.controller.open(NEWER);
+
+    expect(subject.current().reading?.turns).toMatchObject([
+      { turnId: "turn-recovered", coachText: "Partial", delivery: "interrupted" },
+      { turnId: "turn-recovered", coachText: "Recovered" },
     ]);
   });
 

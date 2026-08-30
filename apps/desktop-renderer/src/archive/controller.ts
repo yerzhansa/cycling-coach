@@ -73,10 +73,11 @@ function uniqueTurns(
   incoming: readonly TranscriptTurn[],
   existing: readonly TranscriptTurn[],
 ): readonly TranscriptTurn[] {
-  const seen = new Set(existing.map((turn) => turn.turnId));
+  const seen = new Set(existing.map((turn) => JSON.stringify(turn)));
   return incoming.filter((turn) => {
-    if (seen.has(turn.turnId)) return false;
-    seen.add(turn.turnId);
+    const key = JSON.stringify(turn);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }

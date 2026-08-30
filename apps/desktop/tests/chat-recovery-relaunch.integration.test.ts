@@ -65,6 +65,11 @@ const queuedMessageText = "Also preserve my easy Friday ride.";
 const requestId = "request-recovery";
 const attachmentDraftText = "Compare this workout with my current week.";
 const decisionQuestion = "Which priority should guide the next workout?";
+const recoveredAthleteText = "Keep the first recovery message.";
+const recoveredPartialText = "Partial recovery guidance.";
+const recoveredCoachText = "Recovered recovery guidance.";
+const laterAthleteText = "Later one\n\nLater two";
+const laterCoachText = "Later reply.";
 const fixtures: RunningDesktopFixture[] = [];
 const backends: RecoveryBackend[] = [];
 const scratchPaths: string[] = [];
@@ -159,6 +164,14 @@ class RecoveryBackend {
         this.calls.push(request);
         if (request.method === "getChatQueue") {
           return response(this.requireConversation().getChatQueue(chatId));
+        }
+        if (request.method === "getTranscriptPage") {
+          return response(
+            this.requireConversation().readCurrentConversationPage(chatId, {
+              cursor: request.params.cursor === null ? null : String(request.params.cursor),
+              limit: Number(request.params.limit),
+            }),
+          );
         }
         if (request.method === "getCoachDecision") {
           return response({ decision: this.requireConversation().getDecision(chatId) });
@@ -276,6 +289,30 @@ class RecoveryBackend {
       queuedMessageId,
       "message-queue-recovery",
     );
+    if (conversation.appendInterruptedTurn === undefined) {
+      throw new TypeError("interrupted transcript persistence is unavailable");
+    }
+    conversation.appendInterruptedTurn({
+      chatId,
+      turnId: "turn-chat-recovery",
+      completedAt: "1998-08-24T07:57:00.000Z",
+      athleteText: recoveredAthleteText,
+      coachText: recoveredPartialText,
+    });
+    conversation.appendCompletedTurn({
+      chatId,
+      turnId: "turn-chat-recovery",
+      completedAt: "1998-08-24T07:58:00.000Z",
+      athleteText: recoveredAthleteText,
+      coachText: recoveredCoachText,
+    });
+    conversation.appendCompletedTurn({
+      chatId,
+      turnId: "turn-chat-later",
+      completedAt: "1998-08-24T07:59:00.000Z",
+      athleteText: laterAthleteText,
+      coachText: laterCoachText,
+    });
     conversation.appendDecisionRequested({
       turnId: "turn-decision-recovery",
       toolCallId: "tool-decision-recovery",
@@ -418,11 +455,30 @@ async function readRecoverySurface(fixture: RunningDesktopFixture) {
     readonly sendDisabled: boolean;
     readonly inputDisabled: boolean;
     readonly projectionOrder: readonly string[];
+    readonly recoveryTranscript: readonly {
+      readonly role: "athlete" | "coach";
+      readonly text: string;
+      readonly delivery: string | null;
+    }[];
   }>(`
     const question = ${JSON.stringify(decisionQuestion)};
     const queueText = ${JSON.stringify(queuedMessageText)};
     const draftText = ${JSON.stringify(attachmentDraftText)};
     const requestId = ${JSON.stringify(requestId)};
+    const recoveryTexts = new Set(${JSON.stringify([
+      recoveredAthleteText,
+      recoveredPartialText,
+      recoveredCoachText,
+      laterAthleteText,
+      laterCoachText,
+    ])});
+    const expectedRecoveryTexts = ${JSON.stringify([
+      recoveredAthleteText,
+      recoveredPartialText,
+      recoveredCoachText,
+      laterAthleteText,
+      laterCoachText,
+    ])};
     const deadline = Date.now() + 10000;
     let decision;
     let attachment;
@@ -437,6 +493,9 @@ async function readRecoverySurface(fixture: RunningDesktopFixture) {
       queue = document.querySelector("section.chat-queue");
       plan = document.querySelector('[data-planning-request-id="' + requestId + '"]');
       composer = document.querySelector("#message");
+      const recoveryTranscript = [...document.querySelectorAll("article.chat-message")]
+        .map((element) => element.querySelector(".chat-message__text")?.textContent?.trim() ?? "")
+        .filter((text) => recoveryTexts.has(text));
       if (
         decision instanceof HTMLElement &&
         attachment instanceof HTMLElement &&
@@ -444,7 +503,8 @@ async function readRecoverySurface(fixture: RunningDesktopFixture) {
         queue.textContent?.includes(queueText) &&
         plan instanceof HTMLElement &&
         composer instanceof HTMLTextAreaElement &&
-        composer.value === draftText
+        composer.value === draftText &&
+        JSON.stringify(recoveryTranscript) === JSON.stringify(expectedRecoveryTexts)
       ) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -465,6 +525,16 @@ async function readRecoverySurface(fixture: RunningDesktopFixture) {
       .map((element) =>
         element === decision ? "decision" : element === attachment ? "attachment" : "queue",
       );
+    const recoveryTranscript = [...document.querySelectorAll("article.chat-message")]
+      .flatMap((element) => {
+        const text = element.querySelector(".chat-message__text")?.textContent?.trim() ?? "";
+        if (!recoveryTexts.has(text)) return [];
+        return [{
+          role: element.classList.contains("chat-message--athlete") ? "athlete" : "coach",
+          text,
+          delivery: element.getAttribute("data-delivery"),
+        }];
+      });
     return {
       questionCount: [...document.querySelectorAll(".composer-projections section")].filter(
         (element) => element.textContent?.includes(question),
@@ -484,6 +554,7 @@ async function readRecoverySurface(fixture: RunningDesktopFixture) {
       sendDisabled: send.disabled,
       inputDisabled: composer.disabled,
       projectionOrder,
+      recoveryTranscript,
     };
   `);
 }
@@ -580,6 +651,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)(
         sendDisabled: true,
         inputDisabled: false,
         projectionOrder: ["decision", "attachment", "queue"],
+        recoveryTranscript: [
+          { role: "athlete", text: recoveredAthleteText, delivery: "complete" },
+          { role: "coach", text: recoveredPartialText, delivery: "interrupted" },
+          { role: "coach", text: recoveredCoachText, delivery: "complete" },
+          { role: "athlete", text: laterAthleteText, delivery: "complete" },
+          { role: "coach", text: laterCoachText, delivery: "complete" },
+        ],
       });
       const firstRecovery = await backend.snapshot();
       expect(firstRecovery).toMatchObject({

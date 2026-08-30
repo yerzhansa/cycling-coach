@@ -174,6 +174,38 @@ describe("TranscriptStore archived conversation reads", () => {
     expect(existsSync(transcriptPath(dataDir, "missing"))).toBe(false);
   });
 
+  it("counts and pages archived recovery attempts as one logical turn", () => {
+    const dataDir = makeDataDir();
+    const chatId = "archive-recovered-turn";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.appendInterruptedTurn(turn(chatId, "turn-2", "First", "Partial"));
+    store.appendCompletedTurn({
+      ...turn(chatId, "turn-2", "First", "Recovered"),
+      completedAt: "1998-07-22T00:01:00.000Z",
+    });
+    store.ensureConversationBoundary(intent(chatId, RESET_ID_A));
+
+    expect(store.listArchivedConversations(chatId).conversations[0]?.turnCount).toBe(2);
+    const newest = store.readArchivedConversationPage(chatId, RESET_ID_A, {
+      cursor: null,
+      limit: 1,
+    });
+    expect(newest.turns.map(({ turnId, coachText }) => [turnId, coachText])).toEqual([
+      ["turn-2", "Partial"],
+      ["turn-2", "Recovered"],
+    ]);
+    expect(newest.nextCursor).not.toBeNull();
+    expect(
+      store
+        .readArchivedConversationPage(chatId, RESET_ID_A, {
+          cursor: newest.nextCursor,
+          limit: 1,
+        })
+        .turns.map(({ turnId }) => turnId),
+    ).toEqual(["turn-1"]);
+  });
+
   it("caps the listed boundaries at the newest two hundred and reports truncation", () => {
     const dataDir = makeDataDir();
     const chatId = "archive-cap";
@@ -712,6 +744,30 @@ describe("TranscriptStore append and corruption handling", () => {
     });
     expect(oldest.turns.map((record) => record.turnId)).toEqual(["turn-1"]);
     expect(oldest.nextCursor).toBeNull();
+  });
+
+  it("keeps current recovery attempts together as one pagination unit", () => {
+    const dataDir = makeDataDir();
+    const chatId = "paginated-recovered-turn";
+    const store = new TranscriptStore(dataDir);
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    store.appendInterruptedTurn(turn(chatId, "turn-2", "First", "Partial"));
+    store.appendCompletedTurn({
+      ...turn(chatId, "turn-2", "First", "Recovered"),
+      completedAt: "1998-07-22T00:01:00.000Z",
+    });
+
+    const newest = store.readCurrentConversationPage(chatId, { cursor: null, limit: 1 });
+    expect(newest.turns.map(({ turnId, coachText }) => [turnId, coachText])).toEqual([
+      ["turn-2", "Partial"],
+      ["turn-2", "Recovered"],
+    ]);
+    expect(newest.nextCursor).not.toBeNull();
+    expect(
+      store
+        .readCurrentConversationPage(chatId, { cursor: newest.nextCursor, limit: 1 })
+        .turns.map(({ turnId }) => turnId),
+    ).toEqual(["turn-1"]);
   });
 
   it("keeps a cursor snapshot stable while completed turns append concurrently", () => {

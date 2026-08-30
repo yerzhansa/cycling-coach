@@ -524,7 +524,7 @@ describe("engine durable chat queue", () => {
     const firstTurnId = activeEvents.find((event) => event.type === "turn-start")?.turnId;
     const retryTurnId = retryEvents.find((event) => event.type === "turn-start")?.turnId;
     expect(retryTurnId).toBeDefined();
-    expect(retryTurnId).not.toBe(firstTurnId);
+    expect(retryTurnId).toBe(firstTurnId);
     expect(retryEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
 
     const later = await engine.resumeChatQueue!({ chatId: "desktop" });
@@ -566,17 +566,36 @@ describe("engine durable chat queue", () => {
     const recovery = await engine.getChatQueue!({ chatId: "desktop" });
 
     const retryEvents: TurnEvent[] = [];
+    const collectRetryEvent = (event: TurnEvent): void => {
+      retryEvents.push(event);
+    };
     const first = engine.retryQueuedTurn!(
       { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
-      (event) => retryEvents.push(event),
+      collectRetryEvent,
     );
     await retryStarted;
+    const sameSubscriber = engine.retryQueuedTurn!(
+      { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
+      collectRetryEvent,
+    );
+    expect(sameSubscriber).toBe(first);
+    expect(retryEvents.map((event) => event.type)).toEqual(["turn-start"]);
     const duplicateEvents: TurnEvent[] = [];
     const duplicate = engine.retryQueuedTurn!(
       { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
       (event) => duplicateEvents.push(event),
     );
     expect(duplicate).toBe(first);
+    expect(duplicateEvents.map((event) => event.type)).toEqual(["turn-start"]);
+    const throwingSubscriber = vi.fn(() => {
+      throw new Error("detached subscriber");
+    });
+    expect(() =>
+      engine.retryQueuedTurn!(
+        { chatId: "desktop", claimId: recovery.retryRequired!.claimId },
+        throwingSubscriber,
+      ),
+    ).not.toThrow();
 
     const different = engine.retryQueuedTurn!({ chatId: "desktop", claimId: "stale-claim" });
     expect(different).not.toBe(first);
@@ -590,7 +609,9 @@ describe("engine durable chat queue", () => {
     expect(firstResult).toMatchObject({ response: { text: "Recovered" }, snapshot: { items: [] } });
     expect(retryEvents.filter((event) => event.type === "turn-start")).toHaveLength(1);
     expect(retryEvents.filter((event) => event.type === "final-text")).toHaveLength(1);
-    expect(duplicateEvents).toEqual([]);
+    expect(duplicateEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
+    expect(duplicateEvents).toEqual(retryEvents);
+    expect(throwingSubscriber).toHaveBeenCalledTimes(2);
     expect(generate).toHaveBeenCalledTimes(2);
   });
 
