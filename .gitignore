@@ -22,5 +22,7 @@ specs/
 skills-lock.json
 # fuzz-parity divergence / oracle-error captures (dev-time only, never committed)
 packages/core/tests/fixtures/_fuzz-fail/
+apps/desktop/playwright-report/
+apps/desktop/test-results/
 # coverage.py data file from `pnpm coverage:reference` (dev-time only, never committed)
 .coverage

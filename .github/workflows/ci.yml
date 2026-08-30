@@ -222,3 +222,67 @@ jobs:
         run: pnpm --filter @enduragent/desktop... build
       - name: Test Darwin desktop integrations
         run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
+
+  desktop-e2e-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          run=false
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            run=true
+          elif ! git diff --quiet "$BASE_SHA" HEAD -- \
+            apps/desktop \
+            apps/desktop-renderer \
+            packages/coach \
+            packages/coach-client \
+            packages/coach-contract \
+            packages/core \
+            packages/kernel \
+            packages/kernel-node \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            tsconfig.check.json \
+            .github/workflows/ci.yml; then
+            run=true
+          fi
+          printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"
+
+  desktop-e2e-macos:
+    needs: desktop-e2e-scope
+    if: needs.desktop-e2e-scope.outputs.run == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    env:
+      CI: macos
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: test "$(uname -m)" = "arm64"
+      - run: pnpm install --frozen-lockfile
+      - name: Build Desktop
+        run: pnpm --filter @enduragent/desktop... build
+      - name: Test Desktop E2E
+        run: pnpm --filter @enduragent/desktop test:e2e
+      - name: Upload Desktop E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-e2e-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          if-no-files-found: warn
