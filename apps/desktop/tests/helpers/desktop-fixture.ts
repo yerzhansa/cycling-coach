@@ -39,10 +39,15 @@ export interface DesktopFixturePaths {
 export interface RunningDesktopFixture {
   readonly paths: DesktopFixturePaths;
   evaluate<T>(source: string): Promise<T>;
+  evaluateMain<T>(source: string): Promise<T>;
+  dropFiles(selector: string, paths: readonly string[]): Promise<void>;
   relaunch(beforeLaunch?: () => void | Promise<void>): Promise<void>;
   screenshot(path: string): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
-  pressKey(key: "Escape" | "Tab", options?: { readonly shift?: boolean }): Promise<void>;
+  pressKey(
+    key: "Escape" | "Tab" | "v",
+    options?: { readonly shift?: boolean; readonly meta?: boolean },
+  ): Promise<void>;
   readCapturedSurface(name: "location" | "console" | "stdout" | "stderr" | "dom"): string;
   close(): Promise<{
     readonly livePids: readonly number[];
@@ -173,7 +178,9 @@ export async function launchDesktopFixture(input: {
   readonly executable?: string;
   readonly applicationBundle?: string;
   readonly hidden?: boolean;
+  readonly inspectMain?: boolean;
   readonly routeChatAttachmentComposer?: boolean;
+  readonly routeChatAttachmentOperations?: boolean;
   readonly seedConfig?: boolean;
   readonly sessionTimezonePinned?: false | "embedded" | "legacy";
   readonly extraEnv?: Readonly<Record<string, string>>;
@@ -393,6 +400,45 @@ export async function launchDesktopFixture(input: {
           },
         }
       : {}),
+    ...(input.routeChatAttachmentOperations === true
+      ? {
+          async admitChatAttachment(request) {
+            return finalFrame(await invoke("admitChatAttachment", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["admitChatAttachment"]>>
+            >;
+          },
+          async admitPastedChatAttachment(request) {
+            return finalFrame(await invoke("admitPastedChatAttachment", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["admitPastedChatAttachment"]>>
+            >;
+          },
+          async saveChatAttachmentDraftText(request) {
+            return finalFrame(await invoke("saveChatAttachmentDraftText", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["saveChatAttachmentDraftText"]>>
+            >;
+          },
+          async removeChatAttachment(request) {
+            return finalFrame(await invoke("removeChatAttachment", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["removeChatAttachment"]>>
+            >;
+          },
+          async retryChatAttachment(request) {
+            return finalFrame(await invoke("retryChatAttachment", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["retryChatAttachment"]>>
+            >;
+          },
+          async selectChatAttachmentWorkout(request) {
+            return finalFrame(await invoke("selectChatAttachmentWorkout", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["selectChatAttachmentWorkout"]>>
+            >;
+          },
+          async clearChatAttachmentDraft(request) {
+            return finalFrame(await invoke("clearChatAttachmentDraft", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["clearChatAttachmentDraft"]>>
+            >;
+          },
+        }
+      : {}),
     async setUnitsPreference(request) {
       return finalFrame(await invoke("setUnitsPreference", request)) as {
         value: "metric" | "imperial";
@@ -489,6 +535,7 @@ export async function launchDesktopFixture(input: {
   let stderr = "";
   let child: ChildProcess | undefined;
   let cdp: Awaited<ReturnType<typeof connectCdp>> | undefined;
+  let mainCdp: Awaited<ReturnType<typeof connectCdp>> | undefined;
   const processIds = new Set<number>();
   const surfaces: Record<"location" | "console" | "stdout" | "stderr" | "dom", string> = {
     location: "",
@@ -515,6 +562,11 @@ export async function launchDesktopFixture(input: {
     surfaces.stderr = stderr;
   };
   const stopApplication = async (): Promise<void> => {
+    const activeMainCdp = mainCdp;
+    mainCdp = undefined;
+    if (activeMainCdp !== undefined && activeMainCdp.socket.readyState === WebSocket.OPEN) {
+      activeMainCdp.socket.close();
+    }
     const activeCdp = cdp;
     cdp = undefined;
     if (activeCdp !== undefined && activeCdp.socket.readyState === WebSocket.OPEN) {
@@ -527,9 +579,11 @@ export async function launchDesktopFixture(input: {
   };
   const launchApplication = async (): Promise<void> => {
     const debuggerPort = await reservePort();
+    const mainDebuggerPort = input.inspectMain === true ? await reservePort() : undefined;
     const nextChild = spawn(
       executable,
       [
+        ...(mainDebuggerPort === undefined ? [] : [`--inspect=${mainDebuggerPort}`]),
         ...applicationArgs,
         `--remote-debugging-port=${debuggerPort}`,
         `--user-data-dir=${userData}`,
@@ -560,6 +614,30 @@ export async function launchDesktopFixture(input: {
     const debuggerUrl = await waitForPage(debuggerPort, {
       timeoutMs: DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS,
     });
+    if (mainDebuggerPort !== undefined) {
+      const deadline = Date.now() + DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS;
+      let mainDebuggerUrl: string | undefined;
+      while (Date.now() < deadline && mainDebuggerUrl === undefined) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${mainDebuggerPort}/json/list`, {
+            signal: AbortSignal.timeout(1_000),
+          });
+          if (response.ok) {
+            const entries = (await response.json()) as readonly {
+              readonly webSocketDebuggerUrl?: unknown;
+            }[];
+            const target = entries.find((entry) => typeof entry.webSocketDebuggerUrl === "string");
+            if (target !== undefined) mainDebuggerUrl = target.webSocketDebuggerUrl as string;
+          }
+        } catch {}
+        if (mainDebuggerUrl === undefined) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+        }
+      }
+      if (mainDebuggerUrl === undefined) throw new Error("timed out waiting for desktop main");
+      mainCdp = await connectCdp(mainDebuggerUrl, () => {});
+      await mainCdp.call("Runtime.enable");
+    }
     const nextCdp = await connectCdp(debuggerUrl, (message) => {
       if (message.method !== "Runtime.consoleAPICalled") return;
       const args =
@@ -637,6 +715,76 @@ export async function launchDesktopFixture(input: {
       await refreshSurfaces();
       return remote?.value as T;
     },
+    async evaluateMain<T>(source: string): Promise<T> {
+      if (closed || mainCdp === undefined) throw new Error("desktop main inspection is disabled");
+      const response = await mainCdp.call("Runtime.evaluate", {
+        expression: `(async () => { ${source} })()`,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      const exception = response.exceptionDetails as
+        | { readonly text?: unknown; readonly exception?: { readonly description?: unknown } }
+        | undefined;
+      if (exception !== undefined) {
+        throw new Error(
+          String(exception.exception?.description ?? exception.text ?? "main evaluation failed"),
+        );
+      }
+      const remote = response.result as
+        | { readonly value?: unknown; readonly description?: unknown }
+        | undefined;
+      if (remote?.description !== undefined && remote.value === undefined) {
+        throw new Error(String(remote.description));
+      }
+      return remote?.value as T;
+    },
+    async dropFiles(selector, paths) {
+      if (closed || cdp === undefined) throw new Error("desktop fixture is closed");
+      const inputId = `desktop-fixture-files-${process.pid}`;
+      await cdp.call("Runtime.evaluate", {
+        expression: `(() => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.multiple = true;
+          input.id = ${JSON.stringify(inputId)};
+          document.body.append(input);
+        })()`,
+      });
+      const documentResult = await cdp.call("DOM.getDocument");
+      const root = documentResult.root as { readonly nodeId?: unknown } | undefined;
+      if (typeof root?.nodeId !== "number") throw new Error("desktop document is unavailable");
+      const queryResult = await cdp.call("DOM.querySelector", {
+        nodeId: root.nodeId,
+        selector: `#${inputId}`,
+      });
+      if (typeof queryResult.nodeId !== "number" || queryResult.nodeId === 0) {
+        throw new Error("desktop file input is unavailable");
+      }
+      await cdp.call("DOM.setFileInputFiles", { nodeId: queryResult.nodeId, files: [...paths] });
+      await cdp.call("Runtime.evaluate", {
+        expression: `(() => {
+          const input = document.querySelector(${JSON.stringify(`#${inputId}`)});
+          const target = document.querySelector(${JSON.stringify(selector)});
+          if (!(input instanceof HTMLInputElement) || !(target instanceof Element)) {
+            throw new Error("desktop drop target is unavailable");
+          }
+          const transfer = new DataTransfer();
+          for (const file of input.files ?? []) transfer.items.add(file);
+          target.dispatchEvent(new DragEvent("dragover", {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer: transfer,
+          }));
+          target.dispatchEvent(new DragEvent("drop", {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer: transfer,
+          }));
+          input.remove();
+        })()`,
+      });
+      await refreshSurfaces();
+    },
     async relaunch(beforeLaunch) {
       if (closed) throw new Error("desktop fixture is closed");
       try {
@@ -669,9 +817,9 @@ export async function launchDesktopFixture(input: {
     },
     async pressKey(key, options) {
       if (closed || cdp === undefined) throw new Error("desktop fixture is closed");
-      const virtualKeyCode = key === "Tab" ? 9 : 27;
-      const code = key === "Tab" ? "Tab" : "Escape";
-      const modifiers = options?.shift === true ? 8 : 0;
+      const virtualKeyCode = key === "Tab" ? 9 : key === "Escape" ? 27 : 86;
+      const code = key === "Tab" ? "Tab" : key === "Escape" ? "Escape" : "KeyV";
+      const modifiers = (options?.shift === true ? 8 : 0) | (options?.meta === true ? 4 : 0);
       await cdp.call("Input.dispatchKeyEvent", {
         type: "keyDown",
         key,
@@ -679,6 +827,7 @@ export async function launchDesktopFixture(input: {
         windowsVirtualKeyCode: virtualKeyCode,
         nativeVirtualKeyCode: virtualKeyCode,
         modifiers,
+        ...(key === "v" && options?.meta === true ? { commands: ["Paste"] } : {}),
       });
       await cdp.call("Input.dispatchKeyEvent", {
         type: "keyUp",
