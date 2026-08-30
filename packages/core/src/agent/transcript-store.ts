@@ -1163,12 +1163,12 @@ function encodedPageBytes(result: TranscriptPageResult): number {
   return Buffer.byteLength(JSON.stringify(result), "utf8");
 }
 
-function transcriptDecisionId(
+function transcriptUnitKey(
   record: Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>,
-): string | null {
+): string {
   return record.kind === "turn-completed" || record.kind === "turn-interrupted"
-    ? null
-    : record.decisionId;
+    ? `turn:${record.turnId}`
+    : `decision:${record.decisionId}`;
 }
 
 function decisionReadModels(
@@ -1266,13 +1266,9 @@ function backwardPage(
   let selected: readonly IndexedTranscriptTurn[] = [];
   let selectedUnits = 0;
   while (index >= 0 && selectedUnits < limit) {
-    const decisionId = transcriptDecisionId(turns[index]!.record);
+    const unitKey = transcriptUnitKey(turns[index]!.record);
     let unitStart = index;
-    while (
-      decisionId !== null &&
-      unitStart > 0 &&
-      transcriptDecisionId(turns[unitStart - 1]!.record) === decisionId
-    ) {
+    while (unitStart > 0 && transcriptUnitKey(turns[unitStart - 1]!.record) === unitKey) {
       unitStart -= 1;
     }
     const tentative = [...turns.slice(unitStart, index + 1), ...selected];
@@ -1745,12 +1741,19 @@ export class TranscriptStore implements TranscriptWriterPort {
             boundaryRef: segment.boundary.resetId,
             boundaryAt: segment.boundary.boundaryAt,
             reason: segment.boundary.reason,
-            turnCount: segment.turns.filter(
-              ({ record }) =>
-                record.kind === "turn-completed" ||
-                record.kind === "turn-interrupted" ||
-                record.kind === "decision-requested",
-            ).length,
+            turnCount: new Set(
+              segment.turns.flatMap(({ record }) => {
+                if (record.kind === "turn-completed" || record.kind === "turn-interrupted") {
+                  return [`turn:${record.turnId}`];
+                }
+                if (record.kind !== "decision-requested") return [];
+                return [
+                  record.turnId === undefined
+                    ? `decision:${record.decisionId}`
+                    : `turn:${record.turnId}`,
+                ];
+              }),
+            ).size,
           })),
           truncated: newestFirst.length > selected.length,
         };

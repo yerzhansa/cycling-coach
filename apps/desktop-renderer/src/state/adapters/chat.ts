@@ -65,11 +65,14 @@ function historicalTimeline(
   liveDecisionIds: ReadonlySet<string>,
 ): readonly ChatTranscriptItemView[] {
   const requested = new Map<string, CoachDecisionReadModel>();
+  const turnAttempts = new Map<string, number>();
   const timeline: ChatTranscriptItemView[] = [];
   for (const entry of entries) {
     if (entry.kind === "turn") {
-      timeline.push(
-        {
+      const attempt = (turnAttempts.get(entry.turnId) ?? 0) + 1;
+      turnAttempts.set(entry.turnId, attempt);
+      if (attempt === 1) {
+        timeline.push({
           kind: "message",
           message: {
             id: `history:athlete:${entry.turnId}`,
@@ -80,21 +83,24 @@ function historicalTimeline(
             text: entry.athleteText,
             ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
           },
+        });
+      }
+      timeline.push({
+        kind: "message",
+        message: {
+          id:
+            attempt === 1
+              ? `history:coach:${entry.turnId}`
+              : `history:coach:${entry.turnId}:attempt:${attempt}`,
+          turnId: entry.turnId,
+          role: "coach",
+          delivery: entry.delivery ?? "complete",
+          historical: true,
+          text: entry.coachText,
+          ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
+          ...(entry.planHandoff === undefined ? {} : { planHandoff: entry.planHandoff }),
         },
-        {
-          kind: "message",
-          message: {
-            id: `history:coach:${entry.turnId}`,
-            turnId: entry.turnId,
-            role: "coach",
-            delivery: "complete",
-            historical: true,
-            text: entry.coachText,
-            ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
-            ...(entry.planHandoff === undefined ? {} : { planHandoff: entry.planHandoff }),
-          },
-        },
-      );
+      });
       continue;
     }
     const decisionId =

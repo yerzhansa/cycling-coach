@@ -276,7 +276,7 @@ async function closeTransport(transport: CoachVerbTransport | undefined): Promis
 }
 
 describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
-  it("recovers a detached active queue claim and drains later ordinary work once", async () => {
+  it("replays an active exact retry after a second disconnect and drains later work once", async () => {
     const dataDir = await mkdtemp(join(await realpath(tmpdir()), "coach-queue-rpc-"));
     await mkdir(join(dataDir, "memory"), { recursive: true });
     const requests: ModelTransportRequest[] = [];
@@ -284,6 +284,11 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
     const firstStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
+    let announceRetryStarted!: () => void;
+    const retryStarted = new Promise<void>((resolve) => {
+      announceRetryStarted = resolve;
+    });
+    let finishRetry: (() => void) | undefined;
     const generated = (text: string): GenerateResult => {
       const usage = {
         inputTokens: 1,
@@ -306,7 +311,18 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
             });
           });
         }
-        return Promise.resolve(generated(requests.length === 2 ? "Recovered" : "Later reply"));
+        if (requests.length === 2) {
+          announceRetryStarted();
+          return new Promise<GenerateResult>((resolve, reject) => {
+            finishRetry = () => resolve(generated("Recovered"));
+            request.options.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("retry stopped")),
+              { once: true },
+            );
+          });
+        }
+        return Promise.resolve(generated("Later reply"));
       },
     });
     const config: Config = {
@@ -364,12 +380,13 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
       modelTransportDecorator,
     };
     const queueEngine = createCoachEngine({ sport: cyclingSport, ports });
+    const directChat = vi.spyOn(queueEngine, "chat");
     const running = await startRpc(queueEngine);
     const clients: CoachClient[] = [];
     const chatId = "desktop";
     let firstTurnId: string | undefined;
     try {
-      const first = await connectCoachClient({ url: running.url, token });
+      const first = await connectCoachClient({ url: running.url, token, closeTimeoutMs: 250 });
       clients.push(first);
       await first.call("enqueueChatMessage", {
         chatId,
@@ -410,9 +427,13 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
       await serverObservedDisconnect;
       expect(await firstOutcome).toBeInstanceOf(CoachClientDisconnectedError);
 
-      const recovered = await connectCoachClient({ url: running.url, token });
-      clients.push(recovered);
-      const recovery = await recovered.call("getChatQueue", { chatId });
+      const retryClient = await connectCoachClient({
+        url: running.url,
+        token,
+        closeTimeoutMs: 250,
+      });
+      clients.push(retryClient);
+      const recovery = await retryClient.call("getChatQueue", { chatId });
       expect(recovery.items.map((item) => item.text)).toEqual(["First", "Later one", "Later two"]);
       expect(recovery.retryRequired).toMatchObject({
         queuedMessageIds: [recovery.items[0]!.queuedMessageId],
@@ -420,16 +441,46 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
       });
 
       const retryEvents: TurnEvent[] = [];
-      const retried = await recovered.call(
+      const retryRun = retryClient.call(
         "retryQueuedTurn",
         { chatId, claimId: recovery.retryRequired!.claimId },
         { onEvent: (event) => retryEvents.push(event) },
       );
+      const retryOutcome = retryRun.catch((error: unknown) => error);
+      await retryStarted;
+      await vi.waitFor(() =>
+        expect(retryEvents.map((event) => event.type)).toEqual(["turn-start"]),
+      );
+      expect(retryEvents[0]?.turnId).toBe(firstTurnId);
+
+      const serverObservedRetryDisconnect = running.nextClientDisconnect();
+      const retryClosing = retryClient.close();
+      expect(await retryOutcome).toBeInstanceOf(CoachClientDisconnectedError);
+      await serverObservedRetryDisconnect;
+      await retryClosing;
+
+      const recovered = await connectCoachClient({ url: running.url, token, closeTimeoutMs: 250 });
+      clients.push(recovered);
+      const replayedEvents: TurnEvent[] = [];
+      const retriedRun = recovered.call(
+        "retryQueuedTurn",
+        { chatId, claimId: recovery.retryRequired!.claimId },
+        { onEvent: (event) => replayedEvents.push(event) },
+      );
+      await vi.waitFor(() =>
+        expect(replayedEvents.map((event) => event.type)).toEqual(["turn-start"]),
+      );
+      expect(replayedEvents[0]).toEqual(retryEvents[0]);
+      expect(requests).toHaveLength(2);
+      if (finishRetry === undefined) throw new Error("retry model did not start");
+      finishRetry();
+      const retried = await retriedRun;
       expect(retried.response?.text).toBe("Recovered");
       expect(retried.snapshot.retryRequired).toBeUndefined();
       expect(retried.snapshot.items.map((item) => item.text)).toEqual(["Later one", "Later two"]);
-      expect(retryEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
-      expect(retryEvents[0]?.turnId).not.toBe(firstTurnId);
+      expect(retryEvents.map((event) => event.type)).toEqual(["turn-start"]);
+      expect(replayedEvents.map((event) => event.type)).toEqual(["turn-start", "final-text"]);
+      expect(replayedEvents[0]).toEqual(retryEvents[0]);
 
       const laterEvents: TurnEvent[] = [];
       const drained = await recovered.call(
@@ -448,7 +499,41 @@ describe.skipIf(!hasLoopback)("CLI verbs over real RPC framing", () => {
       expect(userMessages.map((message) => message.content.split("\nCurrent time:", 1)[0])).toEqual(
         ["First", "First", "Later one\n\nLater two"],
       );
+      expect(directChat).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(3);
+
+      const relaunched = createConversationStore(dataDir);
+      const persisted = relaunched.readCurrentConversationPage(chatId, { cursor: null, limit: 10 });
+      expect(
+        persisted.turns.map(({ turnId, athleteText, coachText, delivery }) => ({
+          turnId,
+          athleteText,
+          coachText,
+          delivery,
+        })),
+      ).toEqual([
+        {
+          turnId: firstTurnId,
+          athleteText: "First",
+          coachText: "Partial",
+          delivery: "interrupted",
+        },
+        {
+          turnId: firstTurnId,
+          athleteText: "First",
+          coachText: "Recovered",
+          delivery: undefined,
+        },
+        {
+          turnId: expect.any(String),
+          athleteText: "Later one\n\nLater two",
+          coachText: "Later reply",
+          delivery: undefined,
+        },
+      ]);
+      expect(persisted.turns[2]?.turnId).not.toBe(firstTurnId);
     } finally {
+      finishRetry?.();
       if (firstTurnId !== undefined) {
         await queueEngine.stopChat?.({ chatId, turnId: firstTurnId }).catch(() => undefined);
       }

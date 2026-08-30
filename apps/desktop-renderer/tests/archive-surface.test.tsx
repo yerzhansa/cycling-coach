@@ -229,6 +229,32 @@ describe("past chats reader", () => {
     expect(actions.open).not.toHaveBeenCalled();
   });
 
+  it("renders one athlete row and every Coach attempt for a recovered logical turn", () => {
+    const actions = archiveActions();
+    render(<ArchiveView />);
+    const first = reading().reading!.turns[0]!;
+    set(
+      reading({
+        turns: [
+          { ...first, coachText: "Partial", delivery: "interrupted" },
+          {
+            ...first,
+            completedAt: "1998-07-19T07:01:00.000Z",
+            coachText: "Recovered",
+          },
+        ],
+      }),
+      actions,
+    );
+
+    const thread = screen.getByRole("region", { name: "Past conversation" });
+    expect(thread.querySelectorAll(".archive-message--athlete")).toHaveLength(1);
+    expect(thread.querySelectorAll(".archive-message--coach")).toHaveLength(2);
+    expect(thread.querySelectorAll('[data-delivery="interrupted"]')).toHaveLength(1);
+    expect(thread).toHaveTextContent("Partial");
+    expect(thread).toHaveTextContent("Recovered");
+  });
+
   it("pages earlier messages and blocks the pill while a page is in flight", async () => {
     const user = userEvent.setup();
     const actions = archiveActions();

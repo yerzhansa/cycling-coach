@@ -9,6 +9,7 @@ export interface TranscriptTurn {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly delivery?: "interrupted";
   readonly attachments?: Extract<TranscriptPageEntry, { readonly kind: "turn" }>["attachments"];
   readonly planReference?: Extract<TranscriptPageEntry, { readonly kind: "turn" }>["planReference"];
   readonly planHandoff?: Extract<TranscriptPageEntry, { readonly kind: "turn" }>["planHandoff"];
@@ -79,10 +80,11 @@ function uniqueTurns(
   incoming: readonly TranscriptTurn[],
   existing: readonly TranscriptTurn[] = [],
 ): readonly TranscriptTurn[] {
-  const seen = new Set(existing.map((turn) => turn.turnId));
+  const seen = new Set(existing.map((turn) => JSON.stringify(turn)));
   return incoming.filter((turn) => {
-    if (seen.has(turn.turnId)) return false;
-    seen.add(turn.turnId);
+    const key = JSON.stringify(turn);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -115,9 +117,26 @@ export function mergeHydratedMessages(
   );
   const projectedEntries: readonly TranscriptPageEntry[] =
     entries.length > 0 ? entries : turns.map((turn) => ({ kind: "turn", ...turn }));
+  const turnAttempts = new Map<string, number>();
   const history = projectedEntries.flatMap((entry): readonly ChatTranscriptMessage[] => {
     if (entry.kind === "turn") {
       if (liveTurnIds.has(entry.turnId)) return [];
+      const attempt = (turnAttempts.get(entry.turnId) ?? 0) + 1;
+      turnAttempts.set(entry.turnId, attempt);
+      const coach: ChatTranscriptMessage = {
+        id:
+          attempt === 1
+            ? `history:coach:${entry.turnId}`
+            : `history:coach:${entry.turnId}:attempt:${attempt}`,
+        turnId: entry.turnId,
+        role: "coach",
+        text: entry.coachText,
+        delivery: entry.delivery ?? "complete",
+        historical: true,
+        ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
+        ...(entry.planHandoff === undefined ? {} : { planHandoff: entry.planHandoff }),
+      };
+      if (attempt > 1) return [coach];
       return [
         {
           id: `history:athlete:${entry.turnId}`,
@@ -128,16 +147,7 @@ export function mergeHydratedMessages(
           historical: true,
           ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
         },
-        {
-          id: `history:coach:${entry.turnId}`,
-          turnId: entry.turnId,
-          role: "coach",
-          text: entry.coachText,
-          delivery: entry.delivery ?? "complete",
-          historical: true,
-          ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
-          ...(entry.planHandoff === undefined ? {} : { planHandoff: entry.planHandoff }),
-        },
+        coach,
       ];
     }
     if (
@@ -208,7 +218,10 @@ export function createTranscriptHydrator(input: {
       mode === "initial"
         ? uniqueTurns(page.turns)
         : [...uniqueTurns(page.turns, snapshot.turns), ...snapshot.turns];
-    const pageEntries = page.schemaVersion === 2 ? page.entries : [];
+    const pageEntries: readonly TranscriptPageEntry[] =
+      page.schemaVersion === 2
+        ? page.entries
+        : page.turns.map((turn) => ({ kind: "turn", ...turn }));
     const entries =
       mode === "initial"
         ? uniqueEntries(pageEntries)

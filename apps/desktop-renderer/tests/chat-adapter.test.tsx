@@ -517,6 +517,73 @@ describe("chat view adapter", () => {
     });
   });
 
+  it("projects one historical athlete row and every Coach retry attempt", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const interrupted = {
+      kind: "turn" as const,
+      turnId: "persisted-retry",
+      completedAt: "2001-01-01T00:00:00.000Z",
+      athleteText: "First",
+      coachText: "Partial",
+      delivery: "interrupted" as const,
+    };
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 1,
+          change: "initial",
+          entries: [
+            interrupted,
+            {
+              kind: "turn",
+              turnId: "persisted-retry",
+              completedAt: "2001-01-01T00:01:00.000Z",
+              athleteText: "First",
+              coachText: "Recovered",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      published.at(-1)?.timeline.map((item) =>
+        item.kind === "message"
+          ? {
+              id: item.message.id,
+              role: item.message.role,
+              text: item.message.text,
+              delivery: item.message.delivery,
+            }
+          : { kind: item.kind },
+      ),
+    ).toEqual([
+      {
+        id: "history:athlete:persisted-retry",
+        role: "athlete",
+        text: "First",
+        delivery: "complete",
+      },
+      {
+        id: "history:coach:persisted-retry",
+        role: "coach",
+        text: "Partial",
+        delivery: "interrupted",
+      },
+      {
+        id: "history:coach:persisted-retry:attempt:2",
+        role: "coach",
+        text: "Recovered",
+        delivery: "complete",
+      },
+    ]);
+  });
+
   it("keeps sending available while a turn streams and exposes the queue for the strip", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });

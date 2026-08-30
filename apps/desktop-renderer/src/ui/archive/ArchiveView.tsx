@@ -41,19 +41,25 @@ import {
 const NOTE_CLASS = "mb-3.5 text-sm text-ink-2";
 const ACTION_CLASS = "justify-self-start [&[hidden]]:hidden";
 
-function TurnRows(props: { readonly turn: TranscriptTurn }): ReactElement {
+function TurnRows(props: {
+  readonly turn: TranscriptTurn;
+  readonly includeAthlete: boolean;
+}): ReactElement {
   return (
     <>
-      <article
-        className="archive-message archive-message--athlete grid min-w-0 max-w-[78%] justify-self-end gap-[7px] rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3 shadow-elev-1"
-        data-turn-id={props.turn.turnId}
-      >
-        <p className="m-0 text-xs font-medium text-ink-3">You</p>
-        <AthleteMessage text={props.turn.athleteText} />
-      </article>
+      {props.includeAthlete ? (
+        <article
+          className="archive-message archive-message--athlete grid min-w-0 max-w-[78%] justify-self-end gap-[7px] rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3 shadow-elev-1"
+          data-turn-id={props.turn.turnId}
+        >
+          <p className="m-0 text-xs font-medium text-ink-3">You</p>
+          <AthleteMessage text={props.turn.athleteText} />
+        </article>
+      ) : null}
       <article
         className="archive-message archive-message--coach grid min-w-0 max-w-[78%] justify-self-start gap-[7px] font-[var(--f-prose)] text-base leading-[1.6] tracking-[0.002em]"
         data-turn-id={props.turn.turnId}
+        data-delivery={props.turn.delivery ?? "complete"}
       >
         <p className="m-0 text-xs font-medium text-ink-3">Coach</p>
         <CoachMessage text={props.turn.coachText} />
@@ -139,6 +145,12 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
   const deleteOpen = deletion?.boundaryRef === reading.boundaryRef;
   const deletePending = deleteOpen && deletion.status === "deleting";
   const deleteFailed = deleteOpen && deletion.status === "failed";
+  const attempts = new Map<string, number>();
+  const projectedTurns = reading.turns.map((turn) => {
+    const attempt = (attempts.get(turn.turnId) ?? 0) + 1;
+    attempts.set(turn.turnId, attempt);
+    return { turn, attempt };
+  });
 
   return (
     <>
@@ -274,8 +286,12 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
         {ARCHIVE_EMPTY_CONVERSATION_COPY}
       </p>
       <section className="archive-thread grid gap-6" aria-label="Past conversation" aria-live="off">
-        {reading.turns.map((turn) => (
-          <TurnRows key={turn.turnId} turn={turn} />
+        {projectedTurns.map(({ turn, attempt }) => (
+          <TurnRows
+            key={`${turn.turnId}:attempt:${attempt}`}
+            turn={turn}
+            includeAthlete={attempt === 1}
+          />
         ))}
       </section>
     </>

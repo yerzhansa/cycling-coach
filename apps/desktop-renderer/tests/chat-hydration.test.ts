@@ -157,6 +157,33 @@ describe("chat transcript hydration", () => {
     expect(snapshots.at(-1)).toMatchObject({ nextCursor: null, change: "prepend" });
   });
 
+  it("deduplicates exact records across overlapping pages without collapsing retry attempts", async () => {
+    const interrupted = {
+      ...turn("turn-recovered"),
+      coachText: "Partial",
+      delivery: "interrupted" as const,
+    };
+    const recovered = {
+      ...turn("turn-recovered"),
+      completedAt: "2001-01-01T00:01:00.000Z",
+      coachText: "Recovered",
+    };
+    const readPage = vi
+      .fn()
+      .mockResolvedValueOnce(page([recovered, turn("turn-later")], "older"))
+      .mockResolvedValueOnce(page([interrupted, recovered], null));
+    const { hydrator, snapshots } = subject(readPage);
+
+    await hydrator.start();
+    await hydrator.loadEarlier();
+
+    expect(snapshots.at(-1)?.turns.map(({ turnId, coachText }) => [turnId, coachText])).toEqual([
+      ["turn-recovered", "Partial"],
+      ["turn-recovered", "Recovered"],
+      ["turn-later", "Coach turn-later"],
+    ]);
+  });
+
   it("deduplicates a hydrated turn against live rows by turn identity", () => {
     const live: readonly ChatTranscriptMessage[] = [
       {
@@ -206,6 +233,159 @@ describe("chat transcript hydration", () => {
         delivery: "interrupted",
         historical: true,
       },
+    ]);
+  });
+
+  it("relaunches a recovered durable turn with one athlete row and every Coach attempt", async () => {
+    const interrupted = {
+      ...turn("turn-recovered"),
+      athleteText: "First",
+      coachText: "Partial",
+      delivery: "interrupted" as const,
+    };
+    const recovered = {
+      ...turn("turn-recovered"),
+      completedAt: "2001-01-01T00:01:00.000Z",
+      athleteText: "First",
+      coachText: "Recovered",
+    };
+    const later = {
+      ...turn("turn-later"),
+      completedAt: "2001-01-01T00:02:00.000Z",
+      athleteText: "Later one\n\nLater two",
+      coachText: "Later reply",
+    };
+    const { hydrator, snapshots } = subject(async () =>
+      page([interrupted, recovered, later], null),
+    );
+
+    await hydrator.start();
+
+    expect(mergeHydratedMessages(snapshots.at(-1)!.turns, [])).toMatchObject([
+      { role: "athlete", text: "First", delivery: "complete" },
+      { role: "coach", text: "Partial", delivery: "interrupted" },
+      { role: "coach", text: "Recovered", delivery: "complete" },
+      { role: "athlete", text: "Later one\n\nLater two", delivery: "complete" },
+      { role: "coach", text: "Later reply", delivery: "complete" },
+    ]);
+  });
+
+  it("projects schema-v2 retry entries with one athlete row and unique Coach rows", async () => {
+    const interrupted = {
+      kind: "turn" as const,
+      ...turn("turn-recovered-v2"),
+      athleteText: "First",
+      coachText: "Partial",
+      delivery: "interrupted" as const,
+    };
+    const recovered = {
+      kind: "turn" as const,
+      ...turn("turn-recovered-v2"),
+      completedAt: "2001-01-01T00:01:00.000Z",
+      athleteText: "First",
+      coachText: "Recovered",
+    };
+    const readPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        schemaVersion: 2,
+        status: "page",
+        turns: [recovered],
+        entries: [recovered],
+        nextCursor: "older",
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 2,
+        status: "page",
+        turns: [interrupted, recovered],
+        entries: [interrupted, recovered],
+        nextCursor: null,
+      });
+    const { hydrator, snapshots } = subject(readPage);
+
+    await hydrator.start();
+    await hydrator.loadEarlier();
+
+    expect(
+      mergeHydratedMessages(snapshots.at(-1)!.turns, [], snapshots.at(-1)!.entries).map(
+        ({ id, role, text, delivery }) => ({ id, role, text, delivery }),
+      ),
+    ).toEqual([
+      {
+        id: "history:athlete:turn-recovered-v2",
+        role: "athlete",
+        text: "First",
+        delivery: "complete",
+      },
+      {
+        id: "history:coach:turn-recovered-v2",
+        role: "coach",
+        text: "Partial",
+        delivery: "interrupted",
+      },
+      {
+        id: "history:coach:turn-recovered-v2:attempt:2",
+        role: "coach",
+        text: "Recovered",
+        delivery: "complete",
+      },
+    ]);
+  });
+
+  it("preserves newer schema-v1 retry turns after an older schema-v2 page loads", async () => {
+    const interrupted = {
+      ...turn("turn-recovered-mixed"),
+      athleteText: "First",
+      coachText: "Partial",
+      delivery: "interrupted" as const,
+    };
+    const recovered = {
+      ...turn("turn-recovered-mixed"),
+      completedAt: "2001-01-01T00:01:00.000Z",
+      athleteText: "First",
+      coachText: "Recovered",
+    };
+    const later = {
+      ...turn("turn-later-mixed"),
+      completedAt: "2001-01-01T00:02:00.000Z",
+      athleteText: "Later one\n\nLater two",
+      coachText: "Later reply",
+    };
+    const older = {
+      kind: "turn" as const,
+      ...turn("turn-older-mixed"),
+      athleteText: "Older",
+      coachText: "Older reply",
+    };
+    const readPage = vi
+      .fn()
+      .mockResolvedValueOnce(page([interrupted, recovered, later], "older"))
+      .mockResolvedValueOnce({
+        schemaVersion: 2,
+        status: "page",
+        turns: [older],
+        entries: [older],
+        nextCursor: null,
+      });
+    const { hydrator, snapshots } = subject(readPage);
+
+    await hydrator.start();
+    await hydrator.loadEarlier();
+
+    expect(
+      mergeHydratedMessages([], [], snapshots.at(-1)!.entries).map(({ role, text, delivery }) => ({
+        role,
+        text,
+        delivery,
+      })),
+    ).toEqual([
+      { role: "athlete", text: "Older", delivery: "complete" },
+      { role: "coach", text: "Older reply", delivery: "complete" },
+      { role: "athlete", text: "First", delivery: "complete" },
+      { role: "coach", text: "Partial", delivery: "interrupted" },
+      { role: "coach", text: "Recovered", delivery: "complete" },
+      { role: "athlete", text: "Later one\n\nLater two", delivery: "complete" },
+      { role: "coach", text: "Later reply", delivery: "complete" },
     ]);
   });
 
