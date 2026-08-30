@@ -9,11 +9,59 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  desktop-scope:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    outputs:
+      native: ${{ steps.scope.outputs.native }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          native=false
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            native=true
+          elif ! git diff --quiet "$BASE_SHA" HEAD -- \
+            apps/desktop \
+            apps/desktop-renderer \
+            packages/coach \
+            packages/coach-cli \
+            packages/coach-client \
+            packages/coach-contract \
+            packages/core \
+            packages/engine \
+            packages/kernel \
+            packages/kernel-node \
+            packages/sport-cycling \
+            packages/sync-intervals-icu \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            tsconfig.check.json \
+            .github/workflows/ci.yml; then
+            native=true
+          fi
+          printf 'native=%s\n' "$native" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: desktop-scope
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      smoke: ${{ steps.package_smoke.outputs.result }}
+    steps:
+      - name: Require Desktop scope detection
+        if: needs.desktop-scope.result != 'success'
+        run: exit 1
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         # Reads the exact `packageManager` pin from root package.json.
@@ -23,6 +71,28 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Test workspace on Linux
+        run: |
+          pnpm exec vitest run --shard=1/2
+          pnpm exec vitest run --shard=2/2
+      - run: pnpm s8a
+      - run: pnpm s8a --self-test
+      - id: package_smoke
+        name: Pack and smoke cycling-coach
+        run: |
+          set -euo pipefail
+          PACKAGE=cycling-coach
+          PACK_DIR="/tmp/smoke-pack-$PACKAGE"
+          mkdir -p "$PACK_DIR"
+          pnpm --dir "packages/$PACKAGE" pack --pack-destination "$PACK_DIR"
+          TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
+          pnpm check:published-package -- "$TARBALL"
+          mkdir -p "/tmp/smoke-consumer-$PACKAGE"
+          cd "/tmp/smoke-consumer-$PACKAGE"
+          npm init -y > /dev/null
+          npm install "$TARBALL" --ignore-scripts
+          timeout 30 node "node_modules/$PACKAGE/dist/index.js" --help
+          printf 'result=success\n' >> "$GITHUB_OUTPUT"
       - name: Changeset presence (warn-only)
         if: github.event_name == 'pull_request'
         run: |
@@ -37,151 +107,150 @@ jobs:
           else
             echo "::warning::No changeset found for this PR. Behavioral/user-facing changes should ship a .changeset/*.md (see .changeset/README.md). chore:/ci: PRs are exempt."
           fi
-
-  test_shards:
-    name: test shard ${{ matrix.shard }}/2
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads the exact `packageManager` pin from root package.json.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - id: desktop_e2e
+        name: Test Desktop E2E on Linux
+        if: needs.desktop-scope.outputs.native == 'true'
+        continue-on-error: true
+        run: |
+          pnpm --filter @enduragent/desktop exec playwright install-deps chromium
+          xvfb-run -a pnpm --filter @enduragent/desktop test:e2e
+      - name: Upload Desktop E2E artifacts
+        if: steps.desktop_e2e.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - run: pnpm exec vitest run --shard=${{ matrix.shard }}/2
-
-  s8a:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads the exact `packageManager` pin from root package.json.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - run: pnpm s8a
-      - run: pnpm s8a --self-test
+          name: desktop-e2e-linux-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          if-no-files-found: warn
 
   test:
-    needs: [check, test_shards, s8a]
+    needs: check
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every test lane
+      - name: Require consolidated Linux checks
         env:
           CHECK_RESULT: ${{ needs.check.result }}
-          SHARDS_RESULT: ${{ needs.test_shards.result }}
-          S8A_RESULT: ${{ needs.s8a.result }}
         run: |
-          printf 'check=%s\ntest-shards=%s\ns8a=%s\n' "$CHECK_RESULT" "$SHARDS_RESULT" "$S8A_RESULT"
-          for result in "$CHECK_RESULT" "$SHARDS_RESULT" "$S8A_RESULT"; do
-            if [ "$result" != "success" ]; then
-              exit 1
-            fi
-          done
+          printf 'check=%s\n' "$CHECK_RESULT"
+          test "$CHECK_RESULT" = success
 
   smoke:
+    needs: check
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - name: Pack and smoke cycling-coach
-        # Mirrors release.yml's smoke gate: install the packed tarball into a
-        # fresh consumer and run the bundled binary. Runs on every PR (including
-        # the Version PR) and on main, so a broken published bundle — e.g. an ESM
-        # dynamic-require of a Node builtin that only surfaces in the packed
-        # artifact, not in `pnpm test` — is caught before merge, not at release.
-        # cycling-coach is the only publishable binary (ADR-0009); extend when
-        # running-coach / duathlon-coach graduate.
-        # --ignore-scripts skips the full dependency tree, so this smoke no longer proves postinstall behavior.
+      - name: Require package smoke evidence
+        env:
+          CHECK_RESULT: ${{ needs.check.result }}
+          SMOKE_RESULT: ${{ needs.check.outputs.smoke }}
         run: |
-          set -euo pipefail
-          PACKAGE=cycling-coach
-          PACK_DIR="/tmp/smoke-pack-$PACKAGE"
-          mkdir -p "$PACK_DIR"
-          pnpm --dir "packages/$PACKAGE" pack --pack-destination "$PACK_DIR"
-          TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
-          pnpm check:published-package -- "$TARBALL"
-          mkdir -p "/tmp/smoke-consumer-$PACKAGE"
-          cd "/tmp/smoke-consumer-$PACKAGE"
-          npm init -y > /dev/null
-          npm install "$TARBALL" --ignore-scripts
-          timeout 30 node "node_modules/$PACKAGE/dist/index.js" --help
+          printf 'check=%s\nsmoke=%s\n' "$CHECK_RESULT" "$SMOKE_RESULT"
+          test "$CHECK_RESULT" = success
+          test "$SMOKE_RESULT" = success
 
   secrets-macos:
-    runs-on: macos-latest
-    env:
-      CI: macos
+    needs: [desktop-scope, desktop-packaged-native]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads the exact `packageManager` pin from root package.json.
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile --no-runtime
-      - name: Verify Node 22 compatibility runtime
+      - name: Require scoped macOS Keychain test
         env:
-          PNPM_SHIM_BYPASS: "1"
+          SCOPE_RESULT: ${{ needs.desktop-scope.result }}
+          NATIVE_SCOPE: ${{ needs.desktop-scope.outputs.native }}
+          NATIVE_RESULT: ${{ needs.desktop-packaged-native.result }}
         run: |
-          node_version="$(pnpm --filter @enduragent/core exec node -p 'process.version')"
-          printf 'Test runtime: %s\n' "$node_version"
-          case "$node_version" in
-            v22.*) ;;
-            *) exit 1 ;;
-          esac
-      - run: pnpm --filter @enduragent/core exec vitest run tests/secrets
-        env:
-          PNPM_SHIM_BYPASS: "1"
+          printf 'scope=%s\nnative=%s\nvalidation=%s\n' "$SCOPE_RESULT" "$NATIVE_SCOPE" "$NATIVE_RESULT"
+          test "$SCOPE_RESULT" = success
+          if [ "$NATIVE_SCOPE" = true ]; then
+            test "$NATIVE_RESULT" = success
+          else
+            test "$NATIVE_RESULT" = skipped
+          fi
 
   desktop-packaged-self-test:
+    needs: [desktop-scope, desktop-packaged-native]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require scoped Desktop package validation
+        env:
+          SCOPE_RESULT: ${{ needs.desktop-scope.result }}
+          NATIVE_SCOPE: ${{ needs.desktop-scope.outputs.native }}
+          NATIVE_RESULT: ${{ needs.desktop-packaged-native.result }}
+        run: |
+          printf 'scope=%s\nnative=%s\nvalidation=%s\n' "$SCOPE_RESULT" "$NATIVE_SCOPE" "$NATIVE_RESULT"
+          test "$SCOPE_RESULT" = success
+          if [ "$NATIVE_SCOPE" = true ]; then
+            test "$NATIVE_RESULT" = success
+          else
+            test "$NATIVE_RESULT" = skipped
+          fi
+
+  desktop-packaged-native:
+    needs: desktop-scope
+    if: needs.desktop-scope.outputs.native == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     env:
       CI: macos
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: pnpm
       - run: test "$(uname -m)" = "arm64"
       - run: pnpm install --frozen-lockfile
-      - name: Build Desktop
-        run: pnpm --filter @enduragent/desktop... build
-      - name: Test Desktop IME composition
-        run: pnpm --filter @enduragent/desktop exec vitest run tests/chat-panels.integration.test.ts --testNamePattern "preserves IME composition until committed Enter"
-      - run: pnpm --filter @enduragent/desktop test:packaged-self-test
+      - name: Build Desktop dependencies
+        run: pnpm --filter "@enduragent/desktop^..." build
+      - name: Prepare Desktop package
+        run: pnpm --filter @enduragent/desktop package:dir
+      - name: Test Desktop integrations on macOS
+        run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
+      - name: Test Desktop E2E on macOS
+        run: pnpm --filter @enduragent/desktop test:e2e
+      - name: Upload Desktop E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-e2e-macos-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          if-no-files-found: warn
+      - name: Test prepared Desktop package
+        run: pnpm --filter @enduragent/desktop test:packaged-self-test --prepared-package
       - run: pnpm --filter @enduragent/desktop verify:package-layout
       - run: pnpm --filter @enduragent/desktop run smoke:security -- --mode=packaged --output=/tmp/desktop-security-packaged
       - run: pnpm --filter @enduragent/desktop package:telegram-acceptance
       - run: pnpm --filter @enduragent/desktop test:telegram-packaged
         env:
           ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT: "1"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+      - name: Verify Node 22 compatibility runtime
+        run: |
+          node_version="$(node -p 'process.version')"
+          printf 'Test runtime: %s\n' "$node_version"
+          case "$node_version" in
+            v22.*) ;;
+            *) exit 1 ;;
+          esac
+      - name: Test macOS Keychain secrets
+        working-directory: packages/core
+        run: node ../../node_modules/vitest/vitest.mjs run tests/secrets
 
   windows-desktop-package:
+    needs: desktop-scope
+    if: needs.desktop-scope.outputs.native == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -196,93 +265,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build Desktop dependencies
         run: pnpm --filter "@enduragent/desktop^..." build
-      - name: Run Windows package contract tests
-        run: pnpm exec vitest run apps/desktop/tests/windows-package-layout.test.ts apps/desktop/tests/windows-package-plan.test.ts apps/desktop/tests/windows-installed-package.test.ts apps/desktop/tests/windows-parity-contract.test.ts --maxWorkers=1
       - name: Build and verify unsigned x64 NSIS package
         run: pnpm --filter @enduragent/desktop package:win
       - name: Install, test, and uninstall unsigned x64 NSIS package
         run: pnpm --filter @enduragent/desktop test:windows-installed-self-test --github-hosted --signature-policy unsigned-private
-
-  desktop-integration-macos:
-    runs-on: macos-latest
-    timeout-minutes: 30
-    continue-on-error: true
-    env:
-      CI: macos
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: test "$(uname -m)" = "arm64"
-      - run: pnpm install --frozen-lockfile
-      - name: Build Desktop
-        run: pnpm --filter @enduragent/desktop... build
-      - name: Test Darwin desktop integrations
-        run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
-
-  desktop-e2e-scope:
-    runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.scope.outputs.run }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          fetch-depth: 0
-      - id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          run=false
-          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
-            run=true
-          elif ! git diff --quiet "$BASE_SHA" HEAD -- \
-            apps/desktop \
-            apps/desktop-renderer \
-            packages/coach \
-            packages/coach-client \
-            packages/coach-contract \
-            packages/core \
-            packages/kernel \
-            packages/kernel-node \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            tsconfig.check.json \
-            .github/workflows/ci.yml; then
-            run=true
-          fi
-          printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"
-
-  desktop-e2e-macos:
-    needs: desktop-e2e-scope
-    if: needs.desktop-e2e-scope.outputs.run == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    env:
-      CI: macos
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: test "$(uname -m)" = "arm64"
-      - run: pnpm install --frozen-lockfile
-      - name: Build Desktop
-        run: pnpm --filter @enduragent/desktop... build
-      - name: Test Desktop E2E
-        run: pnpm --filter @enduragent/desktop test:e2e
-      - name: Upload Desktop E2E artifacts
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-e2e-artifacts
-          path: |
-            apps/desktop/playwright-report/
-            apps/desktop/test-results/
-          if-no-files-found: warn

@@ -19,6 +19,12 @@ const repositoryRoot = resolve(desktopRoot, "../..");
 const cliEntry = join(repositoryRoot, "packages/coach/dist/enduragent.js");
 const developmentPackagePlan = createDevelopmentPackagePlan({ desktopRoot });
 
+export function shouldPrepareDevelopmentPackage(arguments_) {
+  if (arguments_.length === 0) return true;
+  if (arguments_.length === 1 && arguments_[0] === "--prepared-package") return false;
+  throw new TypeError("arguments are not supported");
+}
+
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
@@ -275,9 +281,10 @@ async function runApplicationCase(input) {
 
 async function main() {
   checked(process.platform === "darwin", "packaged self-test verification requires macOS");
-  checked(process.argv.length === 2, "arguments are not supported");
-  await runChecked("pnpm", ["--filter", "@enduragent/desktop...", "build"]);
-  await runChecked("pnpm", ["--filter", "@enduragent/desktop", "package:dir"]);
+  if (shouldPrepareDevelopmentPackage(process.argv.slice(2))) {
+    await runChecked("pnpm", ["--filter", "@enduragent/desktop...", "build"]);
+    await runChecked("pnpm", ["--filter", "@enduragent/desktop", "package:dir"]);
+  }
   const { SelfTestCommandTerminalSchema } = await import("@enduragent/coach-contract");
   const base = await realpath("/tmp");
   const scratch = await mkdtemp(join(base, "ea7-"));
@@ -352,4 +359,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}
