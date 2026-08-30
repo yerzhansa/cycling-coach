@@ -70,12 +70,13 @@ describe("Windows parity automation contract", () => {
       ) ?? [];
     const windowsJob = workflow
       .split("  windows-desktop-package:")[1]
-      ?.split(/\r?\n  desktop-integration-macos:/u)[0];
+      ?.split(/\r?\n  [a-z0-9_-]+:/u)[0];
+    const linuxCheckJob = workflow.split("  check:")[1]?.split(/\r?\n  [a-z0-9_-]+:/u)[0];
     expect(packageCommands).toHaveLength(1);
     expect(installedCommands).toHaveLength(1);
-    expect(windowsJob).toContain(
-      "pnpm exec vitest run apps/desktop/tests/windows-package-layout.test.ts apps/desktop/tests/windows-package-plan.test.ts apps/desktop/tests/windows-installed-package.test.ts apps/desktop/tests/windows-parity-contract.test.ts --maxWorkers=1",
-    );
+    expect(linuxCheckJob).toContain("pnpm exec vitest run --shard=1/2");
+    expect(linuxCheckJob).toContain("pnpm exec vitest run --shard=2/2");
+    expect(windowsJob).not.toContain("Run Windows package contract tests");
     expect(windowsJob).not.toContain("pnpm exec vitest run apps/desktop/tests ");
     expect(windowsJob).not.toContain("@enduragent/desktop-renderer test");
     expect(workflow.indexOf(packageCommands[0]!)).toBeLessThan(
