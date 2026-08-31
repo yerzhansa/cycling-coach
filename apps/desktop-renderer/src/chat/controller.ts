@@ -249,6 +249,7 @@ export function createChatController(input: {
   let queueLoaded = input.initialQueueSnapshot !== undefined;
   let queueLoadError: string | null = null;
   let queueMutationError: string | null = null;
+  let queueMutationCount = 0;
   let attachmentSurface: ChatAttachmentComposerReadModel | null = null;
   let attachmentAdmissions: readonly AttachmentAdmissionReadModel[] = [];
   let attachmentError: string | null = null;
@@ -282,6 +283,9 @@ export function createChatController(input: {
     !decisionLoaded ||
     decision?.status === "unanswered" ||
     (decision?.status === "answered" && decision.continuation.status === "pending");
+  const decisionBlocksReset = (): boolean =>
+    !decisionLoaded ||
+    (decision?.status === "answered" && decision.continuation.status === "pending");
   const canOpenNewConversation = (): boolean =>
     canChat() &&
     queueLoaded &&
@@ -292,11 +296,12 @@ export function createChatController(input: {
       attachmentSurface?.draft != null) &&
     state.session.resetPhase === "idle" &&
     state.status !== "streaming" &&
-    state.queued.length === 0 &&
-    !decisionBlocksWork() &&
+    !decisionBlocksReset() &&
     activeTask === undefined &&
     outstandingChatTasks.size === 0 &&
     attachmentWriteTokens.size === 0 &&
+    state.retryRequired == null &&
+    queueMutationCount === 0 &&
     queuedRetry === undefined &&
     resetTask === undefined;
   const render = (appendDelta?: ChatAppendDelta): void => {
@@ -1762,32 +1767,39 @@ export function createChatController(input: {
     removeQueued(id) {
       if (disposed || resetBlocksWork()) return;
       queueMutationError = null;
+      queueMutationCount += 1;
       render();
-      void input.clients.getClient().then(
-        async (client) => {
-          try {
-            const acknowledged = await client.call("removeQueuedChatMessage", {
-              chatId: DESKTOP_CHAT_ID,
-              queuedMessageId: id,
-            });
-            if (!disposed) {
-              queueMutationError = null;
-              applyQueueSnapshot(acknowledged);
+      void input.clients
+        .getClient()
+        .then(
+          async (client) => {
+            try {
+              const acknowledged = await client.call("removeQueuedChatMessage", {
+                chatId: DESKTOP_CHAT_ID,
+                queuedMessageId: id,
+              });
+              if (!disposed) {
+                queueMutationError = null;
+                applyQueueSnapshot(acknowledged);
+              }
+            } catch {
+              if (!disposed) {
+                queueMutationError = CHAT_QUEUE_REMOVE_FAILURE_COPY;
+                render();
+              }
             }
-          } catch {
+          },
+          () => {
             if (!disposed) {
               queueMutationError = CHAT_QUEUE_REMOVE_FAILURE_COPY;
               render();
             }
-          }
-        },
-        () => {
-          if (!disposed) {
-            queueMutationError = CHAT_QUEUE_REMOVE_FAILURE_COPY;
-            render();
-          }
-        },
-      );
+          },
+        )
+        .finally(() => {
+          queueMutationCount -= 1;
+          render();
+        });
     },
     runQueuedCommand(id) {
       if (

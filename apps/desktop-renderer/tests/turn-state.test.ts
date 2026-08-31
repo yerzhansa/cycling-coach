@@ -662,12 +662,16 @@ describe("desktop message queue", () => {
     expect(held.queued).toBe(state.queued);
   });
 
-  it("refuses to open a new conversation while messages are queued", () => {
-    const failed = reduceChatState(started(), { type: "fail", requestKey: 1, copy: "Failed" });
-    const state = queued(failed, "Queued");
+  it("opens a queue-only conversation without changing queued messages", () => {
+    const state = queued(
+      reduceChatState(EMPTY_CHAT_STATE, { type: "session-probe", hasSession: false }),
+      "Queued",
+    );
 
     expect(hasClearableConversation(state)).toBe(true);
-    expect(reduceChatState(state, { type: "open-new-conversation" })).toBe(state);
+    const confirming = reduceChatState(state, { type: "open-new-conversation" });
+    expect(confirming.session.resetPhase).toBe("confirming");
+    expect(confirming.queued).toBe(state.queued);
   });
 
   it("clears the queue when a reset succeeds", () => {
