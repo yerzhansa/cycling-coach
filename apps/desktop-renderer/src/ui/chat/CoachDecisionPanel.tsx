@@ -145,6 +145,39 @@ export function CoachDecisionPanel(props: {
   }
 
   if (
+    decision?.status === "answered" &&
+    decision.continuation.status === "pending" &&
+    error !== null
+  ) {
+    return (
+      <section
+        className="grid gap-inset rounded-card border border-line bg-surface p-4 shadow-elev-2"
+        aria-live="polite"
+      >
+        <div className="grid gap-[calc(var(--inset)/2)]">
+          <strong className="text-sm font-medium leading-5">Your choice is saved</strong>
+          <p className="m-0 text-xs leading-4 text-ink-2">{answerLabel ?? "Your answer"}</p>
+          <p className="m-0 text-xs leading-4 text-danger" role="alert">
+            {error}
+          </p>
+        </div>
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!available}
+            onClick={() => {
+              retryDecision();
+            }}
+          >
+            Try again
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  if (
     decision !== null &&
     (phase !== "idle" ||
       (decision.status === "answered" && decision.continuation.status === "pending"))

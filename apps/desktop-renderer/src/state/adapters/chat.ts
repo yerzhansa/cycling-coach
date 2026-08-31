@@ -65,13 +65,20 @@ function historicalTimeline(
   liveDecisionIds: ReadonlySet<string>,
 ): readonly ChatTranscriptItemView[] {
   const requested = new Map<string, CoachDecisionReadModel>();
+  const answered = new Map<
+    string,
+    Extract<TranscriptPageEntry, { readonly kind: "decision-answered" }>
+  >();
   const turnAttempts = new Map<string, number>();
   const timeline: ChatTranscriptItemView[] = [];
   for (const entry of entries) {
     if (entry.kind === "turn") {
       const attempt = (turnAttempts.get(entry.turnId) ?? 0) + 1;
       turnAttempts.set(entry.turnId, attempt);
-      if (attempt === 1) {
+      if (
+        attempt === 1 &&
+        (/\S/u.test(entry.athleteText) || (entry.attachments?.length ?? 0) > 0)
+      ) {
         timeline.push({
           kind: "message",
           message: {
@@ -123,23 +130,7 @@ function historicalTimeline(
       continue;
     }
     if (entry.kind === "decision-answered") {
-      const source = requested.get(entry.decisionId);
-      const answer = entry.answer;
-      const label =
-        answer.kind === "custom"
-          ? answer.text
-          : (source?.options.find((option) => option.id === answer.optionId)?.label ??
-            "Saved choice");
-      timeline.push({
-        kind: "choice",
-        choice: {
-          id: entry.decisionId,
-          label,
-          consequence: answer.kind === "custom" ? null : entry.consequence,
-          skipped: false,
-          historical: true,
-        },
-      });
+      answered.set(JSON.stringify([entry.decisionId, entry.continuationId]), entry);
       continue;
     }
     if (entry.kind === "decision-skipped") {
@@ -155,7 +146,28 @@ function historicalTimeline(
       });
       continue;
     }
-    if (entry.kind === "decision-continuation-completed" && /\S/u.test(entry.coachText)) {
+    if (entry.kind === "decision-continuation-completed") {
+      const savedAnswer = answered.get(JSON.stringify([entry.decisionId, entry.continuationId]));
+      if (savedAnswer !== undefined) {
+        const source = requested.get(entry.decisionId);
+        const answer = savedAnswer.answer;
+        const label =
+          answer.kind === "custom"
+            ? answer.text
+            : (source?.options.find((option) => option.id === answer.optionId)?.label ??
+              "Saved choice");
+        timeline.push({
+          kind: "choice",
+          choice: {
+            id: entry.decisionId,
+            label,
+            consequence: answer.kind === "custom" ? null : savedAnswer.consequence,
+            skipped: false,
+            historical: true,
+          },
+        });
+      }
+      if (!/\S/u.test(entry.coachText)) continue;
       timeline.push({
         kind: "message",
         message: {
@@ -295,12 +307,13 @@ export function createChatViewAdapter(input: {
       planningRequestFocusId: controls?.planningRequests?.focusId ?? null,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
-      notice:
-        state.activeTurn?.error?.athleteMessage ??
-        (state.status === "streaming" ? null : state.progress),
+      notice: decisionBlocksWork
+        ? null
+        : (state.activeTurn?.error?.athleteMessage ??
+          (state.status === "streaming" ? null : state.progress)),
       coachProgress:
         state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,
-      interrupted: state.status === "interrupted",
+      interrupted: state.status === "interrupted" && !decisionBlocksWork,
       workBlocked,
       sendDisabled:
         workBlocked || decisionBlocksWork || decisionUnavailable || attachmentUnavailable,

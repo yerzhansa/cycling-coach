@@ -332,6 +332,25 @@ describe("chat transcript hydration", () => {
     ]);
   });
 
+  it("does not restore an empty athlete row for an interrupted decision continuation", () => {
+    const interrupted = {
+      ...turn("turn-decision-stopped"),
+      athleteText: "",
+      delivery: "interrupted" as const,
+    };
+
+    expect(mergeHydratedMessages([interrupted], [])).toEqual([
+      {
+        id: "history:coach:turn-decision-stopped",
+        turnId: "turn-decision-stopped",
+        role: "coach",
+        text: "Coach turn-decision-stopped",
+        delivery: "interrupted",
+        historical: true,
+      },
+    ]);
+  });
+
   it("preserves newer schema-v1 retry turns after an older schema-v2 page loads", async () => {
     const interrupted = {
       ...turn("turn-recovered-mixed"),

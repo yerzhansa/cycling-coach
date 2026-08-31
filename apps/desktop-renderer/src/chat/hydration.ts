@@ -138,15 +138,19 @@ export function mergeHydratedMessages(
       };
       if (attempt > 1) return [coach];
       return [
-        {
-          id: `history:athlete:${entry.turnId}`,
-          turnId: entry.turnId,
-          role: "athlete",
-          text: entry.athleteText,
-          delivery: "complete",
-          historical: true,
-          ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
-        },
+        ...(/\S/u.test(entry.athleteText) || (entry.attachments?.length ?? 0) > 0
+          ? [
+              {
+                id: `history:athlete:${entry.turnId}`,
+                turnId: entry.turnId,
+                role: "athlete" as const,
+                text: entry.athleteText,
+                delivery: "complete" as const,
+                historical: true,
+                ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
+              },
+            ]
+          : []),
         coach,
       ];
     }
