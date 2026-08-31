@@ -63,16 +63,40 @@ A delivery surface (currently only Telegram); sport-agnostic.
 The turn-invariant head of the system prompt — SOUL, the joined skill prompts, the rule blocks (untrusted-data, recall, workout-review, data-grounding) — that forms one frozen cache prefix; only the Athlete Context block is volatile and renders last. **Boundary policy:** SOUL and always-needed rules stay preloaded in this prefix. Future skill growth that is not needed every turn (e.g., nutrition depth, race-prep depth) ships tool-retrievable rather than preloaded — but never via per-turn conditional injection, which would reshape the prefix and defeat the cache. A guardrail test fails if the prefix's estimated token count exceeds its ceiling, forcing a conscious preload-vs-retrieve decision instead of silent bloat.
 
 **Plan**:
-The locally authoritative training block with exactly one lifecycle state: `draft`, `active`, or `ended`.
-_Avoid_: Training program, calendar plan
+The locally authoritative prescribed training for one goal. Its lifecycle is `active` or `closed`; a closed Plan has reason `completed` or `stopped`.
+_Avoid_: Draft, Plan Creation, replacement Plan, ended Plan, calendar plan
+
+**Plan Creation**:
+The persisted workflow that gathers confirmed inputs and produces a reviewable Draft before activation. Its lifecycle is `in-progress`, `review`, `activated`, or `discarded`; at most one may be unfinished.
+_Avoid_: Plan Intake, replacement, setup wizard, Plan conversation
+
+**Draft**:
+The current generated, reviewable snapshot inside a Plan Creation. A Draft is not a Plan and has no Plan lifecycle state.
+_Avoid_: Draft Plan, pending Plan, replacement Draft
+
+**Plan Creation Answer**:
+An athlete-confirmed value scoped to one Plan Creation. It outranks saved or observed context for that creation but becomes lasting only when the athlete chooses that scope.
+_Avoid_: Inference, Athlete Preference
+
+**Plan Change**:
+A version-bound proposed revision to the active Plan's uncompleted future intent. It changes the same Plan only after explicit confirmation.
+_Avoid_: Replacement, Proposal, Plan patch
+
+**Athlete Preference**:
+An athlete-saved choice intended for future Plans until removed. It is distinct from a Plan Creation Answer and a temporary Training Restriction.
+_Avoid_: Athlete Rule, permanent restriction
+
+**Training Restriction**:
+A dated operational limit of no training, no hard training, or a maximum duration. It records training effects, not diagnosis, treatment, or medical clearance.
+_Avoid_: Medical profile, diagnosis, health constraint
 
 **Plan Workout**:
-A Workout that belongs to one Plan and carries its planned date, origin, and sport-owned prescription.
+A Workout that belongs to one Plan and carries its planning identity, origin, and sport-owned prescription. A flexible Plan Workout may remain undated until chosen.
 _Avoid_: Session, `planned_workout`, `planned_workouts`
 
-**Plan Intake**:
-The structured athlete information gathered while the Plan coach prepares a Draft, before any Plan becomes active.
-_Avoid_: Plan chat, onboarding
+**Reconciliation**:
+The recoverable process that makes the external calendar mirror agree with an already-committed local Plan. It never determines Plan lifecycle.
+_Avoid_: Plan activation, Plan rollback, calendar ownership
 
 **Training Week**:
 A seven-day span counted from a Plan's athlete-selected start date; week 1 begins on that date.
