@@ -79,9 +79,6 @@ interface AuthBridge {
   getPlanningReadModel(): Promise<unknown>;
   getPlanState(): Promise<unknown>;
   executePlanTransition(input: unknown): Promise<unknown>;
-  listPlans(input: unknown): Promise<unknown>;
-  getPlanContext(input: unknown): Promise<unknown>;
-  executePlanningCommand(input: unknown): Promise<unknown>;
   onPlanProgress(listener: (progress: unknown) => void): () => void;
   credentialStatuses(): Promise<unknown>;
   credentialRecoveryStatus(): Promise<unknown>;
@@ -382,18 +379,15 @@ describe("desktop preload ChatGPT auth", () => {
         "deleteCredential",
         "disableTelegram",
         "enableTelegram",
-        "executePlanningCommand",
         "executePlanTransition",
         "exportTrainingFile",
         "getUpdateState",
         "getDaemonConnection",
-        "getPlanContext",
         "getPlanState",
         "getTranscriptPage",
         "getPlanningReadModel",
         "initialSetupStatusSettled",
         "listArchivedConversations",
-        "listPlans",
         "listTelegramAllowedSenders",
         "getArchivedTranscriptPage",
         "llmConfiguration",
@@ -592,74 +586,6 @@ describe("desktop preload ChatGPT auth", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("validates and copies strict Planning v2 queries, commands, and results", async () => {
-    const listRequest = { schemaVersion: 2, closedCursor: null, closedLimit: 25 };
-    const listResult = {
-      schemaVersion: 2,
-      asOfMs: 1_000,
-      creation: null,
-      activePlan: null,
-      closedPlans: [],
-      nextClosedCursor: null,
-      attention: { total: 0, creation: 0, activePlan: 0, calendar: 0 },
-    };
-    const contextRequest = {
-      schemaVersion: 2,
-      target: {
-        kind: "draft",
-        creationId: "00000000000000000000000002",
-        draftRevision: 1,
-      },
-    };
-    const contextResult = {
-      schemaVersion: 2,
-      asOfMs: 1_000,
-      detail: {
-        kind: "draft",
-        id: "00000000000000000000000003",
-        creationId: "00000000000000000000000002",
-        creationVersion: 2,
-        revision: 1,
-        fingerprint: "b".repeat(64),
-        generatedAtMs: 900,
-      },
-      effectiveContext: [],
-      athletePreferences: [],
-      trainingRestrictions: [],
-      observedEvidence: [],
-      allowedCommands: ["plan_creation.activate"],
-    };
-    const command = {
-      schemaVersion: 2,
-      name: "plan_creation.discard",
-      commandId: "command-2",
-      requestDigest: "a".repeat(64),
-      creationId: "00000000000000000000000002",
-      expectedCreationVersion: 2,
-    };
-    const commandResult = {
-      schemaVersion: 2,
-      name: command.name,
-      commandId: command.commandId,
-      requestDigest: command.requestDigest,
-      status: "succeeded",
-      data: { creationId: command.creationId, status: "discarded" },
-    };
-    mocks.invoke
-      .mockResolvedValueOnce(listResult)
-      .mockResolvedValueOnce(contextResult)
-      .mockResolvedValueOnce(commandResult);
-
-    await expect(bridge.listPlans(listRequest)).resolves.toEqual(listResult);
-    await expect(bridge.getPlanContext(contextRequest)).resolves.toEqual(contextResult);
-    await expect(bridge.executePlanningCommand(command)).resolves.toEqual(commandResult);
-    expect(mocks.invoke.mock.calls).toEqual([
-      ["desktop:plan:v2:list", listRequest],
-      ["desktop:plan:v2:get-context", contextRequest],
-      ["desktop:plan:v2:execute-command", command],
-    ]);
-  });
-
   it("rejects malformed Planning commands and daemon results", async () => {
     await expect(
       bridge.executePlanTransition({ transitionId: "PL-T01", commandId: "command-1" }),
@@ -671,18 +597,6 @@ describe("desktop preload ChatGPT auth", () => {
       state: { schemaVersion: 1, scenarioId: "PL-S999" },
     });
     await expect(bridge.getPlanState()).rejects.toBeInstanceOf(TypeError);
-
-    await expect(
-      bridge.executePlanningCommand({
-        schemaVersion: 2,
-        name: "plan_creation.discard",
-        commandId: "command-2",
-        requestDigest: "a".repeat(64),
-        creationId: "00000000000000000000000002",
-        expectedCreationVersion: 2,
-        transitionId: "PL-T01",
-      }),
-    ).rejects.toBeInstanceOf(TypeError);
   });
 
   it("exports only a closed training request and validates the minimized result", async () => {

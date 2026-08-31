@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CoachRpcRemoteError } from "@enduragent/coach-client";
-import type { PlanReadModel, PlanningV2Command } from "@enduragent/coach-contract";
+import type { PlanReadModel } from "@enduragent/coach-contract";
 
 vi.mock("electron", () => ({
   BrowserWindow: class {},
@@ -17,9 +17,6 @@ import {
   DESKTOP_PLAN_COURSE_FILE_CHANNEL,
   DESKTOP_PLAN_STATE_CHANNEL,
   DESKTOP_PLAN_TRANSITION_CHANNEL,
-  DESKTOP_PLAN_V2_COMMAND_CHANNEL,
-  DESKTOP_PLAN_V2_CONTEXT_CHANNEL,
-  DESKTOP_PLAN_V2_LIST_CHANNEL,
 } from "../src/main/constants.js";
 import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
 
@@ -66,59 +63,6 @@ const progress = {
   total: 1,
 };
 
-const planListRequest = { schemaVersion: 2 as const, closedCursor: null, closedLimit: 25 };
-const planListResult = {
-  schemaVersion: 2 as const,
-  asOfMs: 1_000,
-  creation: null,
-  activePlan: null,
-  closedPlans: [],
-  nextClosedCursor: null,
-  attention: { total: 0, creation: 0, activePlan: 0, calendar: 0 },
-};
-const planContextRequest = {
-  schemaVersion: 2 as const,
-  target: {
-    kind: "draft" as const,
-    creationId: "00000000000000000000000002",
-    draftRevision: 1,
-  },
-};
-const planContextResult = {
-  schemaVersion: 2 as const,
-  asOfMs: 1_000,
-  detail: {
-    kind: "draft" as const,
-    id: "00000000000000000000000003",
-    creationId: "00000000000000000000000002",
-    creationVersion: 2,
-    revision: 1,
-    fingerprint: "b".repeat(64),
-    generatedAtMs: 900,
-  },
-  effectiveContext: [],
-  athletePreferences: [],
-  trainingRestrictions: [],
-  observedEvidence: [],
-  allowedCommands: ["plan_creation.activate" as const],
-};
-const planningCommand: PlanningV2Command = {
-  schemaVersion: 2,
-  name: "plan_creation.discard",
-  commandId: "command-2",
-  requestDigest: "a".repeat(64),
-  creationId: "00000000000000000000000002",
-  expectedCreationVersion: 2,
-};
-const planningCommandResult = {
-  schemaVersion: 2 as const,
-  name: planningCommand.name,
-  commandId: planningCommand.commandId,
-  requestDigest: planningCommand.requestDigest,
-  status: "succeeded" as const,
-  data: { creationId: planningCommand.creationId, status: "discarded" as const },
-};
-
 function setup(
   getPlanState = vi.fn(async () => ({ status: "ready" as const, state })),
   executePlanTransition = vi.fn(
@@ -128,9 +72,6 @@ function setup(
     },
   ),
 ) {
-  const listPlans = vi.fn(async () => planListResult);
-  const getPlanContext = vi.fn(async () => planContextResult);
-  const executePlanningCommand = vi.fn(async () => planningCommandResult);
   const handlers = new Map<string, Handler>();
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -151,9 +92,6 @@ function setup(
     currentWindow: () => window as never,
     getPlanState,
     executePlanTransition: executePlanTransition as never,
-    listPlans,
-    getPlanContext,
-    executePlanningCommand: executePlanningCommand as never,
   });
   return {
     dispose,
@@ -161,9 +99,6 @@ function setup(
     ipcMain,
     getPlanState,
     executePlanTransition,
-    listPlans,
-    getPlanContext,
-    executePlanningCommand,
     dialog,
     webContents,
     trusted: { sender: webContents, senderFrame: mainFrame },
@@ -189,22 +124,6 @@ describe("desktop Planning IPC", () => {
     expect(subject.webContents.send).toHaveBeenCalledWith(DESKTOP_PLAN_PROGRESS_CHANNEL, progress);
   });
 
-  it("forwards strict v2 queries and named commands without renderer-owned mutation state", async () => {
-    const subject = setup();
-    await expect(
-      subject.handlers.get(DESKTOP_PLAN_V2_LIST_CHANNEL)!(subject.trusted, planListRequest),
-    ).resolves.toEqual(planListResult);
-    await expect(
-      subject.handlers.get(DESKTOP_PLAN_V2_CONTEXT_CHANNEL)!(subject.trusted, planContextRequest),
-    ).resolves.toEqual(planContextResult);
-    await expect(
-      subject.handlers.get(DESKTOP_PLAN_V2_COMMAND_CHANNEL)!(subject.trusted, planningCommand),
-    ).resolves.toEqual(planningCommandResult);
-    expect(subject.listPlans).toHaveBeenCalledWith(planListRequest);
-    expect(subject.getPlanContext).toHaveBeenCalledWith(planContextRequest);
-    expect(subject.executePlanningCommand).toHaveBeenCalledWith(planningCommand);
-  });
-
   it("rejects untrusted, malformed, and extra arguments before invoking Planning", async () => {
     const subject = setup();
     const untrusted = { sender: {}, senderFrame: { url: RENDERER_URL } };
@@ -226,15 +145,8 @@ describe("desktop Planning IPC", () => {
         extra: true,
       }),
     ).rejects.toThrow("invalid desktop Planning request");
-    await expect(
-      subject.handlers.get(DESKTOP_PLAN_V2_COMMAND_CHANNEL)!(subject.trusted, {
-        ...planningCommand,
-        transitionId: "PL-T01",
-      }),
-    ).rejects.toThrow("invalid desktop Planning request");
     expect(subject.getPlanState).not.toHaveBeenCalled();
     expect(subject.executePlanTransition).not.toHaveBeenCalled();
-    expect(subject.executePlanningCommand).not.toHaveBeenCalled();
   });
 
   it("returns one validated GPX or FIT Course path and keeps cancellation explicit", async () => {
@@ -311,43 +223,12 @@ describe("desktop Planning IPC", () => {
     });
   });
 
-  it("routes v2 names through the Coach client and closes every connection", async () => {
-    const client = {
-      call: vi.fn(async (method: string) => {
-        if (method === "plan.list") return planListResult;
-        if (method === "plan.get_context") return planContextResult;
-        return planningCommandResult;
-      }),
-      close: vi.fn(async () => {}),
-    };
-    const planning = createConnectionPlanningClient(
-      {
-        url: "ws://127.0.0.1:45001/rpc",
-        token: "s".repeat(43),
-        athleteHome: "/synthetic/athlete",
-      },
-      vi.fn(async () => client) as never,
-    );
-    await expect(planning.listPlans(planListRequest)).resolves.toEqual(planListResult);
-    await expect(planning.getPlanContext(planContextRequest)).resolves.toEqual(planContextResult);
-    await expect(planning.executePlanningCommand(planningCommand)).resolves.toEqual(
-      planningCommandResult,
-    );
-    expect(client.call).toHaveBeenNthCalledWith(1, "plan.list", planListRequest);
-    expect(client.call).toHaveBeenNthCalledWith(2, "plan.get_context", planContextRequest);
-    expect(client.call).toHaveBeenNthCalledWith(3, planningCommand.name, planningCommand);
-    expect(client.close).toHaveBeenCalledTimes(3);
-  });
-
   it("removes every Planning handler during shutdown", () => {
     const subject = setup();
     subject.dispose();
     for (const channel of [
       DESKTOP_PLAN_STATE_CHANNEL,
       DESKTOP_PLAN_TRANSITION_CHANNEL,
-      DESKTOP_PLAN_V2_LIST_CHANNEL,
-      DESKTOP_PLAN_V2_CONTEXT_CHANNEL,
-      DESKTOP_PLAN_V2_COMMAND_CHANNEL,
       DESKTOP_PLAN_COURSE_FILE_CHANNEL,
     ]) {
       expect(subject.handlers.has(channel)).toBe(false);
