@@ -1322,11 +1322,6 @@ async function runDesktop(): Promise<void> {
             if (isCurrent()) onEvent(event);
           }),
         ),
-      listPlans: (request) => useActivePlanning((planning) => planning.listPlans(request)),
-      getPlanContext: (request) =>
-        useActivePlanning((planning) => planning.getPlanContext(request)),
-      executePlanningCommand: (request) =>
-        useActivePlanning((planning) => planning.executePlanningCommand(request)),
     });
     disposeTrainingExportIpc = installDesktopTrainingExportIpc({
       ipcMain,

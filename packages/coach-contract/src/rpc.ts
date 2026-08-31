@@ -125,29 +125,6 @@ import {
   type PlanningReadOperations,
 } from "./planning-read.js";
 import {
-  PlanChangeApplyV2CommandSchema,
-  PlanChangeApplyV2ResultSchema,
-  PlanChangePreviewV2CommandSchema,
-  PlanChangePreviewV2ResultSchema,
-  PlanCloseV2CommandSchema,
-  PlanCloseV2ResultSchema,
-  PlanCreationActivateV2CommandSchema,
-  PlanCreationActivateV2ResultSchema,
-  PlanCreationAnswerV2CommandSchema,
-  PlanCreationAnswerV2ResultSchema,
-  PlanCreationDiscardV2CommandSchema,
-  PlanCreationDiscardV2ResultSchema,
-  PlanCreationPreviewV2CommandSchema,
-  PlanCreationPreviewV2ResultSchema,
-  PlanCreationStartV2CommandSchema,
-  PlanCreationStartV2ResultSchema,
-  PlanGetContextV2RequestSchema,
-  PlanGetContextV2ResultSchema,
-  PlanListV2RequestSchema,
-  PlanListV2ResultSchema,
-  type PlanningV2Operations,
-} from "./planning-v2.js";
-import {
   CreatePlanningRequestRpcParamsSchema,
   CreatePlanningRequestRpcResultSchema,
   CreateWorkoutPlanningRequestRpcParamsSchema,
@@ -282,16 +259,6 @@ export const COACH_RPC_METHOD_NAMES = [
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getPlanningReadModel",
-  "plan.list",
-  "plan.get_context",
-  "plan_creation.start",
-  "plan_creation.answer",
-  "plan_creation.preview",
-  "plan_creation.activate",
-  "plan_creation.discard",
-  "plan_change.preview",
-  "plan_change.apply",
-  "plan.close",
   "getActivityAnalysis",
   "exportTrainingFile",
   "importFiles",
@@ -1350,7 +1317,6 @@ export interface TelegramControlOperations {
 export type CoachRpcService = CoachEngine &
   CoachOperations &
   PlanningReadOperations &
-  PlanningV2Operations &
   PlanningRequestOperations &
   SpendOperations &
   CoachSelfTestOperations &
@@ -1580,86 +1546,6 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("getPlanningReadModel"),
       params: GetPlanningReadModelRpcParamsSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan.list"),
-      params: PlanListV2RequestSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan.get_context"),
-      params: PlanGetContextV2RequestSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_creation.start"),
-      params: PlanCreationStartV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_creation.answer"),
-      params: PlanCreationAnswerV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_creation.preview"),
-      params: PlanCreationPreviewV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_creation.activate"),
-      params: PlanCreationActivateV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_creation.discard"),
-      params: PlanCreationDiscardV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_change.preview"),
-      params: PlanChangePreviewV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan_change.apply"),
-      params: PlanChangeApplyV2CommandSchema,
-    })
-    .strict(),
-  z
-    .object({
-      jsonrpc: z.literal("2.0"),
-      id: JsonRpcIdSchema,
-      method: z.literal("plan.close"),
-      params: PlanCloseV2CommandSchema,
     })
     .strict(),
   z
@@ -2260,66 +2146,6 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "getPlanningReadModel",
     requestSchema: GetPlanningReadModelRpcParamsSchema,
     responseSchema: GetPlanningReadModelRpcResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan.list": {
-    wireName: "plan.list",
-    requestSchema: PlanListV2RequestSchema,
-    responseSchema: PlanListV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan.get_context": {
-    wireName: "plan.get_context",
-    requestSchema: PlanGetContextV2RequestSchema,
-    responseSchema: PlanGetContextV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_creation.start": {
-    wireName: "plan_creation.start",
-    requestSchema: PlanCreationStartV2CommandSchema,
-    responseSchema: PlanCreationStartV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_creation.answer": {
-    wireName: "plan_creation.answer",
-    requestSchema: PlanCreationAnswerV2CommandSchema,
-    responseSchema: PlanCreationAnswerV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_creation.preview": {
-    wireName: "plan_creation.preview",
-    requestSchema: PlanCreationPreviewV2CommandSchema,
-    responseSchema: PlanCreationPreviewV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_creation.activate": {
-    wireName: "plan_creation.activate",
-    requestSchema: PlanCreationActivateV2CommandSchema,
-    responseSchema: PlanCreationActivateV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_creation.discard": {
-    wireName: "plan_creation.discard",
-    requestSchema: PlanCreationDiscardV2CommandSchema,
-    responseSchema: PlanCreationDiscardV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_change.preview": {
-    wireName: "plan_change.preview",
-    requestSchema: PlanChangePreviewV2CommandSchema,
-    responseSchema: PlanChangePreviewV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan_change.apply": {
-    wireName: "plan_change.apply",
-    requestSchema: PlanChangeApplyV2CommandSchema,
-    responseSchema: PlanChangeApplyV2ResultSchema,
-    eventSchema: NoRpcEventSchema,
-  },
-  "plan.close": {
-    wireName: "plan.close",
-    requestSchema: PlanCloseV2CommandSchema,
-    responseSchema: PlanCloseV2ResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getActivityAnalysis: {

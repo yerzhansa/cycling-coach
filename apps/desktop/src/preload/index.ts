@@ -11,14 +11,8 @@ import {
   ExecutePlanTransitionRpcParamsSchema,
   ExecutePlanTransitionRpcResultSchema,
   GetPlanStateRpcResultSchema,
-  PlanGetContextV2RequestSchema,
-  PlanGetContextV2ResultSchema,
-  PlanListV2RequestSchema,
-  PlanListV2ResultSchema,
   PlanProgressEventSchema,
   PlanRaceCourseFileSelectionSchema,
-  PlanningV2CommandResultSchema,
-  PlanningV2CommandSchema,
   type PlanProgressEvent,
 } from "@enduragent/coach-contract";
 import { parseDesktopAppearance } from "../main/appearance.js";
@@ -40,9 +34,6 @@ import {
   DESKTOP_PLAN_COURSE_FILE_CHANNEL,
   DESKTOP_PLAN_STATE_CHANNEL,
   DESKTOP_PLAN_TRANSITION_CHANNEL,
-  DESKTOP_PLAN_V2_COMMAND_CHANNEL,
-  DESKTOP_PLAN_V2_CONTEXT_CHANNEL,
-  DESKTOP_PLAN_V2_LIST_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_DELETE_ARCHIVED_CONVERSATION_CHANNEL,
@@ -1506,36 +1497,6 @@ contextBridge.exposeInMainWorld(
       );
       if (!parsed.success) throw new TypeError();
       return parsed.data;
-    },
-    listPlans: async (input: unknown, ...args: unknown[]) => {
-      requireZeroArguments(args);
-      const request = PlanListV2RequestSchema.safeParse(input);
-      if (!request.success) throw new TypeError();
-      const result = PlanListV2ResultSchema.safeParse(
-        await ipcRenderer.invoke(DESKTOP_PLAN_V2_LIST_CHANNEL, request.data),
-      );
-      if (!result.success) throw new TypeError();
-      return result.data;
-    },
-    getPlanContext: async (input: unknown, ...args: unknown[]) => {
-      requireZeroArguments(args);
-      const request = PlanGetContextV2RequestSchema.safeParse(input);
-      if (!request.success) throw new TypeError();
-      const result = PlanGetContextV2ResultSchema.safeParse(
-        await ipcRenderer.invoke(DESKTOP_PLAN_V2_CONTEXT_CHANNEL, request.data),
-      );
-      if (!result.success) throw new TypeError();
-      return result.data;
-    },
-    executePlanningCommand: async (input: unknown, ...args: unknown[]) => {
-      requireZeroArguments(args);
-      const request = PlanningV2CommandSchema.safeParse(input);
-      if (!request.success) throw new TypeError();
-      const result = PlanningV2CommandResultSchema.safeParse(
-        await ipcRenderer.invoke(DESKTOP_PLAN_V2_COMMAND_CHANNEL, request.data),
-      );
-      if (!result.success) throw new TypeError();
-      return result.data;
     },
     choosePlanRaceCourseFile: async (...args: unknown[]) => {
       requireZeroArguments(args);

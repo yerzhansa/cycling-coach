@@ -20,9 +20,6 @@ interface EnduragentAuth {
   getPlanningReadModel(): Promise<DesktopPlanningReadModel>;
   getPlanState(): Promise<DesktopPlanStateResult>;
   executePlanTransition(input: DesktopPlanTransitionCommand): Promise<DesktopPlanTransitionResult>;
-  listPlans(input: DesktopPlanListV2Request): Promise<DesktopPlanListV2Result>;
-  getPlanContext(input: DesktopPlanContextV2Request): Promise<DesktopPlanContextV2Result>;
-  executePlanningCommand(input: DesktopPlanningV2Command): Promise<DesktopPlanningV2CommandResult>;
   onPlanProgress(listener: (progress: DesktopPlanProgressEvent) => void): () => void;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
@@ -96,12 +93,6 @@ type DesktopPlanTransitionCommand =
 type DesktopPlanTransitionResult =
   import("@enduragent/coach-contract").ExecutePlanTransitionRpcResult;
 type DesktopPlanProgressEvent = import("@enduragent/coach-contract").PlanProgressEvent;
-type DesktopPlanListV2Request = import("@enduragent/coach-contract").PlanListV2Request;
-type DesktopPlanListV2Result = import("@enduragent/coach-contract").PlanListV2Result;
-type DesktopPlanContextV2Request = import("@enduragent/coach-contract").PlanGetContextV2Request;
-type DesktopPlanContextV2Result = import("@enduragent/coach-contract").PlanGetContextV2Result;
-type DesktopPlanningV2Command = import("@enduragent/coach-contract").PlanningV2Command;
-type DesktopPlanningV2CommandResult = import("@enduragent/coach-contract").PlanningV2CommandResult;
 type CredentialRecoveryStatus = import("./onboarding/bridge").CredentialRecoveryStatus;
 type CredentialResetResult = import("./onboarding/bridge").CredentialResetResult;
 

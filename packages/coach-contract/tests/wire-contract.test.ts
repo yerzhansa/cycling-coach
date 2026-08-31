@@ -1325,36 +1325,6 @@ describe("coach request and event projection", () => {
         asOfDateKey: 20260826,
         plan: null,
       }),
-      "plan.list": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan.get_context": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_creation.start": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_creation.answer": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_creation.preview": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_creation.activate": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_creation.discard": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_change.preview": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan_change.apply": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
-      "plan.close": async () => {
-        throw new Error("not exercised by registry exhaustiveness");
-      },
       getActivityAnalysis: async () => {
         throw new Error("not exercised by registry exhaustiveness");
       },
@@ -1712,16 +1682,6 @@ describe("coach request and event projection", () => {
       "deleteArchivedConversation",
       "getArchivedTranscriptPage",
       "getAthleteState",
-      "plan.list",
-      "plan.get_context",
-      "plan_creation.start",
-      "plan_creation.answer",
-      "plan_creation.preview",
-      "plan_creation.activate",
-      "plan_creation.discard",
-      "plan_change.preview",
-      "plan_change.apply",
-      "plan.close",
       "saveIntake",
       "configureRuntime",
       "verify_intervals_credential",
