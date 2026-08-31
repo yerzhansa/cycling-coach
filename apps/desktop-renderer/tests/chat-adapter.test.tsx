@@ -283,6 +283,114 @@ describe("chat view adapter", () => {
     ]);
   });
 
+  it("preserves an attachment-only athlete row once across retry attempts", () => {
+    const attachments = [
+      {
+        attachmentId: "attachment-retry",
+        displayName: "recovery-ride.fit",
+        kind: "activity" as const,
+        extension: "fit" as const,
+      },
+    ];
+    const entries = [
+      {
+        kind: "turn" as const,
+        turnId: "turn-retry",
+        completedAt: "1998-08-24T08:05:00.000Z",
+        athleteText: "",
+        coachText: "Interrupted response.",
+        delivery: "interrupted" as const,
+        attachments,
+      },
+      {
+        kind: "turn" as const,
+        turnId: "turn-retry",
+        completedAt: "1998-08-24T08:06:00.000Z",
+        athleteText: "",
+        coachText: "Recovered response.",
+      },
+    ];
+    expect(mergeHydratedMessages([], [], entries)).toEqual([
+      {
+        id: "history:athlete:turn-retry",
+        turnId: "turn-retry",
+        role: "athlete",
+        text: "",
+        delivery: "complete",
+        historical: true,
+        attachments,
+      },
+      {
+        id: "history:coach:turn-retry",
+        turnId: "turn-retry",
+        role: "coach",
+        text: "Interrupted response.",
+        delivery: "interrupted",
+        historical: true,
+      },
+      {
+        id: "history:coach:turn-retry:attempt:2",
+        turnId: "turn-retry",
+        role: "coach",
+        text: "Recovered response.",
+        delivery: "complete",
+        historical: true,
+      },
+    ]);
+
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        hydration: {
+          status: "ready",
+          hasEarlier: false,
+          revision: 1,
+          change: "initial",
+          entries,
+        },
+      }),
+    );
+
+    expect(published.at(-1)?.timeline).toEqual([
+      {
+        kind: "message",
+        message: {
+          id: "history:athlete:turn-retry",
+          turnId: "turn-retry",
+          role: "athlete",
+          text: "",
+          delivery: "complete",
+          historical: true,
+          attachments,
+        },
+      },
+      {
+        kind: "message",
+        message: {
+          id: "history:coach:turn-retry",
+          turnId: "turn-retry",
+          role: "coach",
+          text: "Interrupted response.",
+          delivery: "interrupted",
+          historical: true,
+        },
+      },
+      {
+        kind: "message",
+        message: {
+          id: "history:coach:turn-retry:attempt:2",
+          turnId: "turn-retry",
+          role: "coach",
+          text: "Recovered response.",
+          delivery: "complete",
+          historical: true,
+        },
+      },
+    ]);
+  });
+
   it("deduplicates a live decision when its persisted entries hydrate later", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
