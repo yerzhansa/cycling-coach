@@ -26,6 +26,7 @@ import chatAttachments025 from "./025_chat_attachments.sql";
 import planningRequests026 from "./026_planning_requests.sql";
 import chatPlanOutbox027 from "./027_chat_plan_outbox.sql";
 import planWorkoutAdditions028 from "./028_plan_workout_additions.sql";
+import planningDomain029 from "./029_planning_domain.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -69,4 +70,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 26, name: "026_planning_requests", sql: planningRequests026 },
   { version: 27, name: "027_chat_plan_outbox", sql: chatPlanOutbox027 },
   { version: 28, name: "028_plan_workout_additions", sql: planWorkoutAdditions028 },
+  { version: 29, name: "029_planning_domain", sql: planningDomain029 },
 ];

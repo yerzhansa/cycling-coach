@@ -26,7 +26,7 @@ export function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value !== null && typeof value === "object") {
     const rec = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(rec).sort()) sorted[k] = sortKeys(rec[k]);
     return sorted;
   }

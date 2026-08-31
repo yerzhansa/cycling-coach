@@ -16,7 +16,6 @@ export const DERIVED_TABLES = [
   "workout",
 ] as const;
 
-/** Every current store table, alphabetical, with its content-derived order key. */
 export const DUMP_TABLES = [
   {
     table: "activity_analysis_projection",
@@ -42,6 +41,18 @@ export const DUMP_TABLES = [
   { table: "mean_max_cache", orderBy: "mmax_key" },
   { table: "metric_snapshot", orderBy: "snapshot_key" },
   { table: "plan", orderBy: "id" },
+  { table: "planning_plan", orderBy: "plan_id" },
+  { table: "plan_revision", orderBy: "plan_id, revision_number, id" },
+  { table: "plan_creation", orderBy: "created_at_ms, id" },
+  { table: "plan_creation_answer", orderBy: "creation_id, sequence, id" },
+  {
+    table: "plan_creation_draft_revision",
+    orderBy: "creation_id, revision_number, id",
+  },
+  { table: "athlete_preference", orderBy: "created_at_ms, id" },
+  { table: "training_restriction", orderBy: "start_date_key, id" },
+  { table: "plan_change", orderBy: "plan_id, created_at_ms, id" },
+  { table: "planning_command", orderBy: "command_name, command_id" },
   { table: "plan_adaptation_ledger", orderBy: "plan_id, occurred_at_ms, id" },
   { table: "plan_conversation", orderBy: "id" },
   { table: "plan_conversation_turn", orderBy: "conversation_id, sequence, id" },

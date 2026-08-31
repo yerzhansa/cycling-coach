@@ -70,20 +70,49 @@ describe("INV-2 canonical dump (armed with real ingest at W2)", () => {
 
   it("includes every incremental cache while excluding checkpoint operations", () => {
     const dumped = DUMP_TABLES.map(({ table }) => table);
-    expect(dumped).toEqual(expect.arrayContaining([
-      "activity_analysis_projection",
-      "analytics_curve_current", "analytics_curve_evidence", "analytics_curve_generation",
-      "analytics_curve_generation_promotion",
-      "ingest_candidate_index", "ingest_cluster_state", "ingest_dedup_pair_state",
-      "ingest_dedup_session_state", "ingest_incremental_state",
-    ]));
+    expect(dumped).toEqual(
+      expect.arrayContaining([
+        "activity_analysis_projection",
+        "analytics_curve_current",
+        "analytics_curve_evidence",
+        "analytics_curve_generation",
+        "analytics_curve_generation_promotion",
+        "ingest_candidate_index",
+        "ingest_cluster_state",
+        "ingest_dedup_pair_state",
+        "ingest_dedup_session_state",
+        "ingest_incremental_state",
+      ]),
+    );
     expect(dumped).not.toContain("source_watermark");
     expect(dumped).not.toContain("sync_operation");
     expect(dumped).not.toContain("analytics_curve_refresh_failure");
-    expect(DERIVED_TABLES).toEqual(expect.arrayContaining([
-      "ingest_candidate_index", "ingest_cluster_state", "ingest_dedup_pair_state", "ingest_dedup_session_state",
-    ]));
+    expect(DERIVED_TABLES).toEqual(
+      expect.arrayContaining([
+        "ingest_candidate_index",
+        "ingest_cluster_state",
+        "ingest_dedup_pair_state",
+        "ingest_dedup_session_state",
+      ]),
+    );
     expect(DERIVED_TABLES).not.toContain("ingest_incremental_state");
     expect(DERIVED_TABLES).not.toContain("activity_analysis_projection");
+  });
+
+  it("includes planning domain tables in dependency-safe order", () => {
+    const dumped = DUMP_TABLES.map(({ table }) => table);
+    const planning = [
+      "plan",
+      "planning_plan",
+      "plan_revision",
+      "plan_creation",
+      "plan_creation_answer",
+      "plan_creation_draft_revision",
+      "athlete_preference",
+      "training_restriction",
+      "plan_change",
+      "planning_command",
+    ];
+    expect(dumped.filter((table) => planning.includes(table))).toEqual(planning);
   });
 });

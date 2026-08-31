@@ -241,11 +241,19 @@ describe("store export op", () => {
     expect(imported.manifest.total).toBe(data.artifacts.length);
   });
 
-  it("orders Draft revisions parent-first before restore", async () => {
+  it("orders every revision history parent-first before restore", async () => {
     const data = populated();
     data.rows.plan_draft_revision = [
       { id: "child", revision: 2, parent_revision_id: "parent" },
       { id: "parent", revision: 1, parent_revision_id: null },
+    ];
+    data.rows.plan_revision = [
+      { id: "child", revision_number: 2, parent_revision_number: 1 },
+      { id: "parent", revision_number: 1, parent_revision_number: null },
+    ];
+    data.rows.plan_creation_draft_revision = [
+      { id: "child", revision_number: 2, parent_revision_number: 1 },
+      { id: "parent", revision_number: 1, parent_revision_number: null },
     ];
     const { source } = makeSource(data);
     const crypto = new FakeCrypto();
@@ -255,9 +263,32 @@ describe("store export op", () => {
       { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
       { container: built.container },
     );
-    const restored = [...(sink.stored.get("plan_draft_revision") ?? [])]
-      .map((row) => JSON.parse(row) as { readonly revision: number });
-    expect(restored.map(({ revision }) => revision)).toEqual([1, 2]);
+    for (const [table, revisionColumn] of [
+      ["plan_draft_revision", "revision"],
+      ["plan_revision", "revision_number"],
+      ["plan_creation_draft_revision", "revision_number"],
+    ] as const) {
+      const restored = [...(sink.stored.get(table) ?? [])].map(
+        (row) => JSON.parse(row) as Record<string, number>,
+      );
+      expect(restored.map((row) => row[revisionColumn])).toEqual([1, 2]);
+    }
+  });
+
+  it("restores planning domain tables in dependency-safe order", () => {
+    const planning = [
+      "plan",
+      "planning_plan",
+      "plan_revision",
+      "plan_creation",
+      "plan_creation_answer",
+      "plan_creation_draft_revision",
+      "athlete_preference",
+      "training_restriction",
+      "plan_change",
+      "planning_command",
+    ];
+    expect(PURE_AUTHORED_TABLES.filter((table) => planning.includes(table))).toEqual(planning);
   });
 
   it("(roundtrip-pass) passphrase container header + round-trip", async () => {
