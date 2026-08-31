@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createInteractiveDevelopmentPlan,
+  DESKTOP_INSPECTION_FIXTURE_ENV,
+  PLAN_CURRENT_INSPECTION_FIXTURE,
   selectInteractiveDevelopmentTemporaryRoot,
 } from "../scripts/interactive-development.mjs";
 
@@ -53,6 +55,34 @@ describe("interactive desktop development plan", () => {
       userData: join(scratchRoot, "electron-user-data"),
     });
     expect(value.athleteHome).not.toBe(value.userData);
+  });
+
+  it("launches the bounded Plan inspection fixture through the isolated command", () => {
+    const value = plan({
+      environment: {
+        [DESKTOP_INSPECTION_FIXTURE_ENV]: PLAN_CURRENT_INSPECTION_FIXTURE,
+        PLAN_QA_SCENARIO: "PL-S089",
+        PLAN_QA_OUTCOME: "failure",
+      },
+    });
+
+    expect(value.args).toEqual([
+      "-dimsu",
+      nodeExecutable,
+      packageManagerScript,
+      "exec",
+      "tsx",
+      "tests/helpers/plan-inspection-live.ts",
+    ]);
+    expect(value.environment[DESKTOP_INSPECTION_FIXTURE_ENV]).toBe(PLAN_CURRENT_INSPECTION_FIXTURE);
+    expect(value.environment.PLAN_QA_SCENARIO).toBeUndefined();
+    expect(value.environment.PLAN_QA_OUTCOME).toBeUndefined();
+  });
+
+  it("refuses an unknown inspection fixture", () => {
+    expect(() =>
+      plan({ environment: { [DESKTOP_INSPECTION_FIXTURE_ENV]: "arbitrary-script" } }),
+    ).toThrow("unknown desktop inspection fixture");
   });
 
   it.each([
