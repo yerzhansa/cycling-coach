@@ -65,6 +65,91 @@ function errorEvent(message = "Safe athlete message"): Extract<TurnEvent, { type
   };
 }
 
+function imageComposer(imagesEnabled: boolean): ChatAttachmentComposerReadModel {
+  const common = {
+    schemaVersion: 1 as const,
+    attachmentId: "attachment-image",
+    displayName: "recovery-note.jpg",
+    kind: "image" as const,
+    extension: "jpg" as const,
+    byteSize: 128,
+  };
+  const sharedCapabilities: Pick<
+    ChatAttachmentComposerReadModel["capabilities"],
+    "schemaVersion" | "documents" | "completedActivities" | "plannedWorkouts"
+  > = {
+    schemaVersion: 1,
+    documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+    completedActivities: {
+      enabled: true,
+      extensions: ["fit", "tcx", "gpx"],
+    },
+    plannedWorkouts: {
+      enabled: true,
+      extensions: ["zwo", "erg", "mrc"],
+    },
+  };
+  const sharedDraft = {
+    schemaVersion: 1 as const,
+    chatId: "desktop",
+    text: "Keep this draft.",
+    state: "restored" as const,
+    updatedAt: "1998-08-24T08:00:00.000Z",
+  };
+  if (imagesEnabled) {
+    return {
+      schemaVersion: 1,
+      capabilities: {
+        ...sharedCapabilities,
+        active: {
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          transport: "ai-sdk",
+        },
+        images: {
+          enabled: true,
+          mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+          reason: "supported",
+          source: "maintained_catalogue",
+          checkedAt: "1998-08-24T08:00:00.000Z",
+        },
+      },
+      draft: {
+        ...sharedDraft,
+        attachments: [
+          {
+            ...common,
+            status: "ready",
+            preview: { kind: "image", mediaType: "image/jpeg", width: 1, height: 1 },
+          },
+        ],
+      },
+    };
+  }
+  return {
+    schemaVersion: 1,
+    capabilities: {
+      ...sharedCapabilities,
+      active: {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        transport: "ai-sdk",
+      },
+      images: {
+        enabled: false,
+        mediaTypes: [],
+        reason: "model_incompatible",
+        source: "maintained_catalogue",
+        checkedAt: "1998-08-24T08:05:00.000Z",
+      },
+    },
+    draft: {
+      ...sharedDraft,
+      attachments: [{ ...common, status: "blocked", reason: "model_incompatible" }],
+    },
+  };
+}
+
 function planningDelivery(
   state: PlanningRequestDelivery["state"] = "delivered",
 ): PlanningRequestDelivery {
@@ -146,6 +231,9 @@ function client(
     }) => Promise<{ stopped: boolean }>;
     readonly composer?: () => Promise<ChatAttachmentComposerReadModel>;
     readonly saveAttachmentDraftText?: (text: string) => Promise<ChatAttachmentComposerReadModel>;
+    readonly mutateAttachment?: (
+      method: "removeChatAttachment" | "retryChatAttachment" | "selectChatAttachmentWorkout",
+    ) => Promise<ChatAttachmentComposerReadModel>;
     readonly clearAttachmentDraft?: () => Promise<ChatAttachmentComposerReadModel>;
     readonly listPlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
@@ -260,7 +348,9 @@ function client(
       return (
         method === "clearChatAttachmentDraft" && sessions.clearAttachmentDraft !== undefined
           ? sessions.clearAttachmentDraft()
-          : Promise.resolve(emptyComposer())
+          : method !== "clearChatAttachmentDraft" && sessions.mutateAttachment !== undefined
+            ? sessions.mutateAttachment(method)
+            : Promise.resolve(emptyComposer())
       ) as never;
     }
     if (method === "getChatQueue") {
@@ -1239,6 +1329,178 @@ describe("chat controller", () => {
     await expect(controller.submit("/status", ["attachment-1"])).resolves.toBe(false);
   });
 
+  it("refreshes the durable Composer after attachment capabilities change", async () => {
+    let imagesEnabled = true;
+    const fake = client(replies(), { composer: async () => imageComposer(imagesEnabled) });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    expect(controls.at(-1)?.attachments?.value).toEqual(imageComposer(true));
+
+    imagesEnabled = false;
+    await controller.refreshAttachments();
+
+    expect(controls.at(-1)?.attachments).toMatchObject({
+      error: null,
+      value: {
+        capabilities: {
+          active: { provider: "deepseek", model: "deepseek-chat" },
+          images: { enabled: false, reason: "model_incompatible" },
+        },
+        draft: {
+          text: "Keep this draft.",
+          attachments: [
+            {
+              attachmentId: "attachment-image",
+              status: "blocked",
+              reason: "model_incompatible",
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("opens reset confirmation for an attachment-only draft", async () => {
+    const fake = client(replies(), { composer: async () => imageComposer(true) });
+    const { controller, states } = subject(fake);
+    await controller.start();
+
+    expect(states.at(-1)?.messages).toEqual([]);
+    expect(controller.openNewConversation()).toBe(true);
+    expect(states.at(-1)?.session.resetPhase).toBe("confirming");
+  });
+
+  it("keeps reset behind an in-flight attachment mutation", async () => {
+    const surface = imageComposer(true);
+    const cleared = { ...surface, draft: null };
+    let resolveMutation!: (value: ChatAttachmentComposerReadModel) => void;
+    const mutation = new Promise<ChatAttachmentComposerReadModel>((resolve) => {
+      resolveMutation = resolve;
+    });
+    const fake = client(replies(), {
+      composer: async () => surface,
+      mutateAttachment: async () => mutation,
+      resetSession: async () => ({ memoryFlushed: true }),
+      clearAttachmentDraft: async () => cleared,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.removeAttachment("attachment-image");
+    await vi.waitFor(() => expect(controls.at(-1)?.attachments?.busy).toBe(true));
+    expect(controller.openNewConversation()).toBe(false);
+
+    resolveMutation(surface);
+    await vi.waitFor(() => expect(controls.at(-1)?.attachments?.busy).toBe(false));
+    expect(controller.openNewConversation()).toBe(true);
+    await controller.confirmNewConversation();
+
+    expect(controls.at(-1)?.attachments?.value).toEqual(cleared);
+  });
+
+  it("keeps a settled drop refresh from restoring the draft after reset", async () => {
+    const surface = imageComposer(true);
+    const cleared = { ...surface, draft: null };
+    let composerReads = 0;
+    let resolveStaleRefresh!: (value: ChatAttachmentComposerReadModel) => void;
+    const staleRefresh = new Promise<ChatAttachmentComposerReadModel>((resolve) => {
+      resolveStaleRefresh = resolve;
+    });
+    const fake = client(replies(), {
+      composer: () => {
+        composerReads += 1;
+        return composerReads === 1 ? Promise.resolve(surface) : staleRefresh;
+      },
+      resetSession: async () => ({ memoryFlushed: true }),
+      clearAttachmentDraft: async () => cleared,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    expect(controller.beginDroppedAttachmentAdmission("drop-1")).toBe(true);
+    expect(controller.openNewConversation()).toBe(false);
+    controller.settleDroppedAttachmentAdmission("drop-1", [
+      {
+        selectionId: "selection-drop-1",
+        displayName: "recovery-note.jpg",
+        status: "accepted",
+        attachmentId: "attachment-image",
+      },
+    ]);
+    await vi.waitFor(() => expect(composerReads).toBe(2));
+    expect(controller.openNewConversation()).toBe(true);
+    expect(controller.beginDroppedAttachmentAdmission("drop-2")).toBe(false);
+
+    await controller.confirmNewConversation();
+    resolveStaleRefresh(surface);
+    await staleRefresh;
+    await Promise.resolve();
+
+    expect(controls.at(-1)?.attachments?.value).toEqual(cleared);
+  });
+
+  it("keeps an older composer read from replacing a newer one", async () => {
+    const initial = imageComposer(true);
+    const oldSurface = imageComposer(true);
+    const newSurface = imageComposer(false);
+    let composerReads = 0;
+    let resolveOldRead!: (value: ChatAttachmentComposerReadModel) => void;
+    let resolveNewRead!: (value: ChatAttachmentComposerReadModel) => void;
+    const oldRead = new Promise<ChatAttachmentComposerReadModel>((resolve) => {
+      resolveOldRead = resolve;
+    });
+    const newRead = new Promise<ChatAttachmentComposerReadModel>((resolve) => {
+      resolveNewRead = resolve;
+    });
+    const fake = client(replies(), {
+      composer: () => {
+        composerReads += 1;
+        if (composerReads === 1) return Promise.resolve(initial);
+        return composerReads === 2 ? oldRead : newRead;
+      },
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    const firstRefresh = controller.refreshAttachments();
+    const secondRefresh = controller.refreshAttachments();
+    await vi.waitFor(() => expect(composerReads).toBe(3));
+    resolveNewRead(newSurface);
+    await secondRefresh;
+    resolveOldRead(oldSurface);
+    await firstRefresh;
+
+    expect(controls.at(-1)?.attachments?.value).toEqual(newSurface);
+  });
+
+  it("keeps an older composer read from replacing a later attachment mutation", async () => {
+    const oldSurface = imageComposer(true);
+    const mutatedSurface = imageComposer(false);
+    let composerReads = 0;
+    let resolveOldRead!: (value: ChatAttachmentComposerReadModel) => void;
+    const oldRead = new Promise<ChatAttachmentComposerReadModel>((resolve) => {
+      resolveOldRead = resolve;
+    });
+    const fake = client(replies(), {
+      composer: () => {
+        composerReads += 1;
+        return composerReads === 1 ? Promise.resolve(oldSurface) : oldRead;
+      },
+      mutateAttachment: async () => mutatedSurface,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    const staleRefresh = controller.refreshAttachments();
+    await vi.waitFor(() => expect(composerReads).toBe(2));
+    controller.removeAttachment("attachment-image");
+    await vi.waitFor(() => expect(controls.at(-1)?.attachments?.value).toEqual(mutatedSurface));
+    resolveOldRead(oldSurface);
+    await staleRefresh;
+
+    expect(controls.at(-1)?.attachments?.value).toEqual(mutatedSurface);
+  });
+
   it("creates one trusted Workout handoff and opens the delivered request in Plan", async () => {
     const surface: ChatAttachmentComposerReadModel = {
       schemaVersion: 1,
@@ -1823,7 +2085,7 @@ describe("chat controller", () => {
     releaseRefresh();
     await chatA;
 
-    expect(controls.at(-1)?.newConversationDisabled).toBe(false);
+    await vi.waitFor(() => expect(controls.at(-1)?.newConversationDisabled).toBe(false));
     expect(controller.openNewConversation()).toBe(true);
     expect(vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession")).toEqual(
       [],
@@ -1951,6 +2213,39 @@ describe("chat controller", () => {
     expect(
       vi.mocked(fake.call).mock.calls.filter(([method]) => method === "hasSession"),
     ).toHaveLength(0);
+  });
+
+  it("keeps the visible conversation and attachment draft when durable draft clearing fails", async () => {
+    const surface = imageComposer(true);
+    const clearAttachmentDraft = vi.fn(async () => {
+      throw new Error("private attachment clear failure");
+    });
+    const fake = client(replies(), {
+      composer: async () => surface,
+      resetSession: async () => ({ memoryFlushed: true }),
+      clearAttachmentDraft,
+    });
+    const { controller, states, controls } = subject(fake);
+    await controller.start();
+    await controller.submit("Original");
+    const beforeMessages = structuredClone(states.at(-1)?.messages);
+    expect(controller.openNewConversation()).toBe(true);
+
+    await controller.confirmNewConversation();
+
+    expect(states.at(-1)).toMatchObject({
+      messages: beforeMessages,
+      session: {
+        presence: "present",
+        resetPhase: "uncertain",
+        announcement: NEW_CONVERSATION_UNCERTAIN_COPY,
+      },
+    });
+    expect(controls.at(-1)?.attachments?.value).toEqual(surface);
+    expect(clearAttachmentDraft).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession"),
+    ).toHaveLength(1);
   });
 
   it("blocks reset while a durable retry is unresolved and preserves retry ownership", async () => {

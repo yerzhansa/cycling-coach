@@ -65,7 +65,7 @@ interface EnduragentAuth {
   chooseChatAttachments(): Promise<readonly DesktopAttachmentAdmission[]>;
   pasteChatAttachment(): Promise<readonly DesktopAttachmentAdmission[]>;
   onDroppedChatAttachments(
-    listener: (results: readonly DesktopAttachmentAdmission[]) => void,
+    listener: (event: DesktopDroppedChatAttachmentEvent) => boolean | void,
   ): () => void;
   choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
@@ -78,6 +78,13 @@ interface EnduragentAuth {
 
 type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
 type DesktopAttachmentAdmission = import("@enduragent/coach-contract").AttachmentAdmissionReadModel;
+type DesktopDroppedChatAttachmentEvent =
+  | { readonly phase: "started"; readonly operationId: string }
+  | {
+      readonly phase: "settled";
+      readonly operationId: string;
+      readonly results: readonly DesktopAttachmentAdmission[] | null;
+    };
 type DesktopAttachmentReference = import("@enduragent/coach-contract").ChatAttachmentReference;
 type DesktopPlanningReadModel = import("@enduragent/coach-contract").PlanningReadModel;
 type DesktopPlanStateResult = import("@enduragent/coach-contract").GetPlanStateRpcResult;

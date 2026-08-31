@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   AttachmentCapabilitiesReadModel,
@@ -791,6 +791,15 @@ describe("chat surface", () => {
 
       expect(composer()).toBeEnabled();
       expect(composer()).toHaveFocus();
+    });
+
+    it("removes the file drop target while chat work is blocked", () => {
+      render(<Harness />);
+      const form = composer().closest("form");
+
+      expect(form).toHaveAttribute("data-chat-attachment-dropzone", "true");
+      setChat({ inputDisabled: true });
+      expect(form).not.toHaveAttribute("data-chat-attachment-dropzone");
     });
 
     it("leaves the composer unfocused when the app mounts on another destination", () => {
@@ -1623,6 +1632,25 @@ describe("chat surface", () => {
       await waitFor(() => {
         expect(dialog).not.toBeInTheDocument();
       });
+    });
+
+    it("cancels a pending draft save when reset succeeds", () => {
+      vi.useFakeTimers();
+      try {
+        render(<Harness />);
+        fireEvent.change(composer(), { target: { value: "pending reset draft" } });
+
+        setChat({ resetPhase: "confirming" });
+        setChat({ resetPhase: "resetting" });
+        setChat({ resetPhase: "idle", resetCount: 1 });
+        act(() => vi.advanceTimersByTime(300));
+
+        expect(composer()).toHaveValue("");
+        expect(actions.saveAttachmentDraftText).not.toHaveBeenCalled();
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
     });
 
     it("returns focus to the opener when the athlete cancels", async () => {

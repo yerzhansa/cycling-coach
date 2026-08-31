@@ -93,6 +93,7 @@ function fakeView() {
 function createSubject(input: {
   readonly load?: () => Promise<OnboardingLlmConfiguration>;
   readonly apply?: () => Promise<OnboardingLlmSelectionResult>;
+  readonly onSaved?: () => Promise<void> | void;
   readonly openSetup?: () => void;
   readonly codexAgentSupported?: boolean;
 }) {
@@ -104,6 +105,7 @@ function createSubject(input: {
   const controller = createProviderModelSettingsController({
     load,
     apply,
+    ...(input.onSaved === undefined ? {} : { onSaved: input.onSaved }),
     openSetup: input.openSetup ?? vi.fn(),
     ...(input.codexAgentSupported === undefined
       ? {}
@@ -355,6 +357,33 @@ describe("provider and model settings controller", () => {
       active: { provider: "anthropic", model: "claude-private" },
       dirty: false,
     });
+  });
+
+  it("refreshes dependent surfaces after the new route is active", async () => {
+    const order: string[] = [];
+    const onSaved = vi.fn(async () => {
+      order.push("refresh");
+    });
+    const { controller, subject, apply } = createSubject({
+      apply: vi.fn(async () => {
+        order.push("apply");
+        return { status: "configured" as const, runtimeReady: true as const };
+      }),
+      onSaved,
+    });
+    await controller.activate();
+    subject.model("claude-opus");
+
+    subject.save();
+    await vi.waitFor(() => expect(controller.state().status).toBe("saved"));
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(onSaved).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-opus",
+      endpoint: { mode: "automatic" },
+    });
+    expect(order).toEqual(["apply", "refresh"]);
   });
 
   it.each(["invalid-input", "credential-required", "runtime-unavailable"] as const)(

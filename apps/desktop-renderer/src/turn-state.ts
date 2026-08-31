@@ -123,7 +123,11 @@ export type ChatAction =
   | { readonly type: "remove-queued"; readonly id: string }
   | { readonly type: "dequeue-group" }
   | { readonly type: "session-probe"; readonly hasSession: boolean }
-  | { readonly type: "open-new-conversation"; readonly hasHydratedHistory?: boolean }
+  | {
+      readonly type: "open-new-conversation";
+      readonly hasHydratedHistory?: boolean;
+      readonly hasAttachmentDraft?: boolean;
+    }
   | { readonly type: "cancel-new-conversation" }
   | { readonly type: "begin-reset" }
   | { readonly type: "reset-succeeded"; readonly announcement: string }
@@ -475,7 +479,9 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
       };
     }
     case "open-new-conversation":
-      return (!action.hasHydratedHistory && !hasClearableConversation(state)) ||
+      return (!action.hasHydratedHistory &&
+        !action.hasAttachmentDraft &&
+        !hasClearableConversation(state)) ||
         state.session.resetPhase !== "idle" ||
         state.status === "streaming" ||
         state.queued.length > 0
