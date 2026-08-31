@@ -200,13 +200,26 @@ describe("engine durable chat queue", () => {
   });
 
   it("leaves the stable queue claim retryable when attachment preparation fails before Coach", async () => {
-    const generate = vi.fn(async () => generated("Unexpected"));
-    const { engine } = setup(undefined, generate, {
-      prepareQueuedTurn: async () => {
-        throw new Error("import interrupted");
-      },
+    const generate = vi.fn(async () => generated("Reviewed after recovery"));
+    const prepareQueuedTurn = vi
+      .fn<ChatAttachmentTurnPort["prepareQueuedTurn"]>()
+      .mockRejectedValueOnce(new Error("import interrupted"))
+      .mockResolvedValue({
+        activities: [],
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "recovery-ride.fit",
+            kind: "activity",
+            extension: "fit",
+          },
+        ],
+      });
+    const { engine, ports } = setup(undefined, generate, {
+      prepareQueuedTurn,
       completeQueuedTurn: async () => {},
     });
+    const transcriptAppend = vi.spyOn(ports.transcriptWriter, "appendCompletedTurn");
     await engine.enqueueChatMessage!({
       chatId: "desktop",
       submissionId: "submission-1",
@@ -217,10 +230,31 @@ describe("engine durable chat queue", () => {
       "import interrupted",
     );
     expect(generate).not.toHaveBeenCalled();
-    expect(await engine.getChatQueue!({ chatId: "desktop" })).toMatchObject({
+    const interrupted = await engine.getChatQueue!({ chatId: "desktop" });
+    expect(interrupted).toMatchObject({
       items: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }],
       retryRequired: { queuedMessageIds: ["id-1"] },
     });
+    await expect(
+      engine.retryQueuedTurn!({
+        chatId: "desktop",
+        claimId: interrupted.retryRequired!.claimId,
+      }),
+    ).resolves.toMatchObject({ response: { text: "Reviewed after recovery" } });
+    expect(transcriptAppend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        athleteText: "Review the ride",
+        coachText: "Reviewed after recovery",
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "recovery-ride.fit",
+            kind: "activity",
+            extension: "fit",
+          },
+        ],
+      }),
+    );
   });
 
   it("recovers attachment completion after restart without sending a completed turn twice", async () => {
@@ -662,7 +696,8 @@ describe("engine durable chat queue", () => {
         });
       });
     });
-    const { engine } = setup(undefined, generate);
+    const { engine, ports } = setup(undefined, generate);
+    const transcriptAppend = vi.spyOn(ports.transcriptWriter, "appendCompletedTurn");
     await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s1", text: "First" });
     await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s2", text: "/review" });
     let activeTurnId: string | undefined;
@@ -688,6 +723,9 @@ describe("engine durable chat queue", () => {
     expect(retried.response?.text).toBe("Recovered");
     expect(retried.snapshot.retryRequired).toBeUndefined();
     expect(retried.snapshot.items.map((item) => item.text)).toEqual(["/review"]);
+    expect(transcriptAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ athleteText: "First", coachText: "Recovered" }),
+    );
     expect(generate).toHaveBeenCalledTimes(2);
   });
 });

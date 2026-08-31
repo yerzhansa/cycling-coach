@@ -293,7 +293,8 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
           queueText(selected),
           normalizedAttachmentContext.length === 0 &&
             attachmentPreparation?.untrustedAttachmentText === undefined &&
-            (attachmentPreparation?.nativeMedia?.length ?? 0) === 0
+            (attachmentPreparation?.nativeMedia?.length ?? 0) === 0 &&
+            (attachmentPreparation?.attachments?.length ?? 0) === 0
             ? undefined
             : {
                 ...(normalizedAttachmentContext.length === 0
