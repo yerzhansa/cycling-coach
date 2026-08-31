@@ -43,6 +43,13 @@ describe("sortKeys", () => {
     const sorted = sortKeys(input);
     expect(JSON.stringify(sorted)).toBe(JSON.stringify({ a: 1, b: 2, nested: { y: 25, z: 26 } }));
   });
+
+  it("preserves an own __proto__ property", () => {
+    const input = JSON.parse('{"a":2,"__proto__":{"x":1}}') as Record<string, unknown>;
+    const sorted = sortKeys(input);
+    expect(Object.hasOwn(sorted as object, "__proto__")).toBe(true);
+    expect(JSON.stringify(sorted)).toBe('{"__proto__":{"x":1},"a":2}');
+  });
 });
 
 describe("canonicalRowJson", () => {

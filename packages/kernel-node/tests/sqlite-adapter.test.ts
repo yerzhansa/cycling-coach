@@ -82,4 +82,69 @@ describe("openSqliteStorage adapter", () => {
     expect(result).toBe(42);
     expect(await store.all("SELECT a FROM t")).toEqual([{ a: "ok" }]);
   });
+
+  it("serializes concurrent transactions on one connection", async () => {
+    await store.exec("CREATE TABLE t(a TEXT)");
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const continueFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = store.transaction(async () => {
+      await store.run("INSERT INTO t(a) VALUES (?)", ["first"]);
+      markFirstStarted();
+      await continueFirst;
+    });
+    await firstStarted;
+    const second = store.transaction(async () => {
+      await store.run("INSERT INTO t(a) VALUES (?)", ["second"]);
+    });
+    releaseFirst();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+    await expect(store.all("SELECT a FROM t ORDER BY rowid")).resolves.toEqual([
+      { a: "first" },
+      { a: "second" },
+    ]);
+  });
+
+  it("keeps operations outside an awaited transaction out of its rollback", async () => {
+    await store.exec("CREATE TABLE t(a TEXT)");
+    let releaseTransaction!: () => void;
+    let markTransactionStarted!: () => void;
+    const transactionStarted = new Promise<void>((resolve) => {
+      markTransactionStarted = resolve;
+    });
+    const continueTransaction = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+
+    const transaction = store.transaction(async () => {
+      await store.run("INSERT INTO t(a) VALUES (?)", ["rolled-back"]);
+      markTransactionStarted();
+      await continueTransaction;
+      throw new Error("rollback");
+    });
+    await transactionStarted;
+    const failure = expect(transaction).rejects.toThrow("rollback");
+    const outsideWrite = store.run("INSERT INTO t(a) VALUES (?)", ["outside"]);
+    const outsideRead = store.all("SELECT a FROM t ORDER BY rowid");
+    releaseTransaction();
+
+    await failure;
+    await outsideWrite;
+    await expect(outsideRead).resolves.toEqual([{ a: "outside" }]);
+    await expect(store.all("SELECT a FROM t ORDER BY rowid")).resolves.toEqual([{ a: "outside" }]);
+  });
+
+  it("rejects nested transactions without leaving the connection open", async () => {
+    await expect(store.transaction(() => store.transaction(async () => undefined))).rejects.toThrow(
+      "nested SQLite transactions are not supported",
+    );
+    await expect(store.transaction(async () => 42)).resolves.toBe(42);
+  });
 });

@@ -24,7 +24,10 @@ export const EXPORT_WARNING =
   "Warning: this file contains your full health and chat history. Anyone who can open it — and, if you set one, anyone who has the passphrase — can read everything in it. Store it somewhere private, and only share it over a channel you trust." as const;
 
 export class ExportSchemaMismatchError extends Error {
-  constructor(message: string) { super(message); this.name = "ExportSchemaMismatchError"; }
+  constructor(message: string) {
+    super(message);
+    this.name = "ExportSchemaMismatchError";
+  }
 }
 
 export interface BuildExportDeps {
@@ -60,11 +63,20 @@ export interface ImportResult {
 
 const ALL_AUTHORED_TABLES = [...PURE_AUTHORED_TABLES, ...MIXED_AUTHORED_TABLES] as const;
 
+const PARENT_FIRST_REVISION_COLUMNS: Readonly<Record<string, string>> = Object.freeze({
+  plan_draft_revision: "revision",
+  plan_revision: "revision_number",
+  plan_creation_draft_revision: "revision_number",
+});
+
 function orderAuthoredRows(table: string, rows: readonly AuthoredRow[]): readonly AuthoredRow[] {
-  if (table !== "plan_draft_revision") return rows;
+  const revisionColumn = PARENT_FIRST_REVISION_COLUMNS[table];
+  if (revisionColumn === undefined) return rows;
   return [...rows].sort((left, right) => {
-    const leftRevision = typeof left.revision === "number" ? left.revision : null;
-    const rightRevision = typeof right.revision === "number" ? right.revision : null;
+    const leftValue = left[revisionColumn];
+    const rightValue = right[revisionColumn];
+    const leftRevision = typeof leftValue === "number" ? leftValue : null;
+    const rightRevision = typeof rightValue === "number" ? rightValue : null;
     if (leftRevision === null && rightRevision !== null) return 1;
     if (leftRevision !== null && rightRevision === null) return -1;
     if (leftRevision !== null && rightRevision !== null && leftRevision !== rightRevision) {
