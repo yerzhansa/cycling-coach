@@ -41,6 +41,7 @@ export interface DesktopFixturePaths {
 
 export interface RunningDesktopFixture {
   readonly paths: DesktopFixturePaths;
+  readonly remoteDebuggingUrl: string;
   evaluate<T>(source: string): Promise<T>;
   evaluateMain<T>(source: string): Promise<T>;
   dropFiles(selector: string, paths: readonly string[]): Promise<void>;
@@ -614,6 +615,7 @@ export async function launchDesktopFixture(input: {
   let child: ChildProcess | undefined;
   let cdp: Awaited<ReturnType<typeof connectCdp>> | undefined;
   let mainCdp: Awaited<ReturnType<typeof connectCdp>> | undefined;
+  let remoteDebuggingUrl: string | undefined;
   const processIds = new Set<number>();
   const surfaces: Record<"location" | "console" | "stdout" | "stderr" | "dom", string> = {
     location: "",
@@ -657,6 +659,7 @@ export async function launchDesktopFixture(input: {
   };
   const launchApplication = async (): Promise<void> => {
     const debuggerPort = await reservePort();
+    remoteDebuggingUrl = `http://127.0.0.1:${debuggerPort}`;
     const mainDebuggerPort = input.inspectMain === true ? await reservePort() : undefined;
     const nextChild = spawn(
       executable,
@@ -761,6 +764,12 @@ export async function launchDesktopFixture(input: {
     throw error;
   }
   return {
+    get remoteDebuggingUrl() {
+      if (closed || remoteDebuggingUrl === undefined) {
+        throw new Error("desktop fixture debugger is unavailable");
+      }
+      return remoteDebuggingUrl;
+    },
     paths: {
       athleteHome,
       configPath: join(configDir, "config.yaml"),
