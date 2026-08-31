@@ -2,8 +2,8 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PlanningReadModel } from "@enduragent/coach-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useEnduragentStore } from "../src/state/store.js";
-import { PlanReferenceCard } from "../src/ui/chat/PlanReferenceCard.js";
+import { useEnduragentStore } from "../src/state/store";
+import { PlanReferenceCard } from "../src/ui/chat/PlanReferenceCard";
 
 const model: PlanningReadModel = {
   schemaVersion: 1,

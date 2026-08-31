@@ -1,28 +1,28 @@
 import { act, render, screen, waitFor, within, type RenderResult } from "@testing-library/react";
 import type userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
+import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge";
 import {
   createOnboardingController,
   type OnboardingController,
-} from "../src/onboarding/controller.js";
+} from "../src/onboarding/controller";
 import type {
   ChatGptLoginProgress,
   ChatGptLoginResult,
   OnboardingCompletion,
-} from "../src/onboarding/machine.js";
-import type { RideImportController } from "../src/ride-import.js";
+} from "../src/onboarding/machine";
+import type { RideImportController } from "../src/ride-import";
 import type {
   TelegramControlStatus,
   TelegramSettingsFeedback,
   TelegramSettingsState,
-} from "../src/settings/telegram-controller.js";
-import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js";
-import { credentialDrafts } from "../src/state/credential-drafts.js";
-import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { OnboardingWizard, SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
+} from "../src/settings/telegram-controller";
+import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding";
+import { credentialDrafts } from "../src/state/credential-drafts";
+import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice";
+import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { OnboardingWizard, SetupPanel } from "../src/ui/onboarding/OnboardingWizard";
 
 export type UserEvent = ReturnType<typeof userEvent.setup>;
 

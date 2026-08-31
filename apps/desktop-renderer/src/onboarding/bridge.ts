@@ -10,8 +10,8 @@ import {
   type LlmProvider,
   type SaveIntakeRpcParams,
 } from "@enduragent/coach-contract";
-import { validateRendererDaemonConnection } from "../daemon-connection.js";
-import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
+import { validateRendererDaemonConnection } from "../daemon-connection";
+import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants";
 import type {
   ChatGptCancelLoginResult,
   ChatGptLoginProgress,
@@ -21,7 +21,7 @@ import type {
   CredentialRuntimeState,
   CredentialState,
   CredentialSlotStatus,
-} from "./machine.js";
+} from "./machine";
 
 export type CredentialWriteResult =
   | {

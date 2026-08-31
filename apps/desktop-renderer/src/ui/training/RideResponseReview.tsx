@@ -4,10 +4,10 @@ import type {
   AnalysisSection,
 } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
-import type { RideAnalysisViewState } from "../../activity-analysis/controller.js";
-import { Button } from "../../components/ui/button.js";
-import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy.js";
-import { responseStyles as styles } from "./responseStyles.js";
+import type { RideAnalysisViewState } from "../../activity-analysis/controller";
+import { Button } from "../../components/ui/button";
+import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy";
+import { responseStyles as styles } from "./responseStyles";
 
 const CHART_WIDTH = 640;
 const CHART_HEIGHT = 190;

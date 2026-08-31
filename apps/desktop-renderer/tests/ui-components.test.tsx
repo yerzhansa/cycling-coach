@@ -1,36 +1,36 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Button } from "../src/components/ui/button.js";
+import { Button } from "../src/components/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "../src/components/ui/card.js";
+} from "../src/components/ui/card";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
   DialogTrigger,
-} from "../src/components/ui/dialog.js";
+} from "../src/components/ui/dialog";
 import {
   Popover,
   PopoverContent,
   PopoverDescription,
   PopoverTitle,
   PopoverTrigger,
-} from "../src/components/ui/popover.js";
+} from "../src/components/ui/popover";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../src/components/ui/select.js";
-import { applyPalette, type ResolvedTheme } from "../src/theme/applyPalette.js";
-import { paletteById } from "../src/theme/palettes.js";
+} from "../src/components/ui/select";
+import { applyPalette, type ResolvedTheme } from "../src/theme/applyPalette";
+import { paletteById } from "../src/theme/palettes";
 
 const PALETTE_IDS = ["patrol", "chalk", "telegram"] as const;
 const THEMES: readonly ResolvedTheme[] = ["light", "dark"];

@@ -1,17 +1,17 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buttonVariants } from "../src/components/ui/button.js";
-import { cn } from "../src/lib/utils.js";
+import { buttonVariants } from "../src/components/ui/button";
+import { cn } from "../src/lib/utils";
 import type {
   TelegramAllowedSenders,
   TelegramControlStatus,
   TelegramSettingsState,
-} from "../src/settings/telegram-controller.js";
-import type { CredentialSettingsState } from "../src/settings/credential-controller.js";
-import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { TelegramSection } from "../src/ui/settings/TelegramSection.js";
+} from "../src/settings/telegram-controller";
+import type { CredentialSettingsState } from "../src/settings/credential-controller";
+import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { TelegramSection } from "../src/ui/settings/TelegramSection";
 
 function status(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
   return {

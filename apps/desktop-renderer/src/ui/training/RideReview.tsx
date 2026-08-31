@@ -7,14 +7,14 @@ import type {
   UnitsPreference,
 } from "@enduragent/coach-contract";
 import type { ReactElement, ReactNode, Ref } from "react";
-import type { RideAnalysisViewState } from "../../activity-analysis/controller.js";
-import { Button } from "../../components/ui/button.js";
-import { formatDateLabel } from "../../training-context/format.js";
-import { Page } from "../shared/Page.js";
-import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy.js";
-import { RideResponseReview } from "./RideResponseReview.js";
-import { rideStyles as styles } from "./rideStyles.js";
-import { ActivityExportControl } from "./TrainingExportControls.js";
+import type { RideAnalysisViewState } from "../../activity-analysis/controller";
+import { Button } from "../../components/ui/button";
+import { formatDateLabel } from "../../training-context/format";
+import { Page } from "../shared/Page";
+import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy";
+import { RideResponseReview } from "./RideResponseReview";
+import { rideStyles as styles } from "./rideStyles";
+import { ActivityExportControl } from "./TrainingExportControls";
 
 const RIDE_KIND: Readonly<Record<string, string>> = {
   road: "Road ride",

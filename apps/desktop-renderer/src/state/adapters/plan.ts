@@ -12,17 +12,17 @@ import {
   type PlanReadModel,
   type PlanTransitionId,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../../coach-client.js";
+import type { DesktopCoachClientProvider } from "../../coach-client";
 import {
   EMPTY_CHAT_STATE,
   nextDrainGroup,
   reduceChatState,
   type ChatState,
-} from "../../turn-state.js";
-import type { ChatSurfaceState } from "../chat-slice.js";
-import type { PlanSurfaceState, PlanTransitionState } from "../plan-slice.js";
-import { planReadModel } from "../plan-slice.js";
-import { createChatViewAdapter } from "./chat.js";
+} from "../../turn-state";
+import type { ChatSurfaceState } from "../chat-slice";
+import type { PlanSurfaceState, PlanTransitionState } from "../plan-slice";
+import { planReadModel } from "../plan-slice";
+import { createChatViewAdapter } from "./chat";
 
 export interface PlanBridge {
   getPlanState(): Promise<GetPlanStateRpcResult>;

@@ -1,4 +1,4 @@
-import type { FirstSyncState } from "../../first-sync.js";
+import type { FirstSyncState } from "../../first-sync";
 
 export interface FirstSyncViewAdapter {
   render(state: FirstSyncState): void;

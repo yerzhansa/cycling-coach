@@ -1,7 +1,7 @@
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { cva, type VariantProps } from "class-variance-authority";
 
-import { cn } from "../../lib/utils.js";
+import { cn } from "../../lib/utils";
 
 const buttonBaseClasses =
   "group/button inline-flex shrink-0 items-center justify-center rounded-ctl border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-colors outline-none select-none";

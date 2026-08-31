@@ -1,4 +1,4 @@
-import { rideStyles } from "./rideStyles.js";
+import { rideStyles } from "./rideStyles";
 
 export const responseStyles = {
   ...rideStyles,

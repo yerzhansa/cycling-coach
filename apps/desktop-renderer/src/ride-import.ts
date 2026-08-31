@@ -2,7 +2,7 @@ import type {
   CoachOperationProgressNotificationEnvelope,
   ImportFilesRpcResult,
 } from "@enduragent/coach-contract";
-import { validateImportPaths } from "./onboarding/bridge.js";
+import { validateImportPaths } from "./onboarding/bridge";
 
 export type RideImportOwner = "onboarding" | "resident";
 

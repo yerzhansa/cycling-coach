@@ -1,28 +1,28 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { Shell } from "../src/app/Shell.js";
-import type { OnboardingController } from "../src/onboarding/controller.js";
-import type { CredentialSettingsState } from "../src/settings/credential-controller.js";
-import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
-import { resetChatStream } from "../src/state/chat-stream.js";
+import { Shell } from "../src/app/Shell";
+import type { OnboardingController } from "../src/onboarding/controller";
+import type { CredentialSettingsState } from "../src/settings/credential-controller";
+import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
+import { resetChatStream } from "../src/state/chat-stream";
 import {
   CLOSED_ONBOARDING,
   READY_ONBOARDING,
   setupBlocked,
   setupRequired,
   setupSurfaceOnScreen,
-} from "../src/state/onboarding-slice.js";
-import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
-import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
-import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
+} from "../src/state/onboarding-slice";
+import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
+import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import {
   clearTrainingRestrictionFocusRequest,
   takeTrainingRestrictionFocusRequest,
-} from "../src/ui/training/restriction-focus.js";
-import { planReadModel } from "./plan-fixtures.js";
+} from "../src/ui/training/restriction-focus";
+import { planReadModel } from "./plan-fixtures";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
   status: "ready",
@@ -185,10 +185,10 @@ function stravaDroppedActivities() {
 
 async function preloadLazyViews(): Promise<void> {
   await Promise.all([
-    import("../src/ui/archive/ArchiveView.js"),
-    import("../src/ui/training/TrainingView.js"),
-    import("../src/ui/plan/PlanView.js"),
-    import("../src/ui/settings/SettingsView.js"),
+    import("../src/ui/archive/ArchiveView"),
+    import("../src/ui/training/TrainingView"),
+    import("../src/ui/plan/PlanView"),
+    import("../src/ui/settings/SettingsView"),
   ]);
 }
 

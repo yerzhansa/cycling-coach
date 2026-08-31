@@ -2,17 +2,17 @@ import { randomUUID } from "node:crypto";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buttonVariants } from "../src/components/ui/button.js";
-import { cn } from "../src/lib/utils.js";
-import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
-import type { CredentialSettingsPort } from "../src/state/settings-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
+import { buttonVariants } from "../src/components/ui/button";
+import { cn } from "../src/lib/utils";
+import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge";
+import type { CredentialSettingsPort } from "../src/state/settings-slice";
+import { useEnduragentStore } from "../src/state/store";
 import {
   API_KEY_PANEL_HINT,
   FOOTER_NOTE,
   RETRY_INTAKE_SAVE_LABEL,
   SETUP_MENU_LABEL,
-} from "../src/ui/onboarding/copy.js";
+} from "../src/ui/onboarding/copy";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -39,7 +39,7 @@ import {
   testBridge,
   TEST_LLM_CONFIGURATION,
   type TestBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 const CLAUDE_CONFIGURATION: OnboardingLlmConfiguration = {
   ...TEST_LLM_CONFIGURATION,

@@ -2,7 +2,7 @@ import type {
   TrainingContextView,
   TrainingContextViewState,
   UnitsPreferenceViewState,
-} from "../../training-context/controller.js";
+} from "../../training-context/controller";
 
 export interface TrainingViewAdapter {
   readonly view: TrainingContextView;

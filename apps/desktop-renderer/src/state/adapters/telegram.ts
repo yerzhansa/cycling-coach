@@ -1,8 +1,8 @@
 import type {
   TelegramSettingsState,
   TelegramSettingsView,
-} from "../../settings/telegram-controller.js";
-import { CLOSED_PANE, type TelegramSettingsPort } from "../settings-slice.js";
+} from "../../settings/telegram-controller";
+import { CLOSED_PANE, type TelegramSettingsPort } from "../settings-slice";
 
 export interface TelegramSettingsAdapter {
   readonly view: TelegramSettingsView;

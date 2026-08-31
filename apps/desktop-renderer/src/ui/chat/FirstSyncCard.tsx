@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { Card } from "../../components/ui/card.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { Card } from "../../components/ui/card";
+import { useEnduragentStore } from "../../state/store";
 
 export function FirstSyncCard(): ReactElement | null {
   const state = useEnduragentStore((store) => store.firstSync);

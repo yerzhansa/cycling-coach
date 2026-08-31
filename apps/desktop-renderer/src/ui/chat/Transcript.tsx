@@ -13,15 +13,15 @@ import type {
   ChatChoiceView,
   ChatMessageView,
   ChatTranscriptItemView,
-} from "../../state/chat-slice.js";
-import { cn } from "../../lib/utils.js";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { AthleteMessage } from "./AthleteMessage.js";
-import { CoachMessage } from "./CoachMessage.js";
-import { HistoryControls } from "./HistoryControls.js";
-import { PlanReferenceCard } from "./PlanReferenceCard.js";
-import { StreamingMessage } from "./StreamingMessage.js";
+} from "../../state/chat-slice";
+import { cn } from "../../lib/utils";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
+import { AthleteMessage } from "./AthleteMessage";
+import { CoachMessage } from "./CoachMessage";
+import { HistoryControls } from "./HistoryControls";
+import { PlanReferenceCard } from "./PlanReferenceCard";
+import { StreamingMessage } from "./StreamingMessage";
 
 function planHandoffSummary(suggestion: PlanHandoffSuggestion): string {
   if (suggestion.kind === "plan_creation") {

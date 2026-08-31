@@ -1,36 +1,36 @@
 import { create } from "zustand";
-import type { StoredViewId } from "../app/views.js";
+import type { StoredViewId } from "../app/views";
 import {
   applyPalette,
   resolveTheme,
   type Appearance,
   type ResolvedTheme,
-} from "../theme/applyPalette.js";
-import { publishNativeAppearance } from "../theme/nativeAppearance.js";
-import { paletteById } from "../theme/palettes.js";
+} from "../theme/applyPalette";
+import { publishNativeAppearance } from "../theme/nativeAppearance";
+import { paletteById } from "../theme/palettes";
 import {
   readStoredAppearance,
   readStoredPaletteId,
   writeStoredAppearance,
   writeStoredPaletteId,
-} from "../theme/preferences.js";
-import { createArchiveSlice, type ArchiveSlice } from "./archive-slice.js";
+} from "../theme/preferences";
+import { createArchiveSlice, type ArchiveSlice } from "./archive-slice";
 import {
   createActivityAnalysisSlice,
   type ActivityAnalysisSlice,
-} from "./activity-analysis-slice.js";
-import { createChatSlice, type ChatSlice } from "./chat-slice.js";
-import { createOnboardingSlice, type OnboardingSlice } from "./onboarding-slice.js";
-import { createPlanSlice, type PlanSlice } from "./plan-slice.js";
-import { createRideImportSlice, type RideImportSlice } from "./ride-import-slice.js";
+} from "./activity-analysis-slice";
+import { createChatSlice, type ChatSlice } from "./chat-slice";
+import { createOnboardingSlice, type OnboardingSlice } from "./onboarding-slice";
+import { createPlanSlice, type PlanSlice } from "./plan-slice";
+import { createRideImportSlice, type RideImportSlice } from "./ride-import-slice";
 import {
   createSettingsSlice,
   settingsMutationActive,
   type SettingsSlice,
-} from "./settings-slice.js";
-import { createSyncSlice, type SyncSlice } from "./sync-slice.js";
-import { createTrainingSlice, type TrainingSlice } from "./training-slice.js";
-import { createTrainingExportSlice, type TrainingExportSlice } from "./training-export-slice.js";
+} from "./settings-slice";
+import { createSyncSlice, type SyncSlice } from "./sync-slice";
+import { createTrainingSlice, type TrainingSlice } from "./training-slice";
+import { createTrainingExportSlice, type TrainingExportSlice } from "./training-export-slice";
 
 export interface EnduragentState
   extends

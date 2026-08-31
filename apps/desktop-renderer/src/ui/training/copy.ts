@@ -7,8 +7,8 @@ import type {
   PowerProgressUnavailableReason,
   TrainingContextUnknownReason,
 } from "@enduragent/coach-contract";
-import { PLATFORM_COPY } from "../../platform-copy.js";
-import type { TrainingContextStatus } from "../../training-context/controller.js";
+import { PLATFORM_COPY } from "../../platform-copy";
+import type { TrainingContextStatus } from "../../training-context/controller";
 
 export const MAX_VISIBLE_PLAN_ITEMS = 7;
 

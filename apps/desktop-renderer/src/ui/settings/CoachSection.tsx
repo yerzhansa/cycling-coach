@@ -1,24 +1,24 @@
 import { useEffect, useRef, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import {
   CUSTOM_MODEL_SELECTION,
   ONBOARDING_LLM_PROVIDER_LABELS,
-} from "../../onboarding/constants.js";
+} from "../../onboarding/constants";
 import type {
   ProviderModelFormState,
   ProviderModelSettingsState,
-} from "../../settings/provider-model-controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../settings/provider-model-controller";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../components/ui/select.js";
-import { COACH_SAVE_ERROR_COPY, COACH_VALIDATION_COPY } from "./copy.js";
-import { settingsStyles as styles } from "./styles.js";
+} from "../../components/ui/select";
+import { COACH_SAVE_ERROR_COPY, COACH_VALIDATION_COPY } from "./copy";
+import { settingsStyles as styles } from "./styles";
 
 function formState(state: ProviderModelSettingsState): ProviderModelFormState | null {
   if (

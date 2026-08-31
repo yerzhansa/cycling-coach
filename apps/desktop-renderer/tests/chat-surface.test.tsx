@@ -11,19 +11,19 @@ import type {
 } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Shell } from "../src/app/Shell.js";
+import { Shell } from "../src/app/Shell";
 import {
   EMPTY_CHAT_SURFACE,
   type ChatActions,
   type ChatMessageView,
   type ChatSurfaceState,
-} from "../src/state/chat-slice.js";
-import { resetChatStream } from "../src/state/chat-stream.js";
-import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { SLASH_COMMANDS } from "../src/chat/commands.js";
-import { ChatView } from "../src/ui/chat/ChatView.js";
+} from "../src/state/chat-slice";
+import { resetChatStream } from "../src/state/chat-stream";
+import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { SLASH_COMMANDS } from "../src/chat/commands";
+import { ChatView } from "../src/ui/chat/ChatView";
 
 function stubActions(): ChatActions {
   return {
@@ -1856,7 +1856,7 @@ describe("chat surface", () => {
       expect(source).not.toContain(".module.css");
       expect(source).not.toContain("font-mono");
       expect(source).toContain("PopoverContent");
-      expect(source).toContain("components/ui/button.js");
+      expect(source).toContain("components/ui/button");
       expect(source).toContain("chat-markdown\\\\_\\\\_table-scroll");
     });
 
@@ -1874,9 +1874,9 @@ describe("chat surface", () => {
       const source = sources.join("\n");
       expect(source).not.toContain(".module.css");
       expect(source).not.toContain("font-mono");
-      expect(source).toContain("components/ui/button.js");
-      expect(source).toContain("components/ui/card.js");
-      expect(source).toContain("components/ui/dialog.js");
+      expect(source).toContain("components/ui/button");
+      expect(source).toContain("components/ui/card");
+      expect(source).toContain("components/ui/dialog");
     });
   });
 });

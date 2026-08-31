@@ -6,7 +6,7 @@ import type {
   PlanHandoffSuggestion,
   TurnEvent,
 } from "@enduragent/coach-contract";
-import { isSlashCommandText } from "./chat/commands.js";
+import { isSlashCommandText } from "./chat/commands";
 
 export const DESKTOP_CHAT_ID = "desktop" as const;
 export const CHAT_WORKING_COPY = "Coach is working…";

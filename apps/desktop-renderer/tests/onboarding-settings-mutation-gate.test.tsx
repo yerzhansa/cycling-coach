@@ -1,15 +1,15 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onboardingCredentialMutationsBlocked } from "../src/boot.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
+import { onboardingCredentialMutationsBlocked } from "../src/boot";
+import { useEnduragentStore } from "../src/state/store";
+import { SetupPanel } from "../src/ui/onboarding/OnboardingWizard";
 import {
   mountWizard,
   primaryButton,
   resetOnboardingStore,
   testBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 const SAVED_INTAKE = {
   swim_skill_floor: null,

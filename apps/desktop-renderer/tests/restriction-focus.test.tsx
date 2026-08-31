@@ -4,7 +4,7 @@ import {
   focusTrainingRestrictionIfPresent,
   requestTrainingRestrictionFocus,
   takeTrainingRestrictionFocusRequest,
-} from "../src/ui/training/restriction-focus.js";
+} from "../src/ui/training/restriction-focus";
 
 afterEach(() => {
   clearTrainingRestrictionFocusRequest();

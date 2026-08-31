@@ -1,4 +1,4 @@
-import type { OnboardingCredentialWriteInput, OnboardingLlmSelection } from "./bridge.js";
+import type { OnboardingCredentialWriteInput, OnboardingLlmSelection } from "./bridge";
 
 export interface TransientPasswordInput {
   value: string;

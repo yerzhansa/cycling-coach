@@ -1,4 +1,4 @@
-import type { OnboardingSurfaceState, OnboardingView } from "../../onboarding/controller.js";
+import type { OnboardingSurfaceState, OnboardingView } from "../../onboarding/controller";
 
 export interface OnboardingViewAdapter {
   readonly view: OnboardingView;

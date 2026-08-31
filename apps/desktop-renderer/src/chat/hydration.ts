@@ -1,5 +1,5 @@
 import type { TranscriptPageEntry } from "@enduragent/coach-contract";
-import type { ChatTranscriptMessage } from "../turn-state.js";
+import type { ChatTranscriptMessage } from "../turn-state";
 
 export const TRANSCRIPT_HYDRATION_PAGE_LIMIT = 25;
 export const TRANSCRIPT_HYDRATION_FAILURE_COPY = "Conversation history is temporarily unavailable.";

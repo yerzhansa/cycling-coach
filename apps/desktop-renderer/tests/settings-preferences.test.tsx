@@ -1,11 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import { SettingsView } from "../src/ui/settings/SettingsView.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { PALETTES } from "../src/theme/palettes.js";
-import { APPEARANCE_STORAGE_KEY, PALETTE_STORAGE_KEY } from "../src/theme/preferences.js";
-import { setPrefersDark } from "./matchmedia.js";
+import { SettingsView } from "../src/ui/settings/SettingsView";
+import { useEnduragentStore } from "../src/state/store";
+import { PALETTES } from "../src/theme/palettes";
+import { APPEARANCE_STORAGE_KEY, PALETTE_STORAGE_KEY } from "../src/theme/preferences";
+import { setPrefersDark } from "./matchmedia";
 
 function resetStore(): void {
   useEnduragentStore.setState({ paletteId: "patrol", appearance: "system", theme: "light" });

@@ -7,18 +7,18 @@ import type {
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RideImportState } from "../src/ride-import.js";
-import { EMPTY_RIDE_ANALYSIS } from "../src/activity-analysis/controller.js";
-import { restoreManualSyncFocus } from "../src/state/manual-sync-focus.js";
-import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
-import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
-import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller.js";
-import type { TrainingContextViewState } from "../src/training-context/controller.js";
-import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
-import { TrainingView } from "../src/ui/training/TrainingView.js";
+import type { RideImportState } from "../src/ride-import";
+import { EMPTY_RIDE_ANALYSIS } from "../src/activity-analysis/controller";
+import { restoreManualSyncFocus } from "../src/state/manual-sync-focus";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice";
+import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
+import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller";
+import type { TrainingContextViewState } from "../src/training-context/controller";
+import { toManualSyncViewState } from "../src/training-context/manual-sync";
+import { TrainingView } from "../src/ui/training/TrainingView";
 
 function planItem(index: number) {
   return {

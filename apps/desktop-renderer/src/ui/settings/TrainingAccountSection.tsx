@@ -1,17 +1,17 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import type {
   AthleteSettingsFormState,
   AthleteSettingsState,
-} from "../../settings/athlete-controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../settings/athlete-controller";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
 import {
   ATHLETE_SAVE_ERROR_COPY,
   ATHLETE_VALIDATION_COPY,
   MANAGED_BY_ENVIRONMENT_COPY,
-} from "./copy.js";
-import { settingsStyles as styles } from "./styles.js";
+} from "./copy";
+import { settingsStyles as styles } from "./styles";
 
 function formState(state: AthleteSettingsState): AthleteSettingsFormState | null {
   if (

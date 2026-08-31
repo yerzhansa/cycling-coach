@@ -1,4 +1,4 @@
-import { PLATFORM_COPY } from "../platform-copy.js";
+import { PLATFORM_COPY } from "../platform-copy";
 
 export type TelegramControlErrorCode =
   | "telegram-invalid-token"

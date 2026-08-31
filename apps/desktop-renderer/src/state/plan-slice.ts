@@ -9,8 +9,8 @@ import type {
   PlanningReadModel,
 } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
-import type { EnduragentState } from "./store.js";
-import { EMPTY_CHAT_SURFACE, type ChatSurfaceState } from "./chat-slice.js";
+import type { EnduragentState } from "./store";
+import { EMPTY_CHAT_SURFACE, type ChatSurfaceState } from "./chat-slice";
 
 export type PlanTransitionState =
   | { readonly status: "idle" }

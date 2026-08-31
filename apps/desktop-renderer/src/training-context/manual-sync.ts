@@ -2,7 +2,7 @@ import type {
   TrainingSyncCoordinator,
   TrainingSyncDroppedActivities,
   TrainingSyncState,
-} from "../training-sync.js";
+} from "../training-sync";
 
 export const SYNC_QUEUED_COPY = "Sync queued.";
 export const SYNC_RUNNING_COPY = "Syncing training data…";

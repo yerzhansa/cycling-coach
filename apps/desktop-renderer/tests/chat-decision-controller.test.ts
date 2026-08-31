@@ -5,9 +5,9 @@ import type {
   CoachTurnEventNotificationEnvelope,
   TurnEvent,
 } from "@enduragent/coach-contract";
-import { createChatController, type ChatViewControls } from "../src/chat/controller.js";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import type { ChatState } from "../src/turn-state.js";
+import { createChatController, type ChatViewControls } from "../src/chat/controller";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
+import type { ChatState } from "../src/turn-state";
 
 function unanswered(): Extract<CoachDecisionReadModel, { status: "unanswered" }> {
   return {

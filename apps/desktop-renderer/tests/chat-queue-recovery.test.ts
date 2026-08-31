@@ -11,9 +11,9 @@ import {
   CHAT_QUEUE_REMOVE_FAILURE_COPY,
   createChatController,
   type ChatViewControls,
-} from "../src/chat/controller.js";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import type { ChatState } from "../src/turn-state.js";
+} from "../src/chat/controller";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
+import type { ChatState } from "../src/turn-state";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

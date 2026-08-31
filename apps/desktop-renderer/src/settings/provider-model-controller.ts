@@ -3,8 +3,8 @@ import type {
   OnboardingLlmProviderConfiguration,
   OnboardingLlmSelection,
   OnboardingLlmSelectionResult,
-} from "../onboarding/bridge.js";
-import { CUSTOM_MODEL_SELECTION } from "../onboarding/constants.js";
+} from "../onboarding/bridge";
+import { CUSTOM_MODEL_SELECTION } from "../onboarding/constants";
 
 export type ProviderModelValidationError =
   | "model-required"

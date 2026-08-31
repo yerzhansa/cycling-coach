@@ -1,10 +1,10 @@
 import type {
   AthleteSettingsSaveError,
   AthleteSettingsValidationError,
-} from "../../settings/athlete-controller.js";
-import type { CredentialSettingsEntry } from "../../settings/credential-controller.js";
-import type { ProviderModelValidationError } from "../../settings/provider-model-controller.js";
-import type { SessionSettingField } from "../../settings/session-controller.js";
+} from "../../settings/athlete-controller";
+import type { CredentialSettingsEntry } from "../../settings/credential-controller";
+import type { ProviderModelValidationError } from "../../settings/provider-model-controller";
+import type { SessionSettingField } from "../../settings/session-controller";
 
 export const COACH_VALIDATION_COPY: Readonly<Record<ProviderModelValidationError, string>> = {
   "model-required": "Enter a model name.",

@@ -1,15 +1,15 @@
 import { Plus } from "lucide-react";
 import { useEffect, useRef, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { cn } from "../../lib/utils.js";
-import { VIEWS } from "../../app/views.js";
-import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { planAttentionCount } from "../../state/plan-slice.js";
-import { setupReady } from "../../state/onboarding-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { SyncChip } from "./SyncChip.js";
-import { UpdateAvailableButton } from "./UpdateAvailableButton.js";
+import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
+import { VIEWS } from "../../app/views";
+import { registerNewConversationOpener } from "../../state/new-conversation-opener";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { planAttentionCount } from "../../state/plan-slice";
+import { setupReady } from "../../state/onboarding-slice";
+import { useEnduragentStore } from "../../state/store";
+import { SyncChip } from "./SyncChip";
+import { UpdateAvailableButton } from "./UpdateAvailableButton";
 
 export function Sidebar(): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);

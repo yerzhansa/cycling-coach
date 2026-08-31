@@ -1,6 +1,6 @@
 import type { SpendRouteSummary, SpendSummary } from "@enduragent/coach-contract";
-import type { SpendMeterView } from "../../spend-meter/controller.js";
-import type { SpendSettingsPort, SpendSurfaceState } from "../settings-slice.js";
+import type { SpendMeterView } from "../../spend-meter/controller";
+import type { SpendSettingsPort, SpendSurfaceState } from "../settings-slice";
 
 const SPEND_CAP_REACHED_PREFIX = "You’ve reached today’s ";
 

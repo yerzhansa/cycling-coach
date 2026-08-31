@@ -23,7 +23,7 @@ import type {
   TranscriptPageEntry,
   TurnEvent,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 import {
   DESKTOP_CHAT_ID,
   EMPTY_CHAT_STATE,
@@ -32,7 +32,7 @@ import {
   reduceChatState,
   type ChatSentAttachment,
   type ChatState,
-} from "../turn-state.js";
+} from "../turn-state";
 import {
   createTranscriptHydrator,
   emptyTranscriptHydration,
@@ -40,8 +40,8 @@ import {
   type TranscriptHydrationChange,
   type TranscriptHydrationStatus,
   type TranscriptPage,
-} from "./hydration.js";
-import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "./limits.js";
+} from "./hydration";
+import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "./limits";
 
 export const CHAT_CONNECTION_INTERRUPTED_COPY =
   "Connection interrupted. Your partial response is preserved.";

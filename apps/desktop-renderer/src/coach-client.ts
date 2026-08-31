@@ -4,7 +4,7 @@ import {
   connectCoachClient,
   type CoachClientTerminalCause,
 } from "@enduragent/coach-client";
-import { validateRendererDaemonConnection } from "./daemon-connection.js";
+import { validateRendererDaemonConnection } from "./daemon-connection";
 
 export interface DesktopCoachClientProvider {
   getClient(): Promise<CoachClient>;

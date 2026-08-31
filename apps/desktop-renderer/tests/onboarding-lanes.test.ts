@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
-import { CLAUDE_CLI_STATES, type ClaudeCliState } from "../src/onboarding/constants.js";
-import { claudeCliPresentation } from "../src/onboarding/credential-presentation.js";
+import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge";
+import { CLAUDE_CLI_STATES, type ClaudeCliState } from "../src/onboarding/constants";
+import { claudeCliPresentation } from "../src/onboarding/credential-presentation";
 import {
   aiRowCopy,
   apiKeyProviders,
@@ -12,13 +12,13 @@ import {
   type SetupCommit,
   type SetupErrorSection,
   type SetupLane,
-} from "../src/onboarding/lanes.js";
+} from "../src/onboarding/lanes";
 import {
   createOnboardingState,
   withClaudeCliStatus,
   type OnboardingErrorCode,
   type OnboardingState,
-} from "../src/onboarding/machine.js";
+} from "../src/onboarding/machine";
 
 const FULL_CONFIGURATION: OnboardingLlmConfiguration = {
   schemaVersion: 1,

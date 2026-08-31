@@ -1,21 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import {
   setupStatusKnown,
   type OnboardingActions,
   type OnboardingSurfaceState,
-} from "../../onboarding/controller.js";
-import { credentialPresentation } from "../../onboarding/credential-presentation.js";
-import { errorSection } from "../../onboarding/lanes.js";
+} from "../../onboarding/controller";
+import { credentialPresentation } from "../../onboarding/credential-presentation";
+import { errorSection } from "../../onboarding/lanes";
 import {
   credentialChangesBlocked,
   repairRequiredCredential,
-} from "../../settings/credential-controller.js";
+} from "../../settings/credential-controller";
 import {
   nonTelegramSettingsMutationActive,
   settingsMutationActive,
-} from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
 import {
   IMPORT_FILES_LABEL,
   INTERVALS_PANEL_HINT,
@@ -28,15 +28,15 @@ import {
   TRAINING_ROW_TOOLTIP,
   TRAINING_TRIGGER_LABELS,
   TRAINING_USE_COPIED_KEY_LABEL,
-} from "./copy.js";
-import { InfoTip } from "./InfoTip.js";
+} from "./copy";
+import { InfoTip } from "./InfoTip";
 import {
   CredentialDeleteButton,
   CredentialDeleteConfirmation,
-} from "../settings/CredentialsSection.js";
-import { SETUP_LINK_BUTTON } from "./SetupCard.js";
-import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
-import type { SetupPlacement } from "./OnboardingWizard.js";
+} from "../settings/CredentialsSection";
+import { SETUP_LINK_BUTTON } from "./SetupCard";
+import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow";
+import type { SetupPlacement } from "./OnboardingWizard";
 
 export function TrainingRow(props: {
   readonly surface: OnboardingSurfaceState;

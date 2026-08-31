@@ -3,8 +3,8 @@ import {
   IDLE_TRAINING_EXPORT,
   type TrainingExportController,
   type TrainingExportState,
-} from "../training-export/controller.js";
-import type { EnduragentState } from "./store.js";
+} from "../training-export/controller";
+import type { EnduragentState } from "./store";
 
 export interface TrainingExportSlice {
   readonly trainingExport: TrainingExportState;

@@ -1,19 +1,19 @@
 import type { ActivityExportFormat, WorkoutArchiveFormat } from "@enduragent/coach-contract";
 import { useId, useState, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../components/ui/select.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../components/ui/select";
+import { useEnduragentStore } from "../../state/store";
 import {
   trainingExportStatusCopy,
   type TrainingExportTarget,
-} from "../../training-export/controller.js";
-import { overviewStyles as styles } from "./overviewStyles.js";
+} from "../../training-export/controller";
+import { overviewStyles as styles } from "./overviewStyles";
 
 const ACTIVITY_FORMATS = [
   { value: "fit", label: "FIT" },

@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 
-import { cn } from "../../lib/utils.js";
-import { Button } from "./button.js";
+import { cn } from "../../lib/utils";
+import { Button } from "./button";
 import { XIcon } from "lucide-react";
 
 const dialogOverlayBaseClasses = "fixed inset-0 isolate z-50 bg-[var(--scrim)] duration-100";

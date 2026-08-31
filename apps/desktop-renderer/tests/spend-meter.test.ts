@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CoachClient } from "@enduragent/coach-client";
 import type { SpendSummary } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import {
   SPEND_REFRESH_INTERVAL_MS,
   createSpendMeterController,
   type SpendMeterView,
-} from "../src/spend-meter/controller.js";
+} from "../src/spend-meter/controller";
 
 function spend(overrides: Partial<SpendSummary> = {}): SpendSummary {
   return {

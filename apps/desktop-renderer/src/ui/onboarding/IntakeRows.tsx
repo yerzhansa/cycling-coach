@@ -1,18 +1,18 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../components/ui/select.js";
-import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
-import { errorSection } from "../../onboarding/lanes.js";
-import { RETRY_INTAKE_SAVE_LABEL } from "./copy.js";
-import { SETUP_LINK_BUTTON, SETUP_SELECT_CLASS } from "./SetupCard.js";
-import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
-import type { SetupPlacement } from "./OnboardingWizard.js";
+} from "../../components/ui/select";
+import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller";
+import { errorSection } from "../../onboarding/lanes";
+import { RETRY_INTAKE_SAVE_LABEL } from "./copy";
+import { SETUP_LINK_BUTTON, SETUP_SELECT_CLASS } from "./SetupCard";
+import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow";
+import type { SetupPlacement } from "./OnboardingWizard";
 
 const UNSET = "";
 

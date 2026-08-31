@@ -1,6 +1,6 @@
 import type { PlanningReadModel } from "@enduragent/coach-contract";
 import { describe, expect, it } from "vitest";
-import { projectPlanChatCard } from "../src/plan/chat-card.js";
+import { projectPlanChatCard } from "../src/plan/chat-card";
 
 const model: PlanningReadModel = {
   schemaVersion: 1,

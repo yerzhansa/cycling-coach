@@ -1,7 +1,7 @@
 import type { UnitsPreference } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
 
 const OPTIONS: readonly { readonly value: UnitsPreference; readonly label: string }[] =
   Object.freeze([

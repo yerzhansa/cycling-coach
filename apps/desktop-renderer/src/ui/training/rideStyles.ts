@@ -1,4 +1,4 @@
-import { overviewStyles } from "./overviewStyles.js";
+import { overviewStyles } from "./overviewStyles";
 
 export const rideStyles = {
   ...overviewStyles,

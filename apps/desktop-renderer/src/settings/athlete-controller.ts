@@ -7,7 +7,7 @@ import type {
   ConfigureRuntimeRpcRefusalReason,
   RuntimeConfigSnapshot,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 
 export type AthleteSettingsValidationError =
   | "athlete-required"

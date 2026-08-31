@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { cn } from "../../lib/utils.js";
+import { cn } from "../../lib/utils";
 
 const cardBaseClasses =
   "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-card border border-border bg-card py-(--card-spacing) text-sm text-card-foreground [--card-spacing:--spacing(4)]";

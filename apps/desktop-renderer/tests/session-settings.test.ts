@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { CoachClientDisconnectedError, type CoachClient } from "@enduragent/coach-client";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import {
   createSessionSettingsController,
   percentTextForRatio,
   type SessionSettingField,
   type SessionSettingsController,
   type SessionSettingsView,
-} from "../src/settings/session-controller.js";
+} from "../src/settings/session-controller";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;

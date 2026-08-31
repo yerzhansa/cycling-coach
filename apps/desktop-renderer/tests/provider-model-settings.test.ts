@@ -3,13 +3,13 @@ import type {
   OnboardingLlmConfiguration,
   OnboardingLlmProviderConfiguration,
   OnboardingLlmSelectionResult,
-} from "../src/onboarding/bridge.js";
-import { CUSTOM_MODEL_SELECTION } from "../src/onboarding/constants.js";
+} from "../src/onboarding/bridge";
+import { CUSTOM_MODEL_SELECTION } from "../src/onboarding/constants";
 import {
   createProviderModelSettingsController,
   type ProviderModelSettingsController,
   type ProviderModelSettingsView,
-} from "../src/settings/provider-model-controller.js";
+} from "../src/settings/provider-model-controller";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;

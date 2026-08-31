@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CoachClient, CoachClientCallOptions } from "@enduragent/coach-client";
 import type { TurnEvent } from "@enduragent/coach-contract";
-import { createChatController } from "../src/chat/controller.js";
-import type { TranscriptPage } from "../src/chat/hydration.js";
-import { CHAT_WORKING_COPY, type ChatState } from "../src/turn-state.js";
+import { createChatController } from "../src/chat/controller";
+import type { TranscriptPage } from "../src/chat/hydration";
+import { CHAT_WORKING_COPY, type ChatState } from "../src/turn-state";
 
 function transcriptPage(turnId: string, nextCursor: string | null = null): TranscriptPage {
   return {

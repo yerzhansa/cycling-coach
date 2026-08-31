@@ -1,5 +1,5 @@
-import type { DesktopUpdateView } from "../../update/controller.js";
-import type { UpdateSettingsPort, UpdateSurfaceState } from "../settings-slice.js";
+import type { DesktopUpdateView } from "../../update/controller";
+import type { UpdateSettingsPort, UpdateSurfaceState } from "../settings-slice";
 
 export interface UpdateSettingsAdapter {
   readonly view: DesktopUpdateView;

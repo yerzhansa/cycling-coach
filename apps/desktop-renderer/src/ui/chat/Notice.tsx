@@ -1,7 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
 
 export function Notice(): ReactElement {
   const notice = useEnduragentStore((state) => state.chat.notice);

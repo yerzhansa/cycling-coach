@@ -1,13 +1,13 @@
 import { useEffect, useRef, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { rideImportStatusCopy } from "../../ride-import.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { rideImportStatusCopy } from "../../ride-import";
+import { useEnduragentStore } from "../../state/store";
 import {
   AdditionalCredentialRows,
   CredentialSettingsFeedback,
   desktopCredentialId,
-} from "../settings/CredentialsSection.js";
-import { AiRow } from "./AiRow.js";
+} from "../settings/CredentialsSection";
+import { AiRow } from "./AiRow";
 import {
   ERROR_COPY,
   FOOTER_NOTE,
@@ -18,23 +18,23 @@ import {
   SETUP_SETTINGS_HEADING,
   SETUP_STATUS_CHECKING_COPY,
   SETUP_STATUS_UNAVAILABLE_COPY,
-} from "./copy.js";
-import { IntakeRows } from "./IntakeRows.js";
-import { setupStatusKnown } from "../../onboarding/controller.js";
-import { intakeComplete } from "../../onboarding/machine.js";
+} from "./copy";
+import { IntakeRows } from "./IntakeRows";
+import { setupStatusKnown } from "../../onboarding/controller";
+import { intakeComplete } from "../../onboarding/machine";
 import {
   credentialChangesBlocked,
   repairRequiredCredential,
-} from "../../settings/credential-controller.js";
+} from "../../settings/credential-controller";
 import {
   nonTelegramSettingsMutationActive,
   settingsMutationActive,
-} from "../../state/settings-slice.js";
-import { SetupCard } from "./SetupCard.js";
-import { SetupError } from "./SetupRow.js";
-import { TelegramRow } from "./TelegramRow.js";
-import { TrainingRow } from "./TrainingRow.js";
-import { settingsStyles } from "../settings/styles.js";
+} from "../../state/settings-slice";
+import { SetupCard } from "./SetupCard";
+import { SetupError } from "./SetupRow";
+import { TelegramRow } from "./TelegramRow";
+import { TrainingRow } from "./TrainingRow";
+import { settingsStyles } from "../settings/styles";
 
 export type SetupPlacement = "gate" | "settings";
 

@@ -3,8 +3,8 @@ import type { RuntimeConfigSnapshot, SpendSummary } from "@enduragent/coach-cont
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Shell } from "../src/app/Shell.js";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import { Shell } from "../src/app/Shell";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import type {
   CredentialDeleteResult,
   CredentialRecoveryStatus,
@@ -12,49 +12,49 @@ import type {
   OnboardingLlmConfiguration,
   OnboardingLlmSelection,
   OnboardingLlmSelectionResult,
-} from "../src/onboarding/bridge.js";
+} from "../src/onboarding/bridge";
 import type {
   ChatGptStatus,
   ClaudeCliStatus,
   CredentialSlotStatus,
-} from "../src/onboarding/machine.js";
-import { createOnboardingState } from "../src/onboarding/machine.js";
+} from "../src/onboarding/machine";
+import { createOnboardingState } from "../src/onboarding/machine";
 import {
   createOnboardingController,
   onboardingCredentialMutationActive,
   type OnboardingController,
-} from "../src/onboarding/controller.js";
-import { createAthleteSettingsController } from "../src/settings/athlete-controller.js";
+} from "../src/onboarding/controller";
+import { createAthleteSettingsController } from "../src/settings/athlete-controller";
 import {
   credentialChangesBlocked,
   createCredentialSettingsController,
-} from "../src/settings/credential-controller.js";
-import { createProviderModelSettingsController } from "../src/settings/provider-model-controller.js";
-import { createSessionSettingsController } from "../src/settings/session-controller.js";
+} from "../src/settings/credential-controller";
+import { createProviderModelSettingsController } from "../src/settings/provider-model-controller";
+import { createSessionSettingsController } from "../src/settings/session-controller";
 import {
   createTelegramSettingsController,
   type TelegramControlStatus,
-} from "../src/settings/telegram-controller.js";
-import { createSpendMeterController } from "../src/spend-meter/controller.js";
-import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js";
+} from "../src/settings/telegram-controller";
+import { createSpendMeterController } from "../src/spend-meter/controller";
+import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding";
 import {
   createAthleteSettingsAdapter,
   createCoachSettingsAdapter,
   createConversationSettingsAdapter,
   createCredentialSettingsAdapter,
-} from "../src/state/adapters/settings.js";
-import { createSpendSettingsAdapter } from "../src/state/adapters/spend.js";
-import { createTelegramSettingsAdapter } from "../src/state/adapters/telegram.js";
-import { createUpdateSettingsAdapter } from "../src/state/adapters/update.js";
-import { credentialDrafts } from "../src/state/credential-drafts.js";
-import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
-import { READY_ONBOARDING, setupReady } from "../src/state/onboarding-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import type { DesktopUpdateState } from "../src/update/controller.js";
-import { createDesktopUpdateController } from "../src/update/controller.js";
-import { CONVERSATION_FIELDS } from "../src/ui/settings/copy.js";
-import { SettingsView } from "../src/ui/settings/SettingsView.js";
-import { testBridge } from "./onboarding-harness.js";
+} from "../src/state/adapters/settings";
+import { createSpendSettingsAdapter } from "../src/state/adapters/spend";
+import { createTelegramSettingsAdapter } from "../src/state/adapters/telegram";
+import { createUpdateSettingsAdapter } from "../src/state/adapters/update";
+import { credentialDrafts } from "../src/state/credential-drafts";
+import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
+import { READY_ONBOARDING, setupReady } from "../src/state/onboarding-slice";
+import { useEnduragentStore } from "../src/state/store";
+import type { DesktopUpdateState } from "../src/update/controller";
+import { createDesktopUpdateController } from "../src/update/controller";
+import { CONVERSATION_FIELDS } from "../src/ui/settings/copy";
+import { SettingsView } from "../src/ui/settings/SettingsView";
+import { testBridge } from "./onboarding-harness";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;

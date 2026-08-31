@@ -1,7 +1,7 @@
 import { useEffect, type ReactElement } from "react";
-import { useEnduragentStore } from "../state/store.js";
-import { DARK_MEDIA_QUERY } from "../theme/applyPalette.js";
-import { Shell } from "./Shell.js";
+import { useEnduragentStore } from "../state/store";
+import { DARK_MEDIA_QUERY } from "../theme/applyPalette";
+import { Shell } from "./Shell";
 
 export function App(props: { readonly onReady: () => void }): ReactElement {
   const appearance = useEnduragentStore((state) => state.appearance);

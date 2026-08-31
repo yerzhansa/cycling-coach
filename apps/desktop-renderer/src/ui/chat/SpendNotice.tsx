@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
-import { Card } from "../../components/ui/card.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Card } from "../../components/ui/card";
+import { useEnduragentStore } from "../../state/store";
 
 export function SpendNotice(): ReactElement {
   const warning = useEnduragentStore((store) => store.settings.spend.warning);

@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ONBOARDING_STATUS_COLD_START_TIMEOUT_MS,
   ONBOARDING_STATUS_RETRY_BASE_DELAY_MS,
-} from "../src/onboarding/controller.js";
-import { useEnduragentStore } from "../src/state/store.js";
+} from "../src/onboarding/controller";
+import { useEnduragentStore } from "../src/state/store";
 import {
   chooseLane,
   mountWizard,
@@ -13,7 +13,7 @@ import {
   resetOnboardingStore,
   rowState,
   testBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 function deferred<T>(): {
   readonly promise: Promise<T>;

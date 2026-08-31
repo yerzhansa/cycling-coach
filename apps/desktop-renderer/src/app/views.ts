@@ -35,7 +35,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     icon: History,
     title: "Past chats",
     page: lazy(async () => ({
-      default: (await import("../ui/archive/ArchiveView.js")).ArchiveView,
+      default: (await import("../ui/archive/ArchiveView")).ArchiveView,
     })),
   },
   {
@@ -44,7 +44,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     icon: CalendarDays,
     title: "Plan",
     page: lazy(async () => ({
-      default: (await import("../ui/plan/PlanView.js")).PlanView,
+      default: (await import("../ui/plan/PlanView")).PlanView,
     })),
   },
   {
@@ -53,7 +53,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     icon: Activity,
     title: "Training",
     page: lazy(async () => ({
-      default: (await import("../ui/training/TrainingView.js")).TrainingView,
+      default: (await import("../ui/training/TrainingView")).TrainingView,
     })),
   },
   {
@@ -62,7 +62,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     icon: Settings,
     title: "Settings",
     page: lazy(async () => ({
-      default: (await import("../ui/settings/SettingsView.js")).SettingsView,
+      default: (await import("../ui/settings/SettingsView")).SettingsView,
     })),
   },
 ]);

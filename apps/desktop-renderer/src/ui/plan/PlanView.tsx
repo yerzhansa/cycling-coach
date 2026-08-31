@@ -37,7 +37,7 @@ import {
   type PlanReadinessProjection,
   type PlanStartDateProjection,
 } from "@enduragent/coach-contract";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import {
   Dialog,
   DialogClose,
@@ -46,13 +46,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog.js";
-import { planReadModel } from "../../state/plan-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { CoachDecisionPanel } from "../chat/CoachDecisionPanel.js";
-import { Composer, type ComposerHandle } from "../chat/Composer.js";
-import { ConversationTranscript } from "../chat/Transcript.js";
-import { Page } from "../shared/Page.js";
+} from "../../components/ui/dialog";
+import { planReadModel } from "../../state/plan-slice";
+import { useEnduragentStore } from "../../state/store";
+import { CoachDecisionPanel } from "../chat/CoachDecisionPanel";
+import { Composer, type ComposerHandle } from "../chat/Composer";
+import { ConversationTranscript } from "../chat/Transcript";
+import { Page } from "../shared/Page";
 
 const SUPPORT_PAIR = "grid gap-[calc(var(--inset)/2)]";
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;

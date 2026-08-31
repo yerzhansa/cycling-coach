@@ -1,10 +1,10 @@
 import type { ReactElement } from "react";
-import { PLATFORM_COPY } from "../../platform-copy.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { AppearanceControl } from "./AppearanceControl.js";
-import { PalettePicker } from "./PalettePicker.js";
-import { settingsStyles as styles } from "./styles.js";
-import { UnitsControl } from "./UnitsControl.js";
+import { PLATFORM_COPY } from "../../platform-copy";
+import { useEnduragentStore } from "../../state/store";
+import { AppearanceControl } from "./AppearanceControl";
+import { PalettePicker } from "./PalettePicker";
+import { settingsStyles as styles } from "./styles";
+import { UnitsControl } from "./UnitsControl";
 
 export function PreferencesSection(): ReactElement {
   const units = useEnduragentStore((store) => store.settings.units);

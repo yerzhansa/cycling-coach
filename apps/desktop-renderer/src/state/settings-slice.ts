@@ -1,17 +1,17 @@
 import type { SpendSummary, UnitsPreference } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
-import type { DesktopCredentialId } from "../onboarding/bridge.js";
-import type { AthleteSettingsState } from "../settings/athlete-controller.js";
+import type { DesktopCredentialId } from "../onboarding/bridge";
+import type { AthleteSettingsState } from "../settings/athlete-controller";
 import {
   repairRequiredCredential,
   type CredentialSettingsState,
-} from "../settings/credential-controller.js";
-import type { ProviderModelSettingsState } from "../settings/provider-model-controller.js";
-import type { SessionSettingField, SessionSettingsState } from "../settings/session-controller.js";
-import type { TelegramSettingsState } from "../settings/telegram-controller.js";
-import type { UnitsPreferenceViewState } from "../training-context/controller.js";
-import type { DesktopUpdateState } from "../update/controller.js";
-import type { EnduragentState } from "./store.js";
+} from "../settings/credential-controller";
+import type { ProviderModelSettingsState } from "../settings/provider-model-controller";
+import type { SessionSettingField, SessionSettingsState } from "../settings/session-controller";
+import type { TelegramSettingsState } from "../settings/telegram-controller";
+import type { UnitsPreferenceViewState } from "../training-context/controller";
+import type { DesktopUpdateState } from "../update/controller";
+import type { EnduragentState } from "./store";
 
 interface SettingsPanesPort {
   activate(): void;

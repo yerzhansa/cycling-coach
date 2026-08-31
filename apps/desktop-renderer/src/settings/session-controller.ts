@@ -4,7 +4,7 @@ import {
   type CoachClient,
 } from "@enduragent/coach-client";
 import type { ConfigureRuntimeRpcParams, RuntimeConfigSnapshot } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 
 export const SESSION_SETTING_FIELDS = [
   "timezone",

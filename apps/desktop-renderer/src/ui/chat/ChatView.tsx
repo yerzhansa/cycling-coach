@@ -7,26 +7,26 @@ import {
   useState,
   type ReactElement,
 } from "react";
-import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { Button } from "../../components/ui/button.js";
+import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream";
+import { useEnduragentStore } from "../../state/store";
+import { Button } from "../../components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
   DialogTrigger,
-} from "../../components/ui/dialog.js";
-import { Composer, type ComposerHandle } from "./Composer.js";
-import { AttachmentPanel } from "./AttachmentPanel.js";
-import { CoachDecisionPanel } from "./CoachDecisionPanel.js";
-import { FirstSyncCard } from "./FirstSyncCard.js";
-import { NewConversationDialog } from "./NewConversationDialog.js";
-import { CoachProgress, Notice, RetryBar } from "./Notice.js";
-import { QueuedMessages } from "./QueuedMessages.js";
-import { SpendNotice } from "./SpendNotice.js";
-import { TrainingContextPanel } from "./TrainingContextPanel.js";
-import { Transcript } from "./Transcript.js";
+} from "../../components/ui/dialog";
+import { Composer, type ComposerHandle } from "./Composer";
+import { AttachmentPanel } from "./AttachmentPanel";
+import { CoachDecisionPanel } from "./CoachDecisionPanel";
+import { FirstSyncCard } from "./FirstSyncCard";
+import { NewConversationDialog } from "./NewConversationDialog";
+import { CoachProgress, Notice, RetryBar } from "./Notice";
+import { QueuedMessages } from "./QueuedMessages";
+import { SpendNotice } from "./SpendNotice";
+import { TrainingContextPanel } from "./TrainingContextPanel";
+import { Transcript } from "./Transcript";
 
 const CHAT_DISCLAIMER =
   "Not medical advice, and not a substitute for a doctor or a certified coach.";

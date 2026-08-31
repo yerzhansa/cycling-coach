@@ -19,7 +19,7 @@ import {
   withClaudeCliStatus,
   withIntake,
   withImportedRideFileCount,
-} from "../src/onboarding/machine.js";
+} from "../src/onboarding/machine";
 
 describe("desktop onboarding machine", () => {
   it("keeps the four ordered steps and exact guards", () => {

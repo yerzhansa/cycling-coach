@@ -1,22 +1,22 @@
 import { CoachClientDisconnectedError, type CoachClient } from "@enduragent/coach-client";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 import type {
   CredentialDeleteResult,
   CredentialRecoveryStatus,
   CredentialResetResult,
   DesktopCredentialId,
-} from "../onboarding/bridge.js";
-import type { ClaudeCliState } from "../onboarding/constants.js";
+} from "../onboarding/bridge";
+import type { ClaudeCliState } from "../onboarding/constants";
 import {
   claudeCliIdentityLine,
   claudeCliPresentation,
-} from "../onboarding/credential-presentation.js";
+} from "../onboarding/credential-presentation";
 import type {
   ChatGptStatus,
   ClaudeCliStatus,
   CredentialSlotStatus,
-} from "../onboarding/machine.js";
+} from "../onboarding/machine";
 
 export type CredentialKind = "Provider API key" | "ChatGPT profile" | "Training account key";
 

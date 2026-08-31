@@ -14,7 +14,7 @@ import type {
   CoachOperationProgressNotificationEnvelope,
   SyncRpcResult,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "./coach-client.js";
+import type { DesktopCoachClientProvider } from "./coach-client";
 
 interface TrainingSyncRestrictionWindow {
   readonly total: number;

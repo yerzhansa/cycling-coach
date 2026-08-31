@@ -1,4 +1,4 @@
-import type { TranscriptPage, TranscriptTurn } from "../chat/hydration.js";
+import type { TranscriptPage, TranscriptTurn } from "../chat/hydration";
 
 export const ARCHIVE_PAGE_LIMIT = 25;
 

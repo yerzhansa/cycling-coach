@@ -1,5 +1,5 @@
-import type { RideImportController, RideImportState } from "../../ride-import.js";
-import type { RideImportActions } from "../ride-import-slice.js";
+import type { RideImportController, RideImportState } from "../../ride-import";
+import type { RideImportActions } from "../ride-import-slice";
 
 export interface RideImportAdapter {
   readonly port: RideImportActions;

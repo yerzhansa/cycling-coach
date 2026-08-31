@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactElement } from "react";
-import type { ArchiveReadingState } from "../../archive/controller.js";
-import type { TranscriptTurn } from "../../chat/hydration.js";
-import { Button } from "../../components/ui/button.js";
+import type { ArchiveReadingState } from "../../archive/controller";
+import type { TranscriptTurn } from "../../chat/hydration";
+import { Button } from "../../components/ui/button";
 import {
   Dialog,
   DialogClose,
@@ -11,11 +11,11 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "../../components/ui/dialog.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { AthleteMessage } from "../chat/AthleteMessage.js";
-import { CoachMessage } from "../chat/CoachMessage.js";
-import { Page } from "../shared/Page.js";
+} from "../../components/ui/dialog";
+import { useEnduragentStore } from "../../state/store";
+import { AthleteMessage } from "../chat/AthleteMessage";
+import { CoachMessage } from "../chat/CoachMessage";
+import { Page } from "../shared/Page";
 import {
   ARCHIVE_BACK_COPY,
   ARCHIVE_DELETE_COPY,
@@ -36,7 +36,7 @@ import {
   archiveReasonCopy,
   archiveTimestampCopy,
   archiveTurnCountCopy,
-} from "./copy.js";
+} from "./copy";
 
 const NOTE_CLASS = "mb-3.5 text-sm text-ink-2";
 const ACTION_CLASS = "justify-self-start [&[hidden]]:hidden";

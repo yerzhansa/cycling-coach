@@ -4,7 +4,7 @@ import {
   trainingExportStatusCopy,
   type TrainingExportTransport,
   type TrainingExportState,
-} from "../src/training-export/controller.js";
+} from "../src/training-export/controller";
 
 function subject(
   exportTrainingFile: TrainingExportTransport["exportTrainingFile"] = vi.fn(async () => ({

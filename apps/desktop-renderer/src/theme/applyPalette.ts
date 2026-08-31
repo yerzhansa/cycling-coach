@@ -1,4 +1,4 @@
-import { FIXED, type Palette } from "./palettes.js";
+import { FIXED, type Palette } from "./palettes";
 
 export type Appearance = "light" | "dark" | "system";
 

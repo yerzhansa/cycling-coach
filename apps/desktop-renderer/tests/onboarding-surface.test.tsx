@@ -6,9 +6,9 @@ import type {
   CredentialWriteResult,
   IntervalsCredentialMutationResult,
   OnboardingBridge,
-} from "../src/onboarding/bridge.js";
-import { createRideImportController } from "../src/ride-import.js";
-import { useEnduragentStore } from "../src/state/store.js";
+} from "../src/onboarding/bridge";
+import { createRideImportController } from "../src/ride-import";
+import { useEnduragentStore } from "../src/state/store";
 import {
   chooseLane,
   control,
@@ -30,7 +30,7 @@ import {
   testBridge,
   TEST_LLM_CONFIGURATION,
   type UserEvent,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 function deferred<T>(): {
   readonly promise: Promise<T>;

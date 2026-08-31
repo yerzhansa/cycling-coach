@@ -1,11 +1,11 @@
 import type { CoachClient } from "@enduragent/coach-client";
 import type { ActivityAnalysisResult } from "@enduragent/coach-contract";
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import {
   createRideAnalysisController,
   type RideAnalysisViewState,
-} from "../src/activity-analysis/controller.js";
+} from "../src/activity-analysis/controller";
 
 const FIRST = "a".repeat(64);
 const SECOND = "b".repeat(64);

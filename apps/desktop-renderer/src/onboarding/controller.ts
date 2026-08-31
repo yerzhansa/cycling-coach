@@ -2,7 +2,7 @@ import {
   createRideImportController,
   type RideImportController,
   type RideImportState,
-} from "../ride-import.js";
+} from "../ride-import";
 import type {
   CredentialWriteResult,
   IntervalsCredentialMutationRefusalReason,
@@ -12,13 +12,13 @@ import type {
   OnboardingLlmConfiguration,
   OnboardingLlmEndpointSelection,
   OnboardingLlmSelection,
-} from "./bridge.js";
+} from "./bridge";
 import {
   CUSTOM_MODEL_SELECTION,
   DESKTOP_CREDENTIAL_SLOTS,
-} from "./constants.js";
-import { handoffCredential, type CredentialDraftPort } from "./credentials.js";
-import type { SetupCommit } from "./lanes.js";
+} from "./constants";
+import { handoffCredential, type CredentialDraftPort } from "./credentials";
+import type { SetupCommit } from "./lanes";
 import {
   chatGptSignedIn,
   chatGptUiPhase,
@@ -47,13 +47,13 @@ import {
   type OnboardingCompletion,
   type OnboardingErrorCode,
   type OnboardingState,
-} from "./machine.js";
+} from "./machine";
 import {
   draftForProvider,
   initialLlmDraft,
   llmSelectionFromDraft,
   type LlmSelectionDraft,
-} from "./selection.js";
+} from "./selection";
 
 export interface OnboardingReadiness {
   readonly provider: boolean;

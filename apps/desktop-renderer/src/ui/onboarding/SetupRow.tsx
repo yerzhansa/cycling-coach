@@ -1,8 +1,8 @@
 import { Check } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
-import type { OnboardingSurfaceState } from "../../onboarding/controller.js";
-import { errorSection, type SetupErrorSection } from "../../onboarding/lanes.js";
-import { ERROR_COPY } from "./copy.js";
+import type { OnboardingSurfaceState } from "../../onboarding/controller";
+import { errorSection, type SetupErrorSection } from "../../onboarding/lanes";
+import { ERROR_COPY } from "./copy";
 
 export type SetupRowStatus = "ready" | "pending" | "none";
 

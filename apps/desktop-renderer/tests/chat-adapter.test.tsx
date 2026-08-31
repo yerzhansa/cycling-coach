@@ -1,20 +1,20 @@
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChatView, ChatViewControls } from "../src/chat/controller.js";
-import { mergeHydratedMessages } from "../src/chat/hydration.js";
-import { createChatViewAdapter } from "../src/state/adapters/chat.js";
-import { EMPTY_CHAT_SURFACE, type ChatSurfaceState } from "../src/state/chat-slice.js";
-import { createChatScrollAnchor, resetChatStream } from "../src/state/chat-stream.js";
-import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
+import type { ChatView, ChatViewControls } from "../src/chat/controller";
+import { mergeHydratedMessages } from "../src/chat/hydration";
+import { createChatViewAdapter } from "../src/state/adapters/chat";
+import { EMPTY_CHAT_SURFACE, type ChatSurfaceState } from "../src/state/chat-slice";
+import { createChatScrollAnchor, resetChatStream } from "../src/state/chat-stream";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice";
+import { useEnduragentStore } from "../src/state/store";
 import {
   CHAT_WORKING_COPY,
   EMPTY_CHAT_STATE,
   reduceChatState,
   type ChatState,
-} from "../src/turn-state.js";
-import { ChatView as ChatSurface } from "../src/ui/chat/ChatView.js";
+} from "../src/turn-state";
+import { ChatView as ChatSurface } from "../src/ui/chat/ChatView";
 
 const TURN_ID = "turn-1";
 

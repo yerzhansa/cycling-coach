@@ -5,13 +5,13 @@ import {
   EMPTY_ARCHIVE_SURFACE,
   type ArchiveReadingState,
   type ArchiveViewState,
-} from "../src/archive/controller.js";
-import { Shell } from "../src/app/Shell.js";
-import type { ArchiveActions } from "../src/state/archive-slice.js";
-import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
-import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { ArchiveView } from "../src/ui/archive/ArchiveView.js";
+} from "../src/archive/controller";
+import { Shell } from "../src/app/Shell";
+import type { ArchiveActions } from "../src/state/archive-slice";
+import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { ArchiveView } from "../src/ui/archive/ArchiveView";
 
 const NEWER = "a".repeat(64);
 const OLDER = "b".repeat(64);

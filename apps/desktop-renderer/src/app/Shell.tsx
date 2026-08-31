@@ -1,10 +1,10 @@
 import { Suspense, useEffect, type ReactElement } from "react";
-import { setupDisposition } from "../state/onboarding-slice.js";
-import { useEnduragentStore } from "../state/store.js";
-import { ChatView } from "../ui/chat/ChatView.js";
-import { Sidebar } from "../ui/sidebar/Sidebar.js";
-import { SetupGate } from "./SetupGate.js";
-import { REACT_CHAT_REGION, VIEWS } from "./views.js";
+import { setupDisposition } from "../state/onboarding-slice";
+import { useEnduragentStore } from "../state/store";
+import { ChatView } from "../ui/chat/ChatView";
+import { Sidebar } from "../ui/sidebar/Sidebar";
+import { SetupGate } from "./SetupGate";
+import { REACT_CHAT_REGION, VIEWS } from "./views";
 
 export function Shell(props: { readonly onReady: () => void }): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);

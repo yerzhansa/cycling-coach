@@ -1,4 +1,4 @@
-import type { ManualSyncView, ManualSyncViewState } from "../../training-context/manual-sync.js";
+import type { ManualSyncView, ManualSyncViewState } from "../../training-context/manual-sync";
 
 export interface ManualSyncViewAdapter {
   readonly view: ManualSyncView;

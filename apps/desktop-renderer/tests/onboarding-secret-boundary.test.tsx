@@ -6,8 +6,8 @@ import type {
   IntervalsCredentialMutationRefusalReason,
   IntervalsCredentialMutationResult,
   OnboardingCredentialWriteInput,
-} from "../src/onboarding/bridge.js";
-import { handoffCredential } from "../src/onboarding/credentials.js";
+} from "../src/onboarding/bridge";
+import { handoffCredential } from "../src/onboarding/credentials";
 import {
   mountWizard,
   openApiKeyPanel,
@@ -21,7 +21,7 @@ import {
   selectSetupOption,
   seedSecret,
   testBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 function deferred() {
   let resolve!: () => void;

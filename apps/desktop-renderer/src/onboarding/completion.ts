@@ -1,4 +1,4 @@
-import type { OnboardingCompletion } from "./machine.js";
+import type { OnboardingCompletion } from "./machine";
 
 const COMPLETION_STORAGE_KEY = "enduragent.desktop.onboarding";
 const COMPLETION_STORAGE_VALUE = '{"version":1,"completed":true}';

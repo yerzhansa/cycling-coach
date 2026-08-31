@@ -1,21 +1,21 @@
 import { useRef, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { cn } from "../../lib/utils.js";
-import { setManualSyncFocusTarget } from "../../state/manual-sync-focus.js";
-import { useEnduragentStore } from "../../state/store.js";
-import type { TrainingContextViewState } from "../../training-context/controller.js";
+import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
+import { setManualSyncFocusTarget } from "../../state/manual-sync-focus";
+import { useEnduragentStore } from "../../state/store";
+import type { TrainingContextViewState } from "../../training-context/controller";
 import {
   sourceRestrictionSummary,
   STRAVA_RESTRICTION_DESKTOP_COPY,
   type ManualSyncViewState,
-} from "../../training-context/manual-sync.js";
-import { formatUtcTimestamp } from "../../training-context/format.js";
-import { InfoTip } from "../onboarding/InfoTip.js";
+} from "../../training-context/manual-sync";
+import { formatUtcTimestamp } from "../../training-context/format";
+import { InfoTip } from "../onboarding/InfoTip";
 import {
   focusTrainingRestrictionIfPresent,
   requestTrainingRestrictionFocus,
   STRAVA_RESTRICTION_CARD_ID,
-} from "../training/restriction-focus.js";
+} from "../training/restriction-focus";
 
 type SyncChipStatus = "loading" | "syncing" | "attention" | "synced" | "never" | "unavailable";
 

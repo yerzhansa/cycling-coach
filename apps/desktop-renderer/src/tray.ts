@@ -1,4 +1,4 @@
-import { presentTrayTelegramStatus } from "./tray-status.js";
+import { presentTrayTelegramStatus } from "./tray-status";
 
 const telegramCopy = document.querySelector<HTMLElement>("#telegram-status-copy");
 const telegramTag = document.querySelector<HTMLElement>("#telegram-status-tag");

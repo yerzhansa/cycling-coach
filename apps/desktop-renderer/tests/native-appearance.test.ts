@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bootTheme, useEnduragentStore } from "../src/state/store.js";
-import { publishNativeAppearance } from "../src/theme/nativeAppearance.js";
+import { bootTheme, useEnduragentStore } from "../src/state/store";
+import { publishNativeAppearance } from "../src/theme/nativeAppearance";
 
 function stubBridge(setAppearance: (appearance: string) => void): void {
   vi.stubGlobal("window", { enduragentAuth: { setAppearance } });
