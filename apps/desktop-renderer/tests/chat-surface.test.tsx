@@ -1768,25 +1768,36 @@ describe("chat surface", () => {
       };
     }
 
-    it("sets the prose face on every coach turn and leaves athlete turns on the interface face", () => {
+    it("sets compact typography on every coach turn without changing athlete copy", () => {
       render(<Harness />);
       setChat({
         messages: [
           message({ id: "a1", role: "athlete", text: "Plan my week" }),
           message({ id: "c1", delivery: "streaming", text: "Ride " }),
           message({ id: "c2" }),
-          message({ id: "c3", historical: true, text: "Nice work last week." }),
+          message({ id: "c3", delivery: "interrupted", text: "Connection stopped." }),
+          message({ id: "c4", historical: true, text: "Nice work last week." }),
         ],
       });
 
-      for (const id of ["c1", "c2", "c3"]) {
+      for (const id of ["c1", "c2", "c3", "c4"]) {
         const row = document.querySelector(`[data-message-id="${id}"]`);
-        expect(row).toHaveClass("text-base", "leading-6", "max-w-full");
+        expect(row).toHaveClass("text-sm", "leading-5", "max-w-full");
+        expect(row).not.toHaveClass("text-base");
+        expect(row).not.toHaveClass("leading-6");
+        const copy = row?.querySelector(".chat-message__text");
+        expect(copy).toHaveClass("leading-5");
+        expect(copy).not.toHaveClass("leading-[1.6]");
       }
       const athlete = document.querySelector('[data-message-id="a1"]');
       expect(athlete).not.toHaveClass("text-base");
+      expect(athlete).not.toHaveClass("text-sm");
+      expect(athlete).not.toHaveClass("leading-5");
       expect(athlete?.classList.contains("chat-message--athlete")).toBe(true);
       expect(athlete).toHaveClass("max-w-[76%]");
+      const athleteCopy = athlete?.querySelector(".chat-message__text");
+      expect(athleteCopy).toHaveClass("leading-[1.6]");
+      expect(athleteCopy).not.toHaveClass("leading-5");
       expect(screen.queryByText("Coach")).toBeNull();
       expect(screen.queryByText("You")).toBeNull();
     });
@@ -1809,7 +1820,11 @@ describe("chat surface", () => {
         readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
         readFile(resolve(sourceRoot, "theme/fonts.css"), "utf8"),
       ]);
-      expect(transcript).toContain("text-base leading-6");
+      expect(transcript).toContain(
+        "chat-message--coach max-w-full justify-self-start text-sm leading-5",
+      );
+      expect(tokens).toMatch(/--font-size-sm:\s*14px;/u);
+      expect(tokens).toMatch(/--line-height-sm:\s*20px;/u);
       expect(tokens).toMatch(/--f-prose:\s*var\(--f-ui\);/u);
       expect(tokens).toMatch(/--f-ui:\s*\n?\s*"Inter Variable", "Inter",/u);
       expect(tokens).toMatch(/--f-mono:\s*\n?\s*"Geist Mono Variable", "Geist Mono",/u);

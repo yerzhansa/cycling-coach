@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactElement } from "react";
 import { renderCoachMarkdown } from "../../chat/markdown.js";
-import { MESSAGE_TEXT_CLASS } from "./Message.js";
+import { COACH_MESSAGE_TEXT_CLASS } from "./Message.js";
 
 export function CoachMessage(props: { readonly text: string }): ReactElement {
   const host = useRef<HTMLDivElement>(null);
@@ -12,5 +12,5 @@ export function CoachMessage(props: { readonly text: string }): ReactElement {
     renderCoachMarkdown(node, text);
   }, [text]);
 
-  return <div className={MESSAGE_TEXT_CLASS} ref={host} />;
+  return <div className={COACH_MESSAGE_TEXT_CLASS} ref={host} />;
 }

@@ -79,7 +79,7 @@ function MessageRow(props: {
   const rowClassName = cn(
     "chat-message grid min-w-0 data-[delivery=interrupted]:text-ink-2",
     message.role === "coach"
-      ? "chat-message--coach max-w-full justify-self-start text-base leading-6"
+      ? "chat-message--coach max-w-full justify-self-start text-sm leading-5"
       : "chat-message--athlete max-w-[76%] justify-self-end rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3",
   );
 
