@@ -43,6 +43,7 @@ import {
   type GetSpendSummaryRpcParams,
   type JsonRpcId,
   type PlanningOperations,
+  type PlanningV2Operations,
   type SetDailySpendCapRpcParams,
   type SpendSummary,
 } from "@enduragent/coach-contract";
@@ -299,6 +300,7 @@ export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
   readonly operations: CoachOperations &
     PlanningReadOperations &
+    PlanningV2Operations &
     PlanningRequestOperations &
     PlanningOperations;
   readonly spend: SpendRpcHandlers;
@@ -525,6 +527,16 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getPlanningReadModel",
+  "plan.list",
+  "plan.get_context",
+  "plan_creation.start",
+  "plan_creation.answer",
+  "plan_creation.preview",
+  "plan_creation.activate",
+  "plan_creation.discard",
+  "plan_change.preview",
+  "plan_change.apply",
+  "plan.close",
   "getActivityAnalysis",
   "importFiles",
   "sync",
@@ -1338,6 +1350,32 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 throw new TypeError("Planning read operation is unavailable.");
               }
               result = await input.operations.getPlanningReadModel(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan.list":
+          case "plan.get_context":
+          case "plan_creation.start":
+          case "plan_creation.answer":
+          case "plan_creation.preview":
+          case "plan_creation.activate":
+          case "plan_creation.discard":
+          case "plan_change.preview":
+          case "plan_change.apply":
+          case "plan.close":
+            try {
+              const method = registry.wireName;
+              const request = COACH_RPC_METHOD_REGISTRY[method].requestSchema.parse(
+                generic.data.params,
+              );
+              const operation = input.operations[method] as
+                | ((value: unknown) => Promise<unknown>)
+                | undefined;
+              if (operation === undefined) {
+                throw new TypeError("Planning v2 operation is unavailable.");
+              }
+              result = await operation(request);
             } catch (error) {
               invocationFailure = { error };
             }

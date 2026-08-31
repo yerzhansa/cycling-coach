@@ -124,6 +124,130 @@ const rpcDeadlineCases = [
   ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
   ["getPlanningReadModel", {}, 30_000],
+  ["plan.list", { schemaVersion: 2, closedCursor: null, closedLimit: 25 }, 30_000],
+  [
+    "plan.get_context",
+    {
+      schemaVersion: 2,
+      target: { kind: "plan", planId: "00000000000000000000000001" },
+    },
+    30_000,
+  ],
+  [
+    "plan_creation.start",
+    {
+      schemaVersion: 2,
+      name: "plan_creation.start",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      intent: { kind: "new" },
+    },
+    30_000,
+  ],
+  [
+    "plan_creation.answer",
+    {
+      schemaVersion: 2,
+      name: "plan_creation.answer",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      creationId: "00000000000000000000000002",
+      expectedCreationVersion: 1,
+      answer: { kind: "text", questionId: "goal", value: "Finish steadily" },
+      confirmed: true,
+      scope: "only-this-plan",
+    },
+    30_000,
+  ],
+  [
+    "plan_creation.preview",
+    {
+      schemaVersion: 2,
+      name: "plan_creation.preview",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      creationId: "00000000000000000000000002",
+      expectedCreationVersion: 2,
+    },
+    660_000,
+  ],
+  [
+    "plan_creation.activate",
+    {
+      schemaVersion: 2,
+      name: "plan_creation.activate",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      creationId: "00000000000000000000000002",
+      expectedCreationVersion: 3,
+      draftId: "00000000000000000000000003",
+      draftRevision: 1,
+      draftFingerprint: "b".repeat(64),
+    },
+    660_000,
+  ],
+  [
+    "plan_creation.discard",
+    {
+      schemaVersion: 2,
+      name: "plan_creation.discard",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      creationId: "00000000000000000000000002",
+      expectedCreationVersion: 3,
+    },
+    30_000,
+  ],
+  [
+    "plan_change.preview",
+    {
+      schemaVersion: 2,
+      name: "plan_change.preview",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      planId: "00000000000000000000000001",
+      expectedPlanVersion: 2,
+      expectedPlanRevision: 2,
+      intent: {
+        kind: "adjust-load",
+        direction: "reduce",
+        effectiveDate: "1998-08-17",
+        rationale: "Recover before the next block",
+      },
+    },
+    660_000,
+  ],
+  [
+    "plan_change.apply",
+    {
+      schemaVersion: 2,
+      name: "plan_change.apply",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      planId: "00000000000000000000000001",
+      changeId: "00000000000000000000000004",
+      expectedChangeVersion: 1,
+      expectedPlanVersion: 2,
+      expectedPlanRevision: 2,
+      previewFingerprint: "b".repeat(64),
+    },
+    660_000,
+  ],
+  [
+    "plan.close",
+    {
+      schemaVersion: 2,
+      name: "plan.close",
+      commandId: "command-1",
+      requestDigest: "a".repeat(64),
+      planId: "00000000000000000000000001",
+      expectedPlanVersion: 2,
+      expectedPlanRevision: 2,
+      reason: "stopped",
+      actor: "athlete",
+    },
+    30_000,
+  ],
   [
     "getActivityAnalysis",
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
@@ -922,7 +1046,7 @@ describe("RPC receive and observers", () => {
       const request = parseCoachRpcEnvelope(text);
       received.push(request);
       if (!("id" in request) || !("method" in request)) return;
-      const results = {
+      const results: Partial<Record<CoachRpcMethodName, unknown>> = {
         chat: { text: "answer" },
         stopChat: { stopped: true },
         admitChatAttachment: {
