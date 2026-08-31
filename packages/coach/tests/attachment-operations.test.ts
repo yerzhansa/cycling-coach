@@ -208,8 +208,13 @@ describe("managed Chat attachment operations", () => {
         displayName: "Pasted image.png",
         bytes: png,
       }),
-    ).resolves.toMatchObject({ status: "accepted", attachmentId: "attachment-paste" });
+    ).resolves.toMatchObject({
+      displayName: "Pasted image.png",
+      status: "accepted",
+      attachmentId: "attachment-paste",
+    });
     await expect(repository.readAttachment("attachment-paste")).resolves.toMatchObject({
+      display_name: "Pasted image.png",
       kind: "image",
       status: "preprocessing",
     });

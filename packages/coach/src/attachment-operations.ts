@@ -69,6 +69,11 @@ const CAPACITY_LIMITS = {
   athleteBytes: CHAT_ATTACHMENT_LIMITS.athleteBytes,
 } as const;
 
+const PASTED_DISPLAY_NAME = Symbol("pasted-display-name");
+type InternalAdmissionRequest = AdmitChatAttachmentRequest & {
+  readonly [PASTED_DISPLAY_NAME]?: string;
+};
+
 function conversationKey(conversationId: string): string {
   return createHash("sha256").update(conversationId, "utf8").digest("hex");
 }
@@ -94,10 +99,13 @@ export function createManagedChatAttachmentOperations(
 
   const operations: ManagedChatAttachmentOperations = {
     async admit(request) {
-      const fallbackName = displayNameFromPath(request.candidate.sourcePath);
+      const internalRequest = request as InternalAdmissionRequest;
+      const pastedDisplayName = internalRequest[PASTED_DISPLAY_NAME];
+      const fallbackName = pastedDisplayName ?? displayNameFromPath(request.candidate.sourcePath);
       let source: Awaited<ReturnType<ManagedChatAttachmentStore["inspectNativeSource"]>>;
       try {
         source = await input.objects.inspectNativeSource(request.candidate.sourcePath);
+        if (pastedDisplayName !== undefined) source = { ...source, displayName: pastedDisplayName };
       } catch (error) {
         if (error instanceof ManagedAttachmentSourceError) {
           return rejected(request, fallbackName, error.reason);
@@ -250,12 +258,14 @@ export function createManagedChatAttachmentOperations(
         });
       }
       try {
-        return await operations.admit({
+        const request: InternalAdmissionRequest = {
           chatId,
           selectionId,
           source: "picker",
           candidate: { kind: "native-path", sourcePath: staged.sourcePath },
-        });
+          [PASTED_DISPLAY_NAME]: staged.displayName,
+        };
+        return await operations.admit(request);
       } finally {
         await input.objects.removeStagedSource(staged.sourcePath).catch(() => {});
       }

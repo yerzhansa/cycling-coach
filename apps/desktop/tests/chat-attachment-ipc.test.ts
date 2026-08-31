@@ -71,7 +71,10 @@ function capabilities(images: boolean): ChatAttachmentComposerReadModel {
       };
 }
 
-function setup(images = true) {
+function setup(
+  images = true,
+  filePaths: readonly string[] = ["/private/ride.fit", "/private/workout.zwo"],
+) {
   const handlers = new Map<string, Handler>();
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -83,17 +86,18 @@ function setup(images = true) {
   const dialog = {
     showOpenDialog: vi.fn(async () => ({
       canceled: false,
-      filePaths: ["/private/ride.fit", "/private/workout.zwo"],
+      filePaths,
     })),
   };
+  const admitPath = vi.fn<DesktopChatAttachmentClient["admitPath"]>(async (path, selectionId) => ({
+    selectionId,
+    displayName: path.endsWith(".fit") ? "ride.fit" : "workout.zwo",
+    status: "accepted" as const,
+    attachmentId: path.endsWith(".fit") ? "attachment-fit" : "attachment-zwo",
+  }));
   const client: DesktopChatAttachmentClient = {
     composer: vi.fn(async () => capabilities(images)),
-    admitPath: vi.fn(async (path, selectionId) => ({
-      selectionId,
-      displayName: path.endsWith(".fit") ? "ride.fit" : "workout.zwo",
-      status: "accepted" as const,
-      attachmentId: path.endsWith(".fit") ? "attachment-fit" : "attachment-zwo",
-    })),
+    admitPath,
     admitPasted: vi.fn(async ({ selectionId, displayName }) => ({
       selectionId,
       displayName,
@@ -119,6 +123,7 @@ function setup(images = true) {
     ipcMain,
     dialog,
     client,
+    admitPath,
     clipboard,
     dispose,
     trusted: { sender: webContents, senderFrame: mainFrame },
@@ -173,6 +178,19 @@ describe("desktop Chat attachment IPC", () => {
       dataBase64: Buffer.from([137, 80, 78, 71]).toString("base64"),
     });
     expect(JSON.stringify(pasted)).not.toContain("dataBase64");
+  });
+
+  it("admits only the first five native picker paths when the operating system returns more", async () => {
+    const paths = Array.from({ length: 6 }, (_, index) => `/private/ride-${index + 1}.fit`);
+    const value = setup(true, paths);
+
+    await expect(
+      value.handlers.get(DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL)!(value.trusted),
+    ).resolves.toHaveLength(5);
+    expect(value.client.admitPath).toHaveBeenCalledTimes(5);
+    expect(value.admitPath.mock.calls.map(([path]) => path)).toEqual(paths.slice(0, 5));
+    expect(value.admitPath.mock.calls.map(([, selectionId]) => selectionId)).toHaveLength(5);
+    expect(new Set(value.admitPath.mock.calls.map(([, selectionId]) => selectionId)).size).toBe(5);
   });
 
   it("rejects untrusted, malformed, and over-limit requests before admission", async () => {

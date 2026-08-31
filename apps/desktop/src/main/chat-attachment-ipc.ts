@@ -145,7 +145,9 @@ export function installDesktopChatAttachmentIpc(input: {
     ).capabilities;
     const selection = await input.dialog.showOpenDialog(window, pickerOptions(capabilities));
     if (selection.canceled || selection.filePaths.length === 0) return [];
-    const paths = DroppedPathsSchema.parse(selection.filePaths);
+    const paths = DroppedPathsSchema.parse(
+      selection.filePaths.slice(0, CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage),
+    );
     return admitPaths(client, paths, "picker");
   });
 
