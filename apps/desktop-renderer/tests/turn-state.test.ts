@@ -8,7 +8,7 @@ import {
   nextDrainGroup,
   reduceChatState,
   type ChatState,
-} from "../src/turn-state.js";
+} from "../src/turn-state";
 
 function started(requestKey = 1): ChatState {
   return reduceChatState(EMPTY_CHAT_STATE, {

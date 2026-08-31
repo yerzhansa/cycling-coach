@@ -1,10 +1,10 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { APP_VERSION } from "../../app-version.js";
-import type { DesktopUpdateState } from "../../update/controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { settingsStyles as styles } from "./styles.js";
+import { Button } from "../../components/ui/button";
+import { APP_VERSION } from "../../app-version";
+import type { DesktopUpdateState } from "../../update/controller";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
+import { settingsStyles as styles } from "./styles";
 
 interface UpdateCopy {
   readonly action: string | null;

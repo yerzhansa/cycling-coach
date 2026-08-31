@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
-import type { RideImportState } from "../ride-import.js";
-import type { EnduragentState } from "./store.js";
+import type { RideImportState } from "../ride-import";
+import type { EnduragentState } from "./store";
 
 export interface RideImportActions {
   choose(): void;

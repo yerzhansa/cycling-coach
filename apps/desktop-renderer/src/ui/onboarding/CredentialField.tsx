@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactElement } from "react";
-import type { DesktopCredentialSlot } from "../../onboarding/constants.js";
-import { registerCredentialDraft, releaseCredentialDraft } from "../../state/credential-drafts.js";
-import { SETUP_FIELD_CLASS, SETUP_LABEL_CLASS } from "./SetupCard.js";
+import type { DesktopCredentialSlot } from "../../onboarding/constants";
+import { registerCredentialDraft, releaseCredentialDraft } from "../../state/credential-drafts";
+import { SETUP_FIELD_CLASS, SETUP_LABEL_CLASS } from "./SetupCard";
 
 export function CredentialField(props: {
   readonly slot: DesktopCredentialSlot;

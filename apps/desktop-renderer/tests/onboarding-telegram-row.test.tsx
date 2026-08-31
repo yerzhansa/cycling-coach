@@ -1,20 +1,20 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { buttonVariants } from "../src/components/ui/button.js";
-import { cn } from "../src/lib/utils.js";
+import { buttonVariants } from "../src/components/ui/button";
+import { cn } from "../src/lib/utils";
 import type {
   TelegramControlStatus,
   TelegramSettingsAction,
   TelegramSettingsState,
-} from "../src/settings/telegram-controller.js";
-import { useEnduragentStore } from "../src/state/store.js";
+} from "../src/settings/telegram-controller";
+import { useEnduragentStore } from "../src/state/store";
 import {
   TELEGRAM_AVAILABILITY_COPY,
   TELEGRAM_CREATE_COPY,
   TELEGRAM_CREATE_TITLE,
   TELEGRAM_DELETE_COPY,
-} from "../src/ui/onboarding/copy.js";
+} from "../src/ui/onboarding/copy";
 import {
   mountWizard,
   panel,
@@ -24,7 +24,7 @@ import {
   setupCard,
   setupRow,
   testBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 const UNCONFIGURED: TelegramControlStatus = {
   channel: { desiredState: "disabled", state: "disabled" },

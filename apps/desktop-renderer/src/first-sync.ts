@@ -1,5 +1,5 @@
-import type { OnboardingCompletion } from "./onboarding/machine.js";
-import type { TrainingSyncCoordinator, TrainingSyncState } from "./training-sync.js";
+import type { OnboardingCompletion } from "./onboarding/machine";
+import type { TrainingSyncCoordinator, TrainingSyncState } from "./training-sync";
 
 export type FirstSyncState =
   | { readonly status: "idle" }

@@ -1,23 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import type {
   CredentialDeleteResult,
   CredentialRecoveryStatus,
   CredentialResetResult,
   DesktopCredentialId,
-} from "../src/onboarding/bridge.js";
+} from "../src/onboarding/bridge";
 import type {
   ChatGptStatus,
   ClaudeCliStatus,
   CredentialSlotStatus,
-} from "../src/onboarding/machine.js";
+} from "../src/onboarding/machine";
 import {
   credentialChangesBlocked,
   createCredentialSettingsController,
   type CredentialSettingsState,
   type CredentialSettingsView,
-} from "../src/settings/credential-controller.js";
+} from "../src/settings/credential-controller";
 
 function runtime(
   llm: RuntimeConfigSnapshot["llm"] = {

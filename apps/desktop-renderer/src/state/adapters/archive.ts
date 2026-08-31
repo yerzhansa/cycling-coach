@@ -1,4 +1,4 @@
-import type { ArchiveView, ArchiveViewState } from "../../archive/controller.js";
+import type { ArchiveView, ArchiveViewState } from "../../archive/controller";
 
 export interface ArchiveViewAdapter {
   readonly view: ArchiveView;

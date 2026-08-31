@@ -1,7 +1,7 @@
 import { UNKNOWN_CYCLING_TRAINING_CONTEXT, type RecentRide } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
-import type { TrainingContextViewState } from "../training-context/controller.js";
-import type { EnduragentState } from "./store.js";
+import type { TrainingContextViewState } from "../training-context/controller";
+import type { EnduragentState } from "./store";
 
 export const EMPTY_TRAINING_SURFACE: TrainingContextViewState = Object.freeze({
   status: "loading" as const,

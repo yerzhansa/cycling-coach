@@ -1,9 +1,9 @@
 import type { StateCreator } from "zustand";
-import type { OnboardingController, OnboardingSurfaceState } from "../onboarding/controller.js";
-import { createOnboardingState } from "../onboarding/machine.js";
-import { repairRequiredCredential } from "../settings/credential-controller.js";
-import { IDLE_RIDE_IMPORT } from "./ride-import-slice.js";
-import type { EnduragentState } from "./store.js";
+import type { OnboardingController, OnboardingSurfaceState } from "../onboarding/controller";
+import { createOnboardingState } from "../onboarding/machine";
+import { repairRequiredCredential } from "../settings/credential-controller";
+import { IDLE_RIDE_IMPORT } from "./ride-import-slice";
+import type { EnduragentState } from "./store";
 
 export const CLOSED_ONBOARDING: OnboardingSurfaceState = Object.freeze({
   open: false,

@@ -4,12 +4,12 @@ import {
   ADVANCED_MODEL_CREDENTIAL_SLOTS,
   ONBOARDING_STEP_IDS,
   PRIMARY_MODEL_CREDENTIAL_SLOTS,
-} from "../src/onboarding/constants.js";
+} from "../src/onboarding/constants";
 import {
   createOnboardingBridge,
   validateImportPaths,
   type DesktopOnboardingAuth,
-} from "../src/onboarding/bridge.js";
+} from "../src/onboarding/bridge";
 
 const SETUP_SOURCES = [
   "OnboardingWizard.tsx",

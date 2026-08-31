@@ -5,12 +5,12 @@ import {
   type CoachClient,
 } from "@enduragent/coach-client";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import {
   createAthleteSettingsController,
   type AthleteSettingsController,
   type AthleteSettingsView,
-} from "../src/settings/athlete-controller.js";
+} from "../src/settings/athlete-controller";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;

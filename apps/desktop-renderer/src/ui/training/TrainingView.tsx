@@ -16,26 +16,26 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Button } from "../../components/ui/button.js";
-import { rideImportStatusCopy } from "../../ride-import.js";
-import { rideImportStatusSuppressed } from "../../state/onboarding-slice.js";
+import { Button } from "../../components/ui/button";
+import { rideImportStatusCopy } from "../../ride-import";
+import { rideImportStatusSuppressed } from "../../state/onboarding-slice";
 import {
   setManualSyncFocusFallback,
   setManualSyncFocusTarget,
-} from "../../state/manual-sync-focus.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../state/manual-sync-focus";
+import { useEnduragentStore } from "../../state/store";
 import {
   sourceRestrictionSummary,
   STRAVA_RESTRICTION_DESKTOP_COPY,
-} from "../../training-context/manual-sync.js";
+} from "../../training-context/manual-sync";
 import {
   formatDateLabel,
   formatPercentage,
   formatSleepDuration,
   formatUtcTimestamp,
   formatWholeNumber,
-} from "../../training-context/format.js";
-import { Page } from "../shared/Page.js";
+} from "../../training-context/format";
+import { Page } from "../shared/Page";
 import {
   MAX_VISIBLE_PLAN_ITEMS,
   RIDE_IMPORT_DESCRIPTION,
@@ -43,16 +43,16 @@ import {
   WELLNESS_LABELS,
   stalenessCopy,
   trainingStatusCopy,
-} from "./copy.js";
-import { overviewStyles as styles } from "./overviewStyles.js";
-import { PowerProgressContent } from "./PowerProgressPanel.js";
-import { RecentRidesStatePanel, RideDetailView } from "./RideReview.js";
-import { WellnessSparkline } from "./WellnessSparkline.js";
-import { WorkoutArchiveExportControl } from "./TrainingExportControls.js";
+} from "./copy";
+import { overviewStyles as styles } from "./overviewStyles";
+import { PowerProgressContent } from "./PowerProgressPanel";
+import { RecentRidesStatePanel, RideDetailView } from "./RideReview";
+import { WellnessSparkline } from "./WellnessSparkline";
+import { WorkoutArchiveExportControl } from "./TrainingExportControls";
 import {
   STRAVA_RESTRICTION_CARD_ID,
   takeTrainingRestrictionFocusRequest,
-} from "./restriction-focus.js";
+} from "./restriction-focus";
 
 function Panel(props: {
   readonly name: string;

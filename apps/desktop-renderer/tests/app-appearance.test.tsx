@@ -1,13 +1,13 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "../src/app/App.js";
-import { EMPTY_CHAT_SURFACE } from "../src/state/chat-slice.js";
-import { resetChatStream } from "../src/state/chat-stream.js";
-import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { paletteCustomProperties, type ResolvedTheme } from "../src/theme/applyPalette.js";
-import { paletteById } from "../src/theme/palettes.js";
-import { matchMediaListenerCount, setPrefersDark } from "./matchmedia.js";
+import { App } from "../src/app/App";
+import { EMPTY_CHAT_SURFACE } from "../src/state/chat-slice";
+import { resetChatStream } from "../src/state/chat-stream";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { paletteCustomProperties, type ResolvedTheme } from "../src/theme/applyPalette";
+import { paletteById } from "../src/theme/palettes";
+import { matchMediaListenerCount, setPrefersDark } from "./matchmedia";
 
 const PALETTE_ID = "patrol";
 

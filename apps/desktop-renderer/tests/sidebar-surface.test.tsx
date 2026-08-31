@@ -3,21 +3,21 @@ import { resolve } from "node:path";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
+import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
 import {
   restoreManualSyncFocus,
   setManualSyncFocusTarget,
-} from "../src/state/manual-sync-focus.js";
-import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
-import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
-import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
-import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
-import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
-import { Sidebar } from "../src/ui/sidebar/Sidebar.js";
-import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restriction-focus.js";
-import { planReadModel } from "./plan-fixtures.js";
+} from "../src/state/manual-sync-focus";
+import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice";
+import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
+import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
+import { toManualSyncViewState } from "../src/training-context/manual-sync";
+import { Sidebar } from "../src/ui/sidebar/Sidebar";
+import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restriction-focus";
+import { planReadModel } from "./plan-fixtures";
 
 function stubActions(): ChatActions {
   return {
@@ -396,7 +396,7 @@ describe("sidebar styling", () => {
         readFile(resolve(import.meta.dirname, "..", "src", "ui", "sidebar", name), "utf8"),
       ),
     );
-    expect(sources.every((source) => source.includes("components/ui/button.js"))).toBe(true);
+    expect(sources.every((source) => source.includes("components/ui/button"))).toBe(true);
     expect(sources.join("\n")).not.toContain("Sidebar.module.css");
     expect(sources.join("\n")).not.toContain("font-mono");
   });

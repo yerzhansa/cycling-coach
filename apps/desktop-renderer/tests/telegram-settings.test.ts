@@ -8,7 +8,7 @@ import {
   type TelegramSettingsBridge,
   type TelegramSettingsState,
   type TelegramSettingsView,
-} from "../src/settings/telegram-controller.js";
+} from "../src/settings/telegram-controller";
 
 const DISABLED = Object.freeze({
   channel: { desiredState: "disabled", state: "disabled" },

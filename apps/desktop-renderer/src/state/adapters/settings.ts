@@ -1,26 +1,26 @@
 import type {
   AthleteSettingsState,
   AthleteSettingsView,
-} from "../../settings/athlete-controller.js";
+} from "../../settings/athlete-controller";
 import type {
   CredentialSettingsState,
   CredentialSettingsView,
-} from "../../settings/credential-controller.js";
+} from "../../settings/credential-controller";
 import type {
   ProviderModelSettingsState,
   ProviderModelSettingsView,
-} from "../../settings/provider-model-controller.js";
+} from "../../settings/provider-model-controller";
 import type {
   SessionSettingsState,
   SessionSettingsView,
-} from "../../settings/session-controller.js";
+} from "../../settings/session-controller";
 import {
   CLOSED_PANE,
   type AthleteSettingsPort,
   type CoachSettingsPort,
   type ConversationSettingsPort,
   type CredentialSettingsPort,
-} from "../settings-slice.js";
+} from "../settings-slice";
 
 export interface CoachSettingsAdapter {
   readonly view: ProviderModelSettingsView;

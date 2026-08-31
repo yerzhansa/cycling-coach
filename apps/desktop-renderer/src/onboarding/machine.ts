@@ -11,8 +11,8 @@ import {
   type DesktopCredentialSlot,
   type ChatGptLoginRefusalReason,
   type OnboardingStepId,
-} from "./constants.js";
-import { claudeCliIdentityLine } from "./credential-presentation.js";
+} from "./constants";
+import { claudeCliIdentityLine } from "./credential-presentation";
 
 const CHATGPT_SUBSCRIPTION_PROVIDER = KEYLESS_LLM_PROVIDERS[0];
 const CLAUDE_CLI_PROVIDER = KEYLESS_LLM_PROVIDERS[1];

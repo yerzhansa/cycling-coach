@@ -6,8 +6,8 @@ import {
   paletteCustomProperties,
   resolveTheme,
   type ResolvedTheme,
-} from "../src/theme/applyPalette.js";
-import { DEFAULT_PALETTE_ID, FIXED, PALETTES, paletteById } from "../src/theme/palettes.js";
+} from "../src/theme/applyPalette";
+import { DEFAULT_PALETTE_ID, FIXED, PALETTES, paletteById } from "../src/theme/palettes";
 import {
   APPEARANCE_STORAGE_KEY,
   PALETTE_STORAGE_KEY,
@@ -15,8 +15,8 @@ import {
   readStoredPaletteId,
   writeStoredAppearance,
   writeStoredPaletteId,
-} from "../src/theme/preferences.js";
-import { setPrefersDark } from "./matchmedia.js";
+} from "../src/theme/preferences";
+import { setPrefersDark } from "./matchmedia";
 
 const NON_PALETTE_TOKENS = new Set([
   "--r",

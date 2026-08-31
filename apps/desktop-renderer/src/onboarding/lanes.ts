@@ -3,15 +3,15 @@ import {
   AI_ROW_PREFIX,
   AI_ROW_UNSET,
   SETUP_LANE_LABELS,
-} from "../ui/onboarding/copy.js";
-import type { OnboardingLlmConfiguration, OnboardingLlmProviderConfiguration } from "./bridge.js";
-import { claudeCliPresentation } from "./credential-presentation.js";
+} from "../ui/onboarding/copy";
+import type { OnboardingLlmConfiguration, OnboardingLlmProviderConfiguration } from "./bridge";
+import { claudeCliPresentation } from "./credential-presentation";
 import {
   chatGptSignedIn,
   claudeCliReady,
   type OnboardingErrorCode,
   type OnboardingState,
-} from "./machine.js";
+} from "./machine";
 
 export const KEYLESS_SETUP_LANES = ["claude-cli", "openai-codex"] as const;
 

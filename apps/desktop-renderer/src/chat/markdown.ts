@@ -1,4 +1,4 @@
-import { COACH_RESPONSE_CODE_UNIT_LIMIT } from "./limits.js";
+import { COACH_RESPONSE_CODE_UNIT_LIMIT } from "./limits";
 
 export interface CoachMarkdownLimits {
   readonly sourceCharacters: number;

@@ -4,8 +4,8 @@ import {
   EMPTY_ARCHIVE_SURFACE,
   type ArchivedConversationList,
   type ArchiveViewState,
-} from "../src/archive/controller.js";
-import type { TranscriptPage } from "../src/chat/hydration.js";
+} from "../src/archive/controller";
+import type { TranscriptPage } from "../src/chat/hydration";
 
 const NEWER = "a".repeat(64);
 const OLDER = "b".repeat(64);

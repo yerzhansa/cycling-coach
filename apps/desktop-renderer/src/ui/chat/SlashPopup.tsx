@@ -1,7 +1,7 @@
 import type { ReactElement, RefObject } from "react";
-import type { SlashCommand } from "../../chat/commands.js";
-import { Popover, PopoverContent } from "../../components/ui/popover.js";
-import { cn } from "../../lib/utils.js";
+import type { SlashCommand } from "../../chat/commands";
+import { Popover, PopoverContent } from "../../components/ui/popover";
+import { cn } from "../../lib/utils";
 
 export function SlashPopup(props: {
   readonly open: boolean;

@@ -1,23 +1,23 @@
 import { Fragment, useEffect, useRef, type ReactElement, type RefObject } from "react";
-import { Button } from "../../components/ui/button.js";
-import type { DesktopCredentialId } from "../../onboarding/bridge.js";
-import { DESKTOP_CREDENTIAL_SLOTS } from "../../onboarding/constants.js";
-import { onboardingCredentialMutationActive } from "../../onboarding/controller.js";
-import { claudeCliPresentation } from "../../onboarding/credential-presentation.js";
-import { PLATFORM_COPY } from "../../platform-copy.js";
+import { Button } from "../../components/ui/button";
+import type { DesktopCredentialId } from "../../onboarding/bridge";
+import { DESKTOP_CREDENTIAL_SLOTS } from "../../onboarding/constants";
+import { onboardingCredentialMutationActive } from "../../onboarding/controller";
+import { claudeCliPresentation } from "../../onboarding/credential-presentation";
+import { PLATFORM_COPY } from "../../platform-copy";
 import type {
   CredentialSettingsEntry,
   CredentialSettingsState,
-} from "../../settings/credential-controller.js";
+} from "../../settings/credential-controller";
 import {
   credentialChangesBlocked,
   repairRequiredCredential,
-} from "../../settings/credential-controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { SetupRow } from "../onboarding/SetupRow.js";
-import { InlineConfirmation } from "../shared/InlineConfirmation.js";
-import { credentialRuntimeLabel } from "./copy.js";
+} from "../../settings/credential-controller";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
+import { SetupRow } from "../onboarding/SetupRow";
+import { InlineConfirmation } from "../shared/InlineConfirmation";
+import { credentialRuntimeLabel } from "./copy";
 
 export const SETUP_CREDENTIAL_EDIT_EVENT = "enduragent:edit-credential";
 

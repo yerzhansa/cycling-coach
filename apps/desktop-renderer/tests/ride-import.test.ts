@@ -9,7 +9,7 @@ import {
   subscribeToDroppedRideImports,
   type RideImportState,
   type RideImportTransport,
-} from "../src/ride-import.js";
+} from "../src/ride-import";
 
 function result(
   imported: number,

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 
-import { cn } from "../../lib/utils.js";
+import { cn } from "../../lib/utils";
 
 const popoverContentBaseClasses =
   "z-50 flex w-72 origin-(--transform-origin) flex-col gap-2.5 rounded-card border border-line-2 bg-popover p-row text-sm text-popover-foreground shadow-elev-3 outline-hidden duration-100";

@@ -4,7 +4,7 @@ import {
   type DesktopUpdateBridge,
   type DesktopUpdateState,
   type DesktopUpdateView,
-} from "../src/update/controller.js";
+} from "../src/update/controller";
 
 function setupController(initial: DesktopUpdateState = { status: "idle" }) {
   let listener: ((state: DesktopUpdateState) => void) | undefined;

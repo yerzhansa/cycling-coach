@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   INITIAL_SETUP_SETTLED_REPORT_ATTEMPTS,
   settleInitialSetupStatus,
-} from "../src/initial-setup-status.js";
+} from "../src/initial-setup-status";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

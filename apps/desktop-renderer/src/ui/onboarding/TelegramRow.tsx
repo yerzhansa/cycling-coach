@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import type {
   TelegramControlStatus,
   TelegramSettingsFeedback,
   TelegramSettingsState,
-} from "../../settings/telegram-controller.js";
-import { credentialChangesBlocked } from "../../settings/credential-controller.js";
-import { PLATFORM_COPY } from "../../platform-copy.js";
-import { settingsMutationActive, type TelegramSettingsPort } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../settings/telegram-controller";
+import { credentialChangesBlocked } from "../../settings/credential-controller";
+import { PLATFORM_COPY } from "../../platform-copy";
+import { settingsMutationActive, type TelegramSettingsPort } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
 import {
   TELEGRAM_AVAILABILITY_COPY,
   TELEGRAM_CREATE_COPY_AFTER_BOTFATHER,
@@ -18,9 +18,9 @@ import {
   TELEGRAM_OPTIONAL_LABEL,
   TELEGRAM_ROW_TITLE,
   TELEGRAM_VERIFIED_PREFIX,
-} from "./copy.js";
-import { InlineConfirmation, type InlineConfirmationFocus } from "../shared/InlineConfirmation.js";
-import { SetupRow, SetupSubPanel } from "./SetupRow.js";
+} from "./copy";
+import { InlineConfirmation, type InlineConfirmationFocus } from "../shared/InlineConfirmation";
+import { SetupRow, SetupSubPanel } from "./SetupRow";
 
 type TelegramPanel = "closed" | "token" | "delete";
 type TelegramAction = "paste-token" | "remove";

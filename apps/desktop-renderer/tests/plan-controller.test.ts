@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PlanReadSurfaceState } from "../src/state/plan-slice.js";
-import { createPlanController } from "../src/plan/controller.js";
+import type { PlanReadSurfaceState } from "../src/state/plan-slice";
+import { createPlanController } from "../src/plan/controller";
 
 const model = {
   schemaVersion: 1 as const,

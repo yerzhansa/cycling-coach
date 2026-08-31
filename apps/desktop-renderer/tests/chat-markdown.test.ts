@@ -3,7 +3,7 @@ import {
   DEFAULT_COACH_MARKDOWN_LIMITS,
   renderCoachMarkdown,
   type CoachMarkdownLimits,
-} from "../src/chat/markdown.js";
+} from "../src/chat/markdown";
 
 class FakeNode {
   readonly children: FakeNode[] = [];

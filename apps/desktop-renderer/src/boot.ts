@@ -5,57 +5,57 @@ import {
 } from "@enduragent/coach-client";
 import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
 import { flushSync } from "react-dom";
-import { createArchiveController } from "./archive/controller.js";
-import { createRideAnalysisController } from "./activity-analysis/controller.js";
-import { createChatController } from "./chat/controller.js";
-import { createDesktopCoachClientProvider } from "./coach-client.js";
-import { createFirstSyncController } from "./first-sync.js";
-import { createArchiveViewAdapter } from "./state/adapters/archive.js";
-import { createChatViewAdapter } from "./state/adapters/chat.js";
-import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
-import { createOnboardingViewAdapter } from "./state/adapters/onboarding.js";
-import { createPlanViewAdapter } from "./state/adapters/plan.js";
-import { createRideImportAdapter } from "./state/adapters/ride-import.js";
+import { createArchiveController } from "./archive/controller";
+import { createRideAnalysisController } from "./activity-analysis/controller";
+import { createChatController } from "./chat/controller";
+import { createDesktopCoachClientProvider } from "./coach-client";
+import { createFirstSyncController } from "./first-sync";
+import { createArchiveViewAdapter } from "./state/adapters/archive";
+import { createChatViewAdapter } from "./state/adapters/chat";
+import { createFirstSyncViewAdapter } from "./state/adapters/first-sync";
+import { createOnboardingViewAdapter } from "./state/adapters/onboarding";
+import { createPlanViewAdapter } from "./state/adapters/plan";
+import { createRideImportAdapter } from "./state/adapters/ride-import";
 import {
   createAthleteSettingsAdapter,
   createConversationSettingsAdapter,
   createCoachSettingsAdapter,
   createCredentialSettingsAdapter,
-} from "./state/adapters/settings.js";
-import { createSpendSettingsAdapter } from "./state/adapters/spend.js";
-import { createTelegramSettingsAdapter } from "./state/adapters/telegram.js";
-import { createManualSyncViewAdapter } from "./state/adapters/sync.js";
-import { createTrainingViewAdapter } from "./state/adapters/training.js";
-import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
-import { credentialDrafts } from "./state/credential-drafts.js";
-import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
-import { useEnduragentStore, type EnduragentState } from "./state/store.js";
-import { setupReady, setupSurfaceOnScreen } from "./state/onboarding-slice.js";
-import { nonTelegramSettingsMutationActive } from "./state/settings-slice.js";
-import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
-import { createOnboardingCompletionController } from "./onboarding/completion.js";
+} from "./state/adapters/settings";
+import { createSpendSettingsAdapter } from "./state/adapters/spend";
+import { createTelegramSettingsAdapter } from "./state/adapters/telegram";
+import { createManualSyncViewAdapter } from "./state/adapters/sync";
+import { createTrainingViewAdapter } from "./state/adapters/training";
+import { createUpdateSettingsAdapter } from "./state/adapters/update";
+import { credentialDrafts } from "./state/credential-drafts";
+import { restoreManualSyncFocus } from "./state/manual-sync-focus";
+import { useEnduragentStore, type EnduragentState } from "./state/store";
+import { setupReady, setupSurfaceOnScreen } from "./state/onboarding-slice";
+import { nonTelegramSettingsMutationActive } from "./state/settings-slice";
+import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge";
+import { createOnboardingCompletionController } from "./onboarding/completion";
 import {
   createOnboardingController,
   onboardingCredentialMutationActive,
-} from "./onboarding/controller.js";
-import { rendererPlatformProjection } from "./platform-copy.js";
-import { createTrainingContextController } from "./training-context/controller.js";
-import { createManualSyncController } from "./training-context/manual-sync.js";
-import { createTrainingSyncCoordinator } from "./training-sync.js";
-import { createSpendMeterController } from "./spend-meter/controller.js";
-import { createDesktopUpdateController } from "./update/controller.js";
-import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
-import { createAthleteSettingsController } from "./settings/athlete-controller.js";
-import { createSessionSettingsController } from "./settings/session-controller.js";
-import { createTelegramSettingsController } from "./settings/telegram-controller.js";
+} from "./onboarding/controller";
+import { rendererPlatformProjection } from "./platform-copy";
+import { createTrainingContextController } from "./training-context/controller";
+import { createManualSyncController } from "./training-context/manual-sync";
+import { createTrainingSyncCoordinator } from "./training-sync";
+import { createSpendMeterController } from "./spend-meter/controller";
+import { createDesktopUpdateController } from "./update/controller";
+import { createProviderModelSettingsController } from "./settings/provider-model-controller";
+import { createAthleteSettingsController } from "./settings/athlete-controller";
+import { createSessionSettingsController } from "./settings/session-controller";
+import { createTelegramSettingsController } from "./settings/telegram-controller";
 import {
   credentialChangesBlocked,
   createCredentialSettingsController,
-} from "./settings/credential-controller.js";
-import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
-import { createTrainingExportController } from "./training-export/controller.js";
-import { settleInitialSetupStatus } from "./initial-setup-status.js";
-import { createPlanController } from "./plan/controller.js";
+} from "./settings/credential-controller";
+import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import";
+import { createTrainingExportController } from "./training-export/controller";
+import { settleInitialSetupStatus } from "./initial-setup-status";
+import { createPlanController } from "./plan/controller";
 
 export type Disposer = () => void;
 

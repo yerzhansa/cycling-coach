@@ -9,7 +9,7 @@ import {
   type ActivityAnalysisResult,
   type ActivityAnalysisSection,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 
 export type RideAnalysisStatus =
   | "idle"

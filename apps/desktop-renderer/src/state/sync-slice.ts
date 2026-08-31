@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
-import type { ManualSyncViewState } from "../training-context/manual-sync.js";
-import type { EnduragentState } from "./store.js";
+import type { ManualSyncViewState } from "../training-context/manual-sync";
+import type { EnduragentState } from "./store";
 
 export interface SyncActions {
   request(kind: "keyboard" | "pointer"): void;

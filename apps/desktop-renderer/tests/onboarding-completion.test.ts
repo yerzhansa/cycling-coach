@@ -3,20 +3,20 @@ import type {
   OnboardingBridge,
   OnboardingLlmConfiguration,
   OnboardingLlmSelectionResult,
-} from "../src/onboarding/bridge.js";
+} from "../src/onboarding/bridge";
 import {
   createOnboardingCompletionController,
   type OnboardingCompletionStorage,
-} from "../src/onboarding/completion.js";
+} from "../src/onboarding/completion";
 import {
   createOnboardingController,
   onboardingStatusRetryDelayMs,
   ONBOARDING_STATUS_COLD_START_TIMEOUT_MS,
   ONBOARDING_STATUS_LOAD_ATTEMPTS,
   type OnboardingSurfaceState,
-} from "../src/onboarding/controller.js";
-import type { CredentialDraftPort } from "../src/onboarding/credentials.js";
-import type { OnboardingCompletion } from "../src/onboarding/machine.js";
+} from "../src/onboarding/controller";
+import type { CredentialDraftPort } from "../src/onboarding/credentials";
+import type { OnboardingCompletion } from "../src/onboarding/machine";
 
 const COLD_START_WINDOW_MS =
   ONBOARDING_STATUS_COLD_START_TIMEOUT_MS * ONBOARDING_STATUS_LOAD_ATTEMPTS +

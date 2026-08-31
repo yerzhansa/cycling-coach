@@ -1,4 +1,4 @@
-import type { Appearance } from "./applyPalette.js";
+import type { Appearance } from "./applyPalette";
 
 export function publishNativeAppearance(appearance: Appearance): void {
   try {

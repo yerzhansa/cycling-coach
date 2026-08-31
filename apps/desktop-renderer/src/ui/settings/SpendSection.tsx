@@ -1,9 +1,9 @@
 import type { SpendRouteSummary, SpendSummary } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { currency, notionalSpendCopy, routeSpendCopy } from "../../state/adapters/spend.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { settingsStyles as styles } from "./styles.js";
+import { Button } from "../../components/ui/button";
+import { currency, notionalSpendCopy, routeSpendCopy } from "../../state/adapters/spend";
+import { useEnduragentStore } from "../../state/store";
+import { settingsStyles as styles } from "./styles";
 
 function localDateLabel(value: string): string {
   const [, month, day] = value.split("-").map(Number);

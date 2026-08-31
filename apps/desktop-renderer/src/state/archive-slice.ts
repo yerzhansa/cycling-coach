@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
-import { EMPTY_ARCHIVE_SURFACE, type ArchiveViewState } from "../archive/controller.js";
-import type { EnduragentState } from "./store.js";
+import { EMPTY_ARCHIVE_SURFACE, type ArchiveViewState } from "../archive/controller";
+import type { EnduragentState } from "./store";
 
 export interface ArchiveActions {
   refresh(): void;

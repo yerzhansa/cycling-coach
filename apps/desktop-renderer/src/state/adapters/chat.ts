@@ -1,6 +1,6 @@
 import type { CoachDecisionReadModel, TranscriptPageEntry } from "@enduragent/coach-contract";
-import type { ChatView, ChatViewControls } from "../../chat/controller.js";
-import type { ChatState } from "../../turn-state.js";
+import type { ChatView, ChatViewControls } from "../../chat/controller";
+import type { ChatState } from "../../turn-state";
 import {
   EMPTY_CHAT_SURFACE,
   sameChatMessages,
@@ -12,13 +12,13 @@ import {
   type ChatTranscriptItemView,
   type ChatQueuedView,
   type ChatSurfaceState,
-} from "../chat-slice.js";
+} from "../chat-slice";
 import {
   chatScrollAnchor,
   chatStreamBuffer,
   type ChatScrollAnchor,
   type ChatStreamBuffer,
-} from "../chat-stream.js";
+} from "../chat-stream";
 
 type StreamAction =
   | { readonly kind: "append"; readonly messageId: string; readonly delta: string }

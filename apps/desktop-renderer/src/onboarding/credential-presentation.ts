@@ -1,6 +1,6 @@
-import type { ClaudeCliState } from "./constants.js";
-import type { ClaudeCliStatus, CredentialSlotStatus } from "./machine.js";
-import { PLATFORM_COPY } from "../platform-copy.js";
+import type { ClaudeCliState } from "./constants";
+import type { ClaudeCliStatus, CredentialSlotStatus } from "./machine";
+import { PLATFORM_COPY } from "../platform-copy";
 
 export const CLAUDE_CLI_API_KEY_IDENTITY =
   "Using Anthropic API key billing - usage is charged to your API account.";

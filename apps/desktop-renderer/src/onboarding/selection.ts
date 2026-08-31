@@ -3,9 +3,9 @@ import type {
   OnboardingLlmEndpointSelection,
   OnboardingLlmProviderConfiguration,
   OnboardingLlmSelection,
-} from "./bridge.js";
-import { CUSTOM_MODEL_SELECTION } from "./constants.js";
-import type { ChatGptStatus, CredentialSlotStatus, OnboardingErrorCode } from "./machine.js";
+} from "./bridge";
+import { CUSTOM_MODEL_SELECTION } from "./constants";
+import type { ChatGptStatus, CredentialSlotStatus, OnboardingErrorCode } from "./machine";
 
 export interface LlmSelectionDraft {
   readonly provider: OnboardingLlmProviderConfiguration;

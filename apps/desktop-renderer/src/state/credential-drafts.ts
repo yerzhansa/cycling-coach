@@ -1,4 +1,4 @@
-import type { CredentialDraftPort, TransientPasswordInput } from "../onboarding/credentials.js";
+import type { CredentialDraftPort, TransientPasswordInput } from "../onboarding/credentials";
 
 const inputs = new Map<string, HTMLInputElement>();
 

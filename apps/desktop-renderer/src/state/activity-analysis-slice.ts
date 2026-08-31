@@ -3,8 +3,8 @@ import type { ActivityAnalysisSection } from "@enduragent/coach-contract";
 import {
   EMPTY_RIDE_ANALYSIS,
   type RideAnalysisViewState,
-} from "../activity-analysis/controller.js";
-import type { EnduragentState } from "./store.js";
+} from "../activity-analysis/controller";
+import type { EnduragentState } from "./store";
 
 export interface RideAnalysisActions {
   refresh(sections: readonly ActivityAnalysisSection[]): void;

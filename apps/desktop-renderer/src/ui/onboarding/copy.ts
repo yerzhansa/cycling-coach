@@ -1,7 +1,7 @@
-import type { ChatGptLoginRefusalReason } from "../../onboarding/constants.js";
-import type { SetupLane } from "../../onboarding/lanes.js";
-import type { ChatGptUiPhase, OnboardingErrorCode } from "../../onboarding/machine.js";
-import { PLATFORM_COPY } from "../../platform-copy.js";
+import type { ChatGptLoginRefusalReason } from "../../onboarding/constants";
+import type { SetupLane } from "../../onboarding/lanes";
+import type { ChatGptUiPhase, OnboardingErrorCode } from "../../onboarding/machine";
+import { PLATFORM_COPY } from "../../platform-copy";
 
 export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "credential-required": "Sign in with ChatGPT or add at least one model key to continue.",

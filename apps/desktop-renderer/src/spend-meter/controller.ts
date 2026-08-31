@@ -1,5 +1,5 @@
 import type { SpendSummary } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 
 export const SPEND_REFRESH_INTERVAL_MS = 30_000;
 

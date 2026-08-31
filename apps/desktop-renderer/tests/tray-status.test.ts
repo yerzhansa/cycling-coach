@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presentTrayTelegramStatus } from "../src/tray-status.js";
+import { presentTrayTelegramStatus } from "../src/tray-status";
 
 describe("tray Telegram status", () => {
   it.each([

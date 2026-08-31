@@ -8,10 +8,10 @@ import type {
   PlanHandoffSuggestion,
 } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
-import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration.js";
-import type { FirstSyncState } from "../first-sync.js";
-import type { ChatStatus, ChatTranscriptMessage, SessionResetPhase } from "../turn-state.js";
-import type { EnduragentState } from "./store.js";
+import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration";
+import type { FirstSyncState } from "../first-sync";
+import type { ChatStatus, ChatTranscriptMessage, SessionResetPhase } from "../turn-state";
+import type { EnduragentState } from "./store";
 
 export interface ChatMessageView {
   readonly id: string;

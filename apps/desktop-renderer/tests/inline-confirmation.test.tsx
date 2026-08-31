@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { useRef, useState, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { buttonVariants } from "../src/components/ui/button.js";
-import { cn } from "../src/lib/utils.js";
-import { InlineConfirmation } from "../src/ui/shared/InlineConfirmation.js";
+import { buttonVariants } from "../src/components/ui/button";
+import { cn } from "../src/lib/utils";
+import { InlineConfirmation } from "../src/ui/shared/InlineConfirmation";
 
 function ReturnFocusHarness(): ReactElement {
   const trigger = useRef<HTMLButtonElement>(null);

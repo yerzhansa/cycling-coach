@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OnboardingBridge } from "../src/onboarding/bridge.js";
+import type { OnboardingBridge } from "../src/onboarding/bridge";
 import {
   chooseLane,
   mountWizard,
@@ -16,7 +16,7 @@ import {
   setupCard,
   testBridge,
   type TestBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 function expectOnePoweringRow(subtitle: string): void {
   expect(rowState("ai")).toBe("ready");

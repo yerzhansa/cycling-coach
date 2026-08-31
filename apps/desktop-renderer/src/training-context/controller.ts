@@ -10,7 +10,7 @@ import {
   type Freshness,
   type UnitsPreference,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../coach-client.js";
+import type { DesktopCoachClientProvider } from "../coach-client";
 
 export type TrainingContextStatus = "loading" | "ready" | "unavailable" | "refresh-unavailable";
 

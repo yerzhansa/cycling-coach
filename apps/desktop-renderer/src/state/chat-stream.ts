@@ -1,4 +1,4 @@
-import type { TranscriptHydrationChange } from "../chat/hydration.js";
+import type { TranscriptHydrationChange } from "../chat/hydration";
 
 export const CHAT_FOLLOW_LATEST_THRESHOLD = 80;
 export const CHAT_AUTO_LOAD_EARLIER_THRESHOLD = 32;

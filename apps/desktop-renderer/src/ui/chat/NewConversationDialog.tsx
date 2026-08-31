@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import {
   Dialog,
   DialogClose,
@@ -8,10 +8,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../../components/ui/dialog.js";
-import { PLATFORM_COPY } from "../../platform-copy.js";
-import { focusNewConversationOpener } from "../../state/new-conversation-opener.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../components/ui/dialog";
+import { PLATFORM_COPY } from "../../platform-copy";
+import { focusNewConversationOpener } from "../../state/new-conversation-opener";
+import { useEnduragentStore } from "../../state/store";
 
 const BASE_COPY =
   "Your visible conversation will be cleared. Your training data and saved coach memory will remain.";

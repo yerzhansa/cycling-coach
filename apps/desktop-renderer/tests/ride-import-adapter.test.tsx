@@ -7,13 +7,13 @@ import {
   type RideImportOwner,
   type RideImportState,
   type RideImportTransport,
-} from "../src/ride-import.js";
-import { createRideImportAdapter } from "../src/state/adapters/ride-import.js";
-import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
-import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
-import { TrainingView } from "../src/ui/training/TrainingView.js";
+} from "../src/ride-import";
+import { createRideImportAdapter } from "../src/state/adapters/ride-import";
+import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
+import { TrainingView } from "../src/ui/training/TrainingView";
 
 const PATHS = ["/rides/tuesday.fit"] as const;
 

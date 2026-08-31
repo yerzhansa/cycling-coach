@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { CoachClientDisconnectedError, type CoachClient } from "@enduragent/coach-client";
 import type { AthleteState, CyclingTrainingContext } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import {
   createTrainingContextController,
   type TrainingContextViewState,
-} from "../src/training-context/controller.js";
+} from "../src/training-context/controller";
 import {
   formatDateLabel,
   formatPercentage,
   formatSleepDuration,
   formatUtcTimestamp,
   formatWholeNumber,
-} from "../src/training-context/format.js";
+} from "../src/training-context/format";
 
 const context: CyclingTrainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },

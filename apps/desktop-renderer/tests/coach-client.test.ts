@@ -5,7 +5,7 @@ import {
   type CoachClient,
   type ConnectCoachClientOptions,
 } from "@enduragent/coach-client";
-import { createDesktopCoachClientProvider } from "../src/coach-client.js";
+import { createDesktopCoachClientProvider } from "../src/coach-client";
 
 function capability(fill: string, suffix = "A"): string {
   return `${fill.repeat(42)}${suffix}`;

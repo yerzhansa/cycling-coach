@@ -2,8 +2,8 @@ import type { ActivityAnalysisData, RecentRide } from "@enduragent/coach-contrac
 import { render, screen, within } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it } from "vitest";
-import type { RideAnalysisViewState } from "../src/activity-analysis/controller.js";
-import { RideDetailView } from "../src/ui/training/RideReview.js";
+import type { RideAnalysisViewState } from "../src/activity-analysis/controller";
+import { RideDetailView } from "../src/ui/training/RideReview";
 
 const ride: RecentRide = {
   id: "a".repeat(64),

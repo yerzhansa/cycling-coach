@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 
 export type InlineConfirmationFocus = "cancel" | "confirm" | null;
 

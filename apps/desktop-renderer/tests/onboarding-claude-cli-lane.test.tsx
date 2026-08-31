@@ -1,11 +1,11 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
-import type { ClaudeCliState } from "../src/onboarding/constants.js";
-import { claudeCliPresentation } from "../src/onboarding/credential-presentation.js";
-import type { ClaudeCliStatus } from "../src/onboarding/machine.js";
-import { useEnduragentStore } from "../src/state/store.js";
+import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge";
+import type { ClaudeCliState } from "../src/onboarding/constants";
+import { claudeCliPresentation } from "../src/onboarding/credential-presentation";
+import type { ClaudeCliStatus } from "../src/onboarding/machine";
+import { useEnduragentStore } from "../src/state/store";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -19,7 +19,7 @@ import {
   setupRow,
   testBridge,
   type TestBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 const CLAUDE_CLI_CONFIGURATION: OnboardingLlmConfiguration = {
   schemaVersion: 1,

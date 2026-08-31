@@ -1,5 +1,5 @@
 import type { PlanNavigationTarget, PlanningReadModel } from "@enduragent/coach-contract";
-import type { PlanReadSurfaceState } from "../state/plan-slice.js";
+import type { PlanReadSurfaceState } from "../state/plan-slice";
 
 export interface PlanController {
   start(): Promise<void>;

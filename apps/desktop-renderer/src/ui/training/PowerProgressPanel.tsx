@@ -4,14 +4,14 @@ import {
   formatDateLabel,
   formatUtcTimestamp,
   formatWholeNumber,
-} from "../../training-context/format.js";
+} from "../../training-context/format";
 import {
   POWER_PROGRESS_FRESHNESS_COPY,
   POWER_PROGRESS_REFRESH_FAILURE_COPY,
   POWER_PROGRESS_ROTATION_COPY,
   POWER_PROGRESS_UNAVAILABLE_COPY,
-} from "./copy.js";
-import { overviewStyles as styles } from "./overviewStyles.js";
+} from "./copy";
+import { overviewStyles as styles } from "./overviewStyles";
 
 const POWER_DURATION_LABELS = new Map<number, string>([
   [5, "5 sec"],

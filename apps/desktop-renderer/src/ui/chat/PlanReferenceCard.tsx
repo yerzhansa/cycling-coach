@@ -4,9 +4,9 @@ import type {
   PlanWorkoutReadModel,
 } from "@enduragent/coach-contract";
 import type { ReactElement, ReactNode } from "react";
-import { Button } from "../../components/ui/button.js";
-import { projectPlanChatCard } from "../../plan/chat-card.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { projectPlanChatCard } from "../../plan/chat-card";
+import { useEnduragentStore } from "../../state/store";
 
 function dateLabel(dateKey: number): string {
   const value = String(dateKey);

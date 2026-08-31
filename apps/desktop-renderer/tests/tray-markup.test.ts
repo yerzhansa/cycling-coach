@@ -38,7 +38,7 @@ describe("tray popover markup", () => {
     expect(html).not.toContain("tray.css");
     expect(html).toContain("dark:");
     expect(html).toContain("motion-reduce:transition-none");
-    expect(script).toContain('from "./tray-status.js"');
+    expect(script).toContain('from "./tray-status"');
     expect(script).toContain("window.enduragentTray.onTelegramStatus");
     expect(script).toContain('event.key === "Escape"');
     expect(source).not.toMatch(

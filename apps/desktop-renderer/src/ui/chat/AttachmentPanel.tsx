@@ -12,8 +12,8 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
 
 function bytes(value: number): string {
   if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MB`;

@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { TRANSCRIPT_HYDRATION_FAILURE_COPY } from "../../chat/hydration.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { TRANSCRIPT_HYDRATION_FAILURE_COPY } from "../../chat/hydration";
+import { useEnduragentStore } from "../../state/store";
 
 export function HistoryControls(): ReactElement {
   const status = useEnduragentStore((state) => state.chat.hydrationStatus);

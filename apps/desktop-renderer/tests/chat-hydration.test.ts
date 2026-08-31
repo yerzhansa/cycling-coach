@@ -6,8 +6,8 @@ import {
   type TranscriptHydrationSnapshot,
   type TranscriptPage,
   type TranscriptTurn,
-} from "../src/chat/hydration.js";
-import type { ChatTranscriptMessage } from "../src/turn-state.js";
+} from "../src/chat/hydration";
+import type { ChatTranscriptMessage } from "../src/turn-state";
 
 function turn(turnId: string): TranscriptTurn {
   return {

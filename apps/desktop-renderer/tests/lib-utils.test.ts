@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cn } from "../src/lib/utils.js";
+import { cn } from "../src/lib/utils";
 
 describe("Tailwind class merging", () => {
   it("lets later utilities override app theme tokens", () => {

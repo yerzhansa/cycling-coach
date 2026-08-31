@@ -12,11 +12,11 @@ import {
   type RefObject,
 } from "react";
 import { ArrowUp, Paperclip, Square } from "lucide-react";
-import { filterSlashCommands } from "../../chat/commands.js";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { setupReady } from "../../state/onboarding-slice.js";
-import { SlashPopup } from "./SlashPopup.js";
+import { filterSlashCommands } from "../../chat/commands";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
+import { setupReady } from "../../state/onboarding-slice";
+import { SlashPopup } from "./SlashPopup";
 
 export interface ComposerHandle {
   focus(): void;

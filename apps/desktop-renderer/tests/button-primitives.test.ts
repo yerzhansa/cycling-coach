@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buttonVariants } from "../src/components/ui/button.js";
+import { buttonVariants } from "../src/components/ui/button";
 
 const themeRoot = resolve(import.meta.dirname, "..", "src", "theme");
 

@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { SetupPanel } from "../ui/onboarding/OnboardingWizard.js";
+import { SetupPanel } from "../ui/onboarding/OnboardingWizard";
 
 export function SetupGate(): ReactElement {
   return (

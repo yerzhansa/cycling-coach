@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { cn } from "../../lib/utils.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { setupReady } from "../../state/onboarding-slice.js";
+import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
+import { useEnduragentStore } from "../../state/store";
+import { setupReady } from "../../state/onboarding-slice";
 
 export function QueuedMessages(): ReactElement | null {
   const queued = useEnduragentStore((state) => state.chat.queued);

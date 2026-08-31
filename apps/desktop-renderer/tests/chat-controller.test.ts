@@ -27,10 +27,10 @@ import {
   NEW_CONVERSATION_UNCERTAIN_COPY,
   type ChatViewControls,
   createChatController,
-} from "../src/chat/controller.js";
-import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits.js";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
+} from "../src/chat/controller";
+import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
+import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state";
 
 function envelope(
   event: TurnEvent,

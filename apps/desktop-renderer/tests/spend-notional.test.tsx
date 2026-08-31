@@ -4,8 +4,8 @@ import {
   createSpendSettingsAdapter,
   notionalSpendCopy,
   routeSpendCopy,
-} from "../src/state/adapters/spend.js";
-import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
+} from "../src/state/adapters/spend";
+import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
 
 function route(overrides: Partial<SpendRouteSummary> = {}): SpendRouteSummary {
   return {

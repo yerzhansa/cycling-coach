@@ -15,8 +15,8 @@ import type {
   SyncRpcResult,
 } from "@enduragent/coach-contract";
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import { createTrainingSyncCoordinator, type TrainingSyncState } from "../src/training-sync.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
+import { createTrainingSyncCoordinator, type TrainingSyncState } from "../src/training-sync";
 
 type SyncOptions = CoachClientCallOptions<"sync">;
 

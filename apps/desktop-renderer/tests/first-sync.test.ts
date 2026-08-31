@@ -5,22 +5,22 @@ import type {
   SyncRpcResult,
 } from "@enduragent/coach-contract";
 import { describe, expect, it, vi, type Mock } from "vitest";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import {
   createFirstSyncController,
   type FirstSyncPorts,
   type FirstSyncState,
-} from "../src/first-sync.js";
+} from "../src/first-sync";
 import {
   createManualSyncController,
   type ManualSyncViewState,
-} from "../src/training-context/manual-sync.js";
+} from "../src/training-context/manual-sync";
 import {
   createTrainingSyncCoordinator,
   type TrainingSyncCoordinator,
   type TrainingSyncState,
   type TrainingSyncStateListener,
-} from "../src/training-sync.js";
+} from "../src/training-sync";
 
 const completion = {
   providerConfigured: true,

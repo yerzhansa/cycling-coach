@@ -4,10 +4,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanActiveProjectionDataSchema } from "@enduragent/coach-contract";
-import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { PlanView } from "../src/ui/plan/PlanView.js";
-import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures.js";
+import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { PlanView } from "../src/ui/plan/PlanView";
+import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures";
 
 function actions(): PlanActions {
   return {

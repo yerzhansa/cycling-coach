@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { formatWholeNumber } from "../../training-context/format.js";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
+import { formatWholeNumber } from "../../training-context/format";
 
 function ContextSection(props: {
   readonly label: string;

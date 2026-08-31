@@ -2,19 +2,19 @@ import { Menu } from "@base-ui/react/menu";
 import { isKeylessProvider } from "@enduragent/coach-contract";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Button, buttonVariants } from "../../components/ui/button.js";
-import { cn } from "../../lib/utils.js";
+import { Button, buttonVariants } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
 import {
   CUSTOM_MODEL_SELECTION,
   DESKTOP_CREDENTIAL_SLOTS,
   ONBOARDING_LLM_PROVIDER_LABELS,
-} from "../../onboarding/constants.js";
+} from "../../onboarding/constants";
 import {
   setupStatusKnown,
   type OnboardingActions,
   type OnboardingSurfaceState,
-} from "../../onboarding/controller.js";
-import { chatGptReady, chatGptSignedIn, chatGptUiPhase } from "../../onboarding/machine.js";
+} from "../../onboarding/controller";
+import { chatGptReady, chatGptSignedIn, chatGptUiPhase } from "../../onboarding/machine";
 import {
   aiRowCopy,
   apiKeyProviders,
@@ -23,24 +23,24 @@ import {
   laneForProvider,
   offeredLanes,
   type SetupLane,
-} from "../../onboarding/lanes.js";
-import { llmSelectionFromDraft, type LlmSelectionDraft } from "../../onboarding/selection.js";
+} from "../../onboarding/lanes";
+import { llmSelectionFromDraft, type LlmSelectionDraft } from "../../onboarding/selection";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../components/ui/select.js";
+} from "../../components/ui/select";
 import {
   credentialChangesBlocked,
   repairRequiredCredential,
-} from "../../settings/credential-controller.js";
+} from "../../settings/credential-controller";
 import {
   nonTelegramSettingsMutationActive,
   settingsMutationActive,
-} from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
 import {
   AI_CANCEL_LABEL,
   AI_PANEL_ANNOUNCEMENTS,
@@ -63,24 +63,24 @@ import {
   SETUP_LANE_MENU_HINTS,
   SETUP_MENU_LABEL,
   SETUP_ROW_CHECKING_SUBTITLE,
-} from "./copy.js";
-import { CredentialField } from "./CredentialField.js";
-import { InfoTip } from "./InfoTip.js";
+} from "./copy";
+import { CredentialField } from "./CredentialField";
+import { InfoTip } from "./InfoTip";
 import {
   CredentialDeleteButton,
   CredentialDeleteConfirmation,
   SETUP_CREDENTIAL_EDIT_EVENT,
   desktopCredentialId,
   type SetupCredentialEditDetail,
-} from "../settings/CredentialsSection.js";
+} from "../settings/CredentialsSection";
 import {
   SETUP_FIELD_CLASS,
   SETUP_HINT_CLASS,
   SETUP_LABEL_CLASS,
   SETUP_SELECT_CLASS,
-} from "./SetupCard.js";
-import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
-import type { SetupPlacement } from "./OnboardingWizard.js";
+} from "./SetupCard";
+import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow";
+import type { SetupPlacement } from "./OnboardingWizard";
 
 const ENDPOINT_MODE_COPY = [
   ["automatic", "Keep current, or use provider default"],

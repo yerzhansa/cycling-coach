@@ -1,15 +1,15 @@
 import { useEffect, type ReactElement } from "react";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { Page } from "../shared/Page.js";
-import { SetupPanel } from "../onboarding/OnboardingWizard.js";
-import { ApplicationSection } from "./ApplicationSection.js";
-import { CoachSection } from "./CoachSection.js";
-import { ConversationSection } from "./ConversationSection.js";
-import { PreferencesSection } from "./PreferencesSection.js";
-import { SpendSection } from "./SpendSection.js";
-import { TelegramSection } from "./TelegramSection.js";
-import { TrainingAccountSection } from "./TrainingAccountSection.js";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
+import { Page } from "../shared/Page";
+import { SetupPanel } from "../onboarding/OnboardingWizard";
+import { ApplicationSection } from "./ApplicationSection";
+import { CoachSection } from "./CoachSection";
+import { ConversationSection } from "./ConversationSection";
+import { PreferencesSection } from "./PreferencesSection";
+import { SpendSection } from "./SpendSection";
+import { TelegramSection } from "./TelegramSection";
+import { TrainingAccountSection } from "./TrainingAccountSection";
 
 export function SettingsView(): ReactElement {
   const ports = useEnduragentStore((store) => store.settingsPorts);

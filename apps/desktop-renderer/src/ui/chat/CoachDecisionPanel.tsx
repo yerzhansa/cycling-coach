@@ -9,8 +9,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
 } from "react";
-import { Button } from "../../components/ui/button.js";
-import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button";
+import { useEnduragentStore } from "../../state/store";
 import type { CoachDecisionAnswer, CoachDecisionReadModel } from "@enduragent/coach-contract";
 
 export function CoachDecisionPanel(props: {

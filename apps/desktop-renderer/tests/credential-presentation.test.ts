@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CLAUDE_CLI_STATES } from "../src/onboarding/constants.js";
+import { CLAUDE_CLI_STATES } from "../src/onboarding/constants";
 import {
   claudeCliIdentityLine,
   claudeCliPresentation,
   credentialPresentation,
-} from "../src/onboarding/credential-presentation.js";
-import type { CredentialSlotStatus } from "../src/onboarding/machine.js";
+} from "../src/onboarding/credential-presentation";
+import type { CredentialSlotStatus } from "../src/onboarding/machine";
 
 describe("credential status presentation", () => {
   it("presents active, stored inactive, and failed credentials as distinct states", () => {

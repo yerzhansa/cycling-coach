@@ -4,15 +4,15 @@ import type {
   PlanHydrationState,
   PlanProgressEvent,
 } from "@enduragent/coach-contract";
-import type { DesktopCoachClientProvider } from "../src/coach-client.js";
+import type { DesktopCoachClientProvider } from "../src/coach-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPlanViewAdapter, type PlanBridge } from "../src/state/adapters/plan.js";
+import { createPlanViewAdapter, type PlanBridge } from "../src/state/adapters/plan";
 import {
   EMPTY_PLAN_SURFACE,
   type PlanSurfaceState,
   type PlanTransitionState,
-} from "../src/state/plan-slice.js";
-import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures.js";
+} from "../src/state/plan-slice";
+import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

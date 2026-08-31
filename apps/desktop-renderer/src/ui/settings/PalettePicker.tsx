@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
-import { cn } from "../../lib/utils.js";
-import { useEnduragentStore } from "../../state/store.js";
-import { PALETTES } from "../../theme/palettes.js";
+import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
+import { useEnduragentStore } from "../../state/store";
+import { PALETTES } from "../../theme/palettes";
 
 export function PalettePicker(): ReactElement {
   const paletteId = useEnduragentStore((state) => state.paletteId);

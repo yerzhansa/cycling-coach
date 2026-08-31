@@ -6,10 +6,10 @@ import {
   ONBOARDING_STATUS_COLD_START_TIMEOUT_MS,
   ONBOARDING_STATUS_LOAD_ATTEMPTS,
   ONBOARDING_STATUS_RETRY_BASE_DELAY_MS,
-} from "../src/onboarding/controller.js";
-import { setupReady } from "../src/state/onboarding-slice.js";
-import { useEnduragentStore } from "../src/state/store.js";
-import { SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
+} from "../src/onboarding/controller";
+import { setupReady } from "../src/state/onboarding-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { SetupPanel } from "../src/ui/onboarding/OnboardingWizard";
 import {
   control,
   mountWizard,
@@ -18,7 +18,7 @@ import {
   selectSetupOption,
   setTelegramSettings,
   testBridge,
-} from "./onboarding-harness.js";
+} from "./onboarding-harness";
 
 const savedIntake = {
   swim_skill_floor: null,

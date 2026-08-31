@@ -1,17 +1,17 @@
 import type { ReactElement } from "react";
-import { Button } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button";
 import type {
   SessionSettingsFormState,
   SessionSettingsState,
-} from "../../settings/session-controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
-import { useEnduragentStore } from "../../state/store.js";
+} from "../../settings/session-controller";
+import { settingsMutationActive } from "../../state/settings-slice";
+import { useEnduragentStore } from "../../state/store";
 import {
   CONVERSATION_FIELDS,
   MANAGED_BY_ENVIRONMENT_COPY,
   conversationSaveErrorCopy,
-} from "./copy.js";
-import { settingsStyles as styles } from "./styles.js";
+} from "./copy";
+import { settingsStyles as styles } from "./styles";
 
 function formState(state: SessionSettingsState): SessionSettingsFormState | null {
   if (
