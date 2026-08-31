@@ -14,7 +14,6 @@ import type {
   PlanningRequestOperations,
   PlanProgressEvent,
   TelegramControlSnapshot,
-  TurnEvent,
 } from "@enduragent/coach-contract";
 import { acquireWriteLock } from "../../../../packages/kernel-node/src/lock/index.js";
 import { createHealthzRequestHandler } from "../../../../packages/coach/src/daemon/healthz-server.js";
@@ -26,6 +25,10 @@ import { SESSION_TIMEZONE_PIN_FILE_NAME } from "../../src/main/session-timezone-
 
 export interface DesktopFixtureScript {
   readonly onRequest: (request: unknown) => readonly string[] | Promise<readonly string[]>;
+  readonly onStreamRequest?: (
+    request: unknown,
+    emitFrame: (frame: string) => void,
+  ) => string | Promise<string>;
 }
 
 export interface DesktopFixturePaths {
@@ -129,6 +132,30 @@ async function scripted(
 ): Promise<readonly unknown[]> {
   const request: ScriptRequest = { jsonrpc: "2.0", method, params };
   return parseScriptFrames(await script.onRequest(request));
+}
+
+async function scriptedStream<TEvent>(
+  script: DesktopFixtureScript,
+  method: string,
+  params: unknown,
+  onEvent: ((event: TEvent) => void) | undefined,
+  eventDelayMs: number,
+): Promise<unknown> {
+  const request: ScriptRequest = { jsonrpc: "2.0", method, params };
+  if (script.onStreamRequest !== undefined) {
+    const terminalFrame = await script.onStreamRequest(request, (value) => {
+      onEvent?.(frameEvent(JSON.parse(value) as unknown) as TEvent);
+    });
+    return frameValue(JSON.parse(terminalFrame) as unknown);
+  }
+  const frames = parseScriptFrames(await script.onRequest(request));
+  for (const event of eventFrames(frames)) {
+    onEvent?.(event as TEvent);
+    if (eventDelayMs > 0) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, eventDelayMs));
+    }
+  }
+  return finalFrame(frames);
 }
 
 function finalFrame(frames: readonly unknown[]): unknown {
@@ -239,12 +266,9 @@ export async function launchDesktopFixture(input: {
   const invoke = (method: string, params: unknown) => scripted(input.script, method, params);
   const engine: CoachEngine = {
     async chat(request, onEvent) {
-      const frames = await invoke("chat", request);
-      for (const event of eventFrames(frames)) {
-        onEvent?.(event as TurnEvent);
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
-      }
-      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["chat"]>>;
+      return (await scriptedStream(input.script, "chat", request, onEvent, 40)) as Awaited<
+        ReturnType<CoachEngine["chat"]>
+      >;
     },
     async stopChat(request) {
       return finalFrame(await invoke("stopChat", request)) as Awaited<
@@ -267,24 +291,31 @@ export async function launchDesktopFixture(input: {
       >;
     },
     async resumeChatQueue(request, onEvent) {
-      const frames = await invoke("resumeChatQueue", request);
-      for (const event of eventFrames(frames)) {
-        onEvent?.(event as TurnEvent);
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
-      }
-      return finalFrame(frames) as Awaited<ReturnType<NonNullable<CoachEngine["resumeChatQueue"]>>>;
+      return (await scriptedStream(
+        input.script,
+        "resumeChatQueue",
+        request,
+        onEvent,
+        40,
+      )) as Awaited<ReturnType<NonNullable<CoachEngine["resumeChatQueue"]>>>;
     },
     async runQueuedCommand(request, onEvent) {
-      const frames = await invoke("runQueuedCommand", request);
-      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
-      return finalFrame(frames) as Awaited<
-        ReturnType<NonNullable<CoachEngine["runQueuedCommand"]>>
-      >;
+      return (await scriptedStream(
+        input.script,
+        "runQueuedCommand",
+        request,
+        onEvent,
+        0,
+      )) as Awaited<ReturnType<NonNullable<CoachEngine["runQueuedCommand"]>>>;
     },
     async retryQueuedTurn(request, onEvent) {
-      const frames = await invoke("retryQueuedTurn", request);
-      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
-      return finalFrame(frames) as Awaited<ReturnType<NonNullable<CoachEngine["retryQueuedTurn"]>>>;
+      return (await scriptedStream(
+        input.script,
+        "retryQueuedTurn",
+        request,
+        onEvent,
+        0,
+      )) as Awaited<ReturnType<NonNullable<CoachEngine["retryQueuedTurn"]>>>;
     },
     async getCoachDecision(request) {
       return finalFrame(await invoke("getCoachDecision", request)) as Awaited<
@@ -292,9 +323,13 @@ export async function launchDesktopFixture(input: {
       >;
     },
     async answerCoachDecision(request, onEvent) {
-      const frames = await invoke("answerCoachDecision", request);
-      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
-      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["answerCoachDecision"]>>;
+      return (await scriptedStream(
+        input.script,
+        "answerCoachDecision",
+        request,
+        onEvent,
+        0,
+      )) as Awaited<ReturnType<CoachEngine["answerCoachDecision"]>>;
     },
     async skipCoachDecision(request) {
       return finalFrame(await invoke("skipCoachDecision", request)) as Awaited<
@@ -302,9 +337,13 @@ export async function launchDesktopFixture(input: {
       >;
     },
     async resumeCoachDecision(request, onEvent) {
-      const frames = await invoke("resumeCoachDecision", request);
-      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
-      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["resumeCoachDecision"]>>;
+      return (await scriptedStream(
+        input.script,
+        "resumeCoachDecision",
+        request,
+        onEvent,
+        0,
+      )) as Awaited<ReturnType<CoachEngine["resumeCoachDecision"]>>;
     },
     async resetSession(request) {
       return finalFrame(await invoke("resetSession", request)) as Awaited<

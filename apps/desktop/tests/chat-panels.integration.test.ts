@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -25,6 +26,35 @@ transcriptCursorBytes[0] = 1;
 const transcriptCursor = transcriptCursorBytes.toString("base64url");
 const fixtures: RunningDesktopFixture[] = [];
 const scratchPaths: string[] = [];
+const liveTurns: LiveTurnControl[] = [];
+const followLatestThreshold = 80;
+const streamQuestion = "Keep streaming while I compare the earlier notes.";
+const streamDraft = "Keep this draft while I read.";
+const streamTurnId = "turn-scroll-stream";
+const firstStreamDelta = Array.from(
+  { length: 28 },
+  (_, index) => `Following update ${index + 1}: hold the aerobic effort steady.`,
+).join("\n\n");
+const secondStreamDelta = Array.from(
+  { length: 12 },
+  (_, index) => `Reading update ${index + 1}: preserve the current comparison point.`,
+).join("\n\n");
+const thirdStreamDelta = Array.from(
+  { length: 12 },
+  (_, index) => `Hidden update ${index + 1}: continue without moving the reader.`,
+).join("\n\n");
+
+async function visibleQaCheckpoint(name: string): Promise<void> {
+  const gateDirectory = process.env.ENDURAGENT_VISIBLE_QA_GATE_DIR;
+  if (gateDirectory === undefined) return;
+  if (!/^[a-z0-9-]+$/.test(name)) throw new TypeError("invalid visible QA checkpoint name");
+  await mkdir(gateDirectory, { recursive: true, mode: 0o700 });
+  await writeFile(join(gateDirectory, `${name}.ready`), "ready\n", { mode: 0o600 });
+  const releasePath = join(gateDirectory, `${name}.release`);
+  while (!existsSync(releasePath)) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+}
 
 const trainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
@@ -172,12 +202,82 @@ function response(value: unknown): readonly string[] {
   return [JSON.stringify(value)];
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function bounded<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+interface LiveTurnControl {
+  readonly ready: Promise<void>;
+  attach(emitFrame: (frame: string) => void): void;
+  waitForFinish(): Promise<string>;
+  emit(event: unknown): void;
+  finish(text: string): void;
+  abort(): void;
+}
+
+function createLiveTurnControl(): LiveTurnControl {
+  const entered = deferred<void>();
+  let emitFrame: ((frame: string) => void) | undefined;
+  let outcome: ReturnType<typeof deferred<string>> | undefined;
+  let settled = false;
+  const control: LiveTurnControl = {
+    ready: entered.promise,
+    attach(nextEmitFrame) {
+      if (settled) throw new TypeError("live turn control is already settled");
+      if (emitFrame !== undefined) throw new TypeError("live turn control is already attached");
+      emitFrame = nextEmitFrame;
+      outcome = deferred<string>();
+      entered.resolve(undefined);
+    },
+    waitForFinish() {
+      if (outcome === undefined) throw new TypeError("live turn control is not attached");
+      return outcome.promise;
+    },
+    emit(event) {
+      if (emitFrame === undefined) throw new TypeError("live turn control is not attached");
+      emitFrame(JSON.stringify(event));
+    },
+    finish(text) {
+      if (settled) return;
+      if (outcome === undefined) throw new TypeError("live turn control is not attached");
+      settled = true;
+      outcome.resolve(text);
+    },
+    abort() {
+      if (settled) return;
+      settled = true;
+      outcome?.reject(new Error("live turn fixture closed"));
+    },
+  };
+  liveTurns.push(control);
+  return control;
+}
+
 type SyncOutcome = "no-change" | "partial";
 
 function makeScript(
   calls: ScriptRequest[],
   syncOutcome: SyncOutcome,
   transcriptHistory: boolean,
+  liveTurn?: LiveTurnControl,
 ): DesktopFixtureScript {
   let units: "metric" | "imperial" = "metric";
   let hasSession = false;
@@ -200,6 +300,23 @@ function makeScript(
     items: queueItems,
   });
   return {
+    ...(liveTurn === undefined
+      ? {}
+      : {
+          async onStreamRequest(value: unknown, emitFrame: (frame: string) => void) {
+            const request = value as ScriptRequest;
+            calls.push(request);
+            if (request.method !== "resumeChatQueue") {
+              throw new TypeError(`unexpected live fixture method ${request.method}`);
+            }
+            hasSession = true;
+            liveTurn.attach(emitFrame);
+            const finalText = await liveTurn.waitForFinish();
+            queueItems = [];
+            queueRevision += 1;
+            return JSON.stringify({ snapshot: queueSnapshot(), response: { text: finalText } });
+          },
+        }),
     onRequest(value) {
       const request = value as ScriptRequest;
       calls.push(request);
@@ -656,15 +773,23 @@ async function launch(input: {
   readonly colorScheme?: "light" | "dark";
   readonly syncOutcome?: SyncOutcome;
   readonly transcriptHistory?: boolean;
+  readonly liveTurn?: LiveTurnControl;
+  readonly hidden?: boolean;
 }): Promise<{ readonly fixture: RunningDesktopFixture; readonly calls: ScriptRequest[] }> {
   const calls: ScriptRequest[] = [];
   const fixture = await launchDesktopFixture({
-    script: makeScript(calls, input.syncOutcome ?? "no-change", input.transcriptHistory ?? false),
+    script: makeScript(
+      calls,
+      input.syncOutcome ?? "no-change",
+      input.transcriptHistory ?? false,
+      input.liveTurn,
+    ),
     token,
     width: input.width,
     height: input.height,
     colorScheme: input.colorScheme ?? "light",
     reducedMotion: input.reducedMotion,
+    hidden: input.hidden,
   });
   fixtures.push(fixture);
   await fixture.evaluate<void>(`
@@ -763,6 +888,7 @@ async function stackedProjectionGeometry(fixture: RunningDesktopFixture): Promis
 }
 
 afterEach(async () => {
+  for (const liveTurn of liveTurns.splice(0)) liveTurn.abort();
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
   await Promise.all(
     scratchPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -864,6 +990,367 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       },
     ]);
   }, 90_000);
+
+  it("follows a live Chat stream only near the bottom and preserves reading position across navigation", async () => {
+    const liveTurn = createLiveTurnControl();
+    const evidenceDirectory = process.env.SCR_02_EVIDENCE_DIR;
+    if (evidenceDirectory !== undefined) {
+      await mkdir(evidenceDirectory, { recursive: true, mode: 0o700 });
+    }
+    const { fixture, calls } = await launch({
+      width: 1180,
+      height: 820,
+      reducedMotion: true,
+      transcriptHistory: true,
+      liveTurn,
+      hidden: process.env.SCR_02_VISIBLE !== "1",
+    });
+    const beforeStream = await fixture.evaluate<{
+      readonly rows: number;
+      readonly bottomGap: number;
+      readonly draft: string;
+    }>(`
+      const deadline = Date.now() + 5000;
+      while (document.querySelectorAll(".chat-message").length !== 4 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const conversation = document.querySelector(".conversation");
+      const textarea = document.querySelector("textarea#message");
+      const form = textarea?.closest("form");
+      if (!(conversation instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement) ||
+          !(form instanceof HTMLFormElement)) {
+        throw new Error("live Chat fixture did not mount");
+      }
+      conversation.scrollTop = conversation.scrollHeight;
+      conversation.dispatchEvent(new Event("scroll"));
+      textarea.value = ${JSON.stringify(streamQuestion)};
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      form.requestSubmit();
+      return {
+        rows: document.querySelectorAll(".chat-message").length,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        draft: textarea.value,
+      };
+    `);
+    await bounded(liveTurn.ready, 5_000, "live Chat stream did not attach");
+    expect(beforeStream.rows).toBe(4);
+    expect(beforeStream.bottomGap).toBeGreaterThanOrEqual(-1);
+    expect(beforeStream.bottomGap).toBeLessThanOrEqual(1);
+    expect(beforeStream.draft).toBe(streamQuestion);
+    liveTurn.emit({ type: "turn-start", turnId: streamTurnId, chatId: "desktop" });
+    const beforeFirstDelta = await fixture.evaluate<{
+      readonly rows: number;
+      readonly scrollTop: number;
+      readonly scrollHeight: number;
+      readonly bottomGap: number;
+      readonly status: string | undefined;
+    }>(`
+      const deadline = Date.now() + 5000;
+      const conversation = document.querySelector(".conversation");
+      while (
+        (document.querySelectorAll(".chat-message").length !== 5 ||
+          conversation?.dataset.chatStatus !== "streaming") &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      if (!(conversation instanceof HTMLElement)) throw new Error("conversation missing");
+      conversation.scrollTop = conversation.scrollHeight;
+      conversation.dispatchEvent(new Event("scroll"));
+      return {
+        rows: document.querySelectorAll(".chat-message").length,
+        scrollTop: conversation.scrollTop,
+        scrollHeight: conversation.scrollHeight,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        status: conversation.dataset.chatStatus,
+      };
+    `);
+    expect(beforeFirstDelta.rows).toBe(5);
+    expect(beforeFirstDelta.status).toBe("streaming");
+    expect(beforeFirstDelta.bottomGap).toBeLessThanOrEqual(1);
+
+    liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: firstStreamDelta });
+    const following = await fixture.evaluate<{
+      readonly scrollTop: number;
+      readonly scrollHeight: number;
+      readonly bottomGap: number;
+      readonly status: string | undefined;
+    }>(`
+      const deadline = Date.now() + 5000;
+      const conversation = document.querySelector(".conversation");
+      const coachText = () =>
+        Array.from(document.querySelectorAll(".chat-message--coach .chat-message__text")).at(-1)
+          ?.textContent ?? "";
+      while (!coachText().includes("Following update 28") && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (!(conversation instanceof HTMLElement)) throw new Error("conversation missing");
+      return {
+        scrollTop: conversation.scrollTop,
+        scrollHeight: conversation.scrollHeight,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        status: conversation.dataset.chatStatus,
+      };
+    `);
+    expect(following.scrollHeight).toBeGreaterThan(beforeFirstDelta.scrollHeight);
+    expect(following.scrollTop).toBeGreaterThan(beforeFirstDelta.scrollTop);
+    expect(following.bottomGap).toBeLessThanOrEqual(1);
+    expect(following.status).toBe("streaming");
+    if (evidenceDirectory !== undefined) {
+      await fixture.screenshot(join(evidenceDirectory, "scr-02-following.png"));
+    }
+
+    const readingPosition = await fixture.evaluate<{
+      readonly anchorIndex: number;
+      readonly anchorTop: number;
+      readonly scrollTop: number;
+      readonly scrollHeight: number;
+      readonly bottomGap: number;
+      readonly draft: string;
+      readonly status: string | undefined;
+    }>(`
+      const conversation = document.querySelector(".conversation");
+      const textarea = document.querySelector("textarea#message");
+      if (!(conversation instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement)) {
+        throw new Error("reading surface missing");
+      }
+      textarea.value = ${JSON.stringify(streamDraft)};
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      const maximum = conversation.scrollHeight - conversation.clientHeight;
+      conversation.scrollTop = Math.max(40, maximum - ${followLatestThreshold + 80});
+      conversation.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const conversationRect = conversation.getBoundingClientRect();
+      const rows = Array.from(document.querySelectorAll(".chat-message"));
+      const anchorIndex = rows.findIndex((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.bottom > conversationRect.top && rect.top < conversationRect.bottom;
+      });
+      const anchor = rows[anchorIndex];
+      if (!(anchor instanceof HTMLElement)) throw new Error("visible reading row missing");
+      return {
+        anchorIndex,
+        anchorTop: anchor.getBoundingClientRect().top - conversationRect.top,
+        scrollTop: conversation.scrollTop,
+        scrollHeight: conversation.scrollHeight,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        draft: textarea.value,
+        status: conversation.dataset.chatStatus,
+      };
+    `);
+    expect(readingPosition.scrollTop).toBeGreaterThan(32);
+    expect(readingPosition.bottomGap).toBeGreaterThan(followLatestThreshold);
+    expect(readingPosition.draft).toBe(streamDraft);
+    expect(readingPosition.status).toBe("streaming");
+
+    liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: secondStreamDelta });
+    const afterReadingDelta = await fixture.evaluate<{
+      readonly anchorTop: number;
+      readonly scrollTop: number;
+      readonly scrollHeight: number;
+      readonly bottomGap: number;
+      readonly draft: string;
+      readonly status: string | undefined;
+    }>(`
+      const deadline = Date.now() + 5000;
+      const coachText = () =>
+        Array.from(document.querySelectorAll(".chat-message--coach .chat-message__text")).at(-1)
+          ?.textContent ?? "";
+      while (!coachText().includes("Reading update 12") && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const conversation = document.querySelector(".conversation");
+      const textarea = document.querySelector("textarea#message");
+      const anchor = document.querySelectorAll(".chat-message")[${readingPosition.anchorIndex}];
+      if (!(conversation instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement) ||
+          !(anchor instanceof HTMLElement)) {
+        throw new Error("reading surface changed unexpectedly");
+      }
+      const conversationRect = conversation.getBoundingClientRect();
+      return {
+        anchorTop: anchor.getBoundingClientRect().top - conversationRect.top,
+        scrollTop: conversation.scrollTop,
+        scrollHeight: conversation.scrollHeight,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        draft: textarea.value,
+        status: conversation.dataset.chatStatus,
+      };
+    `);
+    expect(afterReadingDelta.scrollHeight).toBeGreaterThan(readingPosition.scrollHeight);
+    expect(Math.abs(afterReadingDelta.scrollTop - readingPosition.scrollTop)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(Math.abs(afterReadingDelta.anchorTop - readingPosition.anchorTop)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(afterReadingDelta.bottomGap).toBeGreaterThan(followLatestThreshold);
+    expect(afterReadingDelta.draft).toBe(streamDraft);
+    expect(afterReadingDelta.status).toBe("streaming");
+    if (evidenceDirectory !== undefined) {
+      await fixture.screenshot(join(evidenceDirectory, "scr-02-scrolled-up.png"));
+    }
+    await visibleQaCheckpoint("scr-02-scrolled-up");
+
+    const trainingView = await fixture.evaluate<string | null>(`
+      const navigation = document.querySelector('nav[aria-label="Main navigation"]');
+      const training = Array.from(navigation?.querySelectorAll("button") ?? []).find(
+        (entry) => entry.textContent?.trim() === "Training",
+      );
+      if (!(training instanceof HTMLButtonElement)) throw new Error("Training navigation missing");
+      training.click();
+      const deadline = Date.now() + 5000;
+      while (!document.querySelector('[data-view="training"]') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return document.querySelector("[data-view]")?.getAttribute("data-view") ?? null;
+    `);
+    expect(trainingView).toBe("training");
+    liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: thirdStreamDelta });
+    const hiddenUpdate = await fixture.evaluate<{
+      readonly view: string | null;
+      readonly updated: boolean;
+      readonly clientHeight: number;
+      readonly scrollHeight: number;
+    }>(`
+      const deadline = Date.now() + 5000;
+      const coachText = () =>
+        Array.from(document.querySelectorAll(".chat-message--coach .chat-message__text")).at(-1)
+          ?.textContent ?? "";
+      while (!coachText().includes("Hidden update 12") && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const conversation = document.querySelector(".conversation");
+      if (!(conversation instanceof HTMLElement)) throw new Error("hidden conversation missing");
+      return {
+        view: document.querySelector("[data-view]")?.getAttribute("data-view") ?? null,
+        updated: coachText().includes("Hidden update 12"),
+        clientHeight: conversation.clientHeight,
+        scrollHeight: conversation.scrollHeight,
+      };
+    `);
+    expect(hiddenUpdate).toEqual({
+      view: "training",
+      updated: true,
+      clientHeight: 0,
+      scrollHeight: 0,
+    });
+
+    const returned = await fixture.evaluate<{
+      readonly anchorTop: number;
+      readonly scrollTop: number;
+      readonly bottomGap: number;
+      readonly draft: string;
+      readonly status: string | undefined;
+      readonly view: string | null;
+    }>(`
+      const navigation = document.querySelector('nav[aria-label="Main navigation"]');
+      const chat = Array.from(navigation?.querySelectorAll("button") ?? []).find(
+        (entry) => entry.textContent?.trim() === "Chat",
+      );
+      if (!(chat instanceof HTMLButtonElement)) throw new Error("Chat navigation missing");
+      chat.click();
+      const deadline = Date.now() + 5000;
+      while (!document.querySelector('[data-view="chat"]') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const conversation = document.querySelector(".conversation");
+      const textarea = document.querySelector("textarea#message");
+      const anchor = document.querySelectorAll(".chat-message")[${readingPosition.anchorIndex}];
+      if (!(conversation instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement) ||
+          !(anchor instanceof HTMLElement)) {
+        throw new Error("returned reading surface missing");
+      }
+      const conversationRect = conversation.getBoundingClientRect();
+      return {
+        anchorTop: anchor.getBoundingClientRect().top - conversationRect.top,
+        scrollTop: conversation.scrollTop,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        draft: textarea.value,
+        status: conversation.dataset.chatStatus,
+        view: document.querySelector("[data-view]")?.getAttribute("data-view") ?? null,
+      };
+    `);
+    expect(Math.abs(returned.scrollTop - readingPosition.scrollTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(returned.anchorTop - readingPosition.anchorTop)).toBeLessThanOrEqual(1);
+    expect(returned.bottomGap).toBeGreaterThan(followLatestThreshold);
+    expect(returned.draft).toBe(streamDraft);
+    expect(returned.status).toBe("streaming");
+    expect(returned.view).toBe("chat");
+    if (evidenceDirectory !== undefined) {
+      await fixture.screenshot(join(evidenceDirectory, "scr-02-returned.png"));
+    }
+    await visibleQaCheckpoint("scr-02-returned");
+
+    const finalText = [firstStreamDelta, secondStreamDelta, thirdStreamDelta].join("\n\n");
+    liveTurn.emit({ type: "final-text", turnId: streamTurnId, text: finalText });
+    liveTurn.finish(finalText);
+    const settled = await fixture.evaluate<{
+      readonly anchorTop: number;
+      readonly scrollTop: number;
+      readonly bottomGap: number;
+      readonly draft: string;
+      readonly status: string | undefined;
+      readonly finalTextVisible: boolean;
+    }>(`
+      const deadline = Date.now() + 5000;
+      const conversation = document.querySelector(".conversation");
+      const coachText = () =>
+        Array.from(document.querySelectorAll(".chat-message--coach .chat-message__text")).at(-1)
+          ?.textContent ?? "";
+      while (
+        (conversation?.dataset.chatStatus !== "idle" || !coachText().includes("Hidden update 12")) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const textarea = document.querySelector("textarea#message");
+      const anchor = document.querySelectorAll(".chat-message")[${readingPosition.anchorIndex}];
+      if (!(conversation instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement) ||
+          !(anchor instanceof HTMLElement)) {
+        throw new Error("settled reading surface missing");
+      }
+      const conversationRect = conversation.getBoundingClientRect();
+      return {
+        anchorTop: anchor.getBoundingClientRect().top - conversationRect.top,
+        scrollTop: conversation.scrollTop,
+        bottomGap: conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight,
+        draft: textarea.value,
+        status: conversation.dataset.chatStatus,
+        finalTextVisible: coachText().includes("Hidden update 12"),
+      };
+    `);
+    expect(Math.abs(settled.scrollTop - readingPosition.scrollTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(settled.anchorTop - readingPosition.anchorTop)).toBeLessThanOrEqual(1);
+    expect(settled.bottomGap).toBeGreaterThan(followLatestThreshold);
+    expect(settled.draft).toBe(streamDraft);
+    expect(settled.status).toBe("idle");
+    expect(settled.finalTextVisible).toBe(true);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toEqual([
+      { jsonrpc: "2.0", method: "resumeChatQueue", params: { chatId: "desktop" } },
+    ]);
+    expect(calls.filter((call) => call.method === "getTranscriptPage")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "getTranscriptPage",
+        params: { cursor: null, limit: 25 },
+      },
+    ]);
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: streamQuestion,
+        },
+      },
+    ]);
+  }, 150_000);
 
   it("preserves IME composition until committed Enter", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
