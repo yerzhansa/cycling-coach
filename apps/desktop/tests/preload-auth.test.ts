@@ -14,23 +14,39 @@ const mocks = vi.hoisted(() => {
       readonly target = "_blank",
     ) {}
   }
+  class FakeElement {
+    closest(selector: string): FakeElement | null {
+      return selector === "[data-chat-attachment-dropzone]" ? this : null;
+    }
+  }
   let clickListener: ((event: Record<string, unknown>) => void) | undefined;
+  let dropListener: ((event: Record<string, unknown>) => void) | undefined;
   const fakeWindow = {
     location: {
       href: `enduragent://app/index.html?navigationToken=${"n".repeat(43)}`,
     },
     addEventListener: vi.fn((name: string, listener: typeof clickListener) => {
       if (name === "click") clickListener = listener;
+      if (name === "drop") dropListener = listener;
+    }),
+    removeEventListener: vi.fn((name: string, listener: typeof clickListener) => {
+      if (name === "drop" && dropListener === listener) dropListener = undefined;
     }),
     dispatchEvent: vi.fn(),
   };
+  const getPathForFile = vi.fn();
   return {
     exposed,
     FakeAnchor,
+    FakeElement,
     fakeWindow,
     get clickListener() {
       return clickListener;
     },
+    get dropListener() {
+      return dropListener;
+    },
+    getPathForFile,
     exposeInMainWorld: vi.fn((name: string, value: unknown) => {
       exposed[name] = value;
     }),
@@ -49,7 +65,7 @@ vi.mock("electron", () => ({
     send: mocks.send,
     sendSync: mocks.sendSync,
   },
-  webUtils: { getPathForFile: vi.fn() },
+  webUtils: { getPathForFile: mocks.getPathForFile },
 }));
 
 interface AuthBridge {
@@ -97,7 +113,17 @@ interface AuthBridge {
   chooseImportFiles(): Promise<readonly string[]>;
   chooseChatAttachments(): Promise<readonly unknown[]>;
   pasteChatAttachment(): Promise<readonly unknown[]>;
-  onDroppedChatAttachments(listener: (results: readonly unknown[]) => void): () => void;
+  onDroppedChatAttachments(
+    listener: (
+      event:
+        | { readonly phase: "started"; readonly operationId: string }
+        | {
+            readonly phase: "settled";
+            readonly operationId: string;
+            readonly results: readonly unknown[] | null;
+          },
+    ) => boolean | void,
+  ): () => void;
   choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
@@ -216,6 +242,7 @@ beforeAll(async () => {
   Object.assign(globalThis, {
     window: mocks.fakeWindow,
     HTMLAnchorElement: mocks.FakeAnchor,
+    Element: mocks.FakeElement,
   });
   await import("../src/preload/index.js");
   bridge = mocks.exposed.enduragentAuth as AuthBridge;
@@ -224,10 +251,12 @@ beforeAll(async () => {
 beforeEach(() => {
   mocks.invoke.mockReset();
   mocks.send.mockReset();
+  mocks.getPathForFile.mockReset();
   mocks.fakeWindow.dispatchEvent.mockReset();
   Object.assign(globalThis, {
     window: mocks.fakeWindow,
     HTMLAnchorElement: mocks.FakeAnchor,
+    Element: mocks.FakeElement,
   });
   mocks.fakeWindow.location.href = RENDERER_URL;
 });
@@ -386,6 +415,83 @@ describe("desktop preload ChatGPT auth", () => {
       ].sort(),
     );
     expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("hands dropped attachment work to the renderer before admission starts", async () => {
+    type DropEvent =
+      | { readonly phase: "started"; readonly operationId: string }
+      | {
+          readonly phase: "settled";
+          readonly operationId: string;
+          readonly results: readonly unknown[] | null;
+        };
+    const events: DropEvent[] = [];
+    const dispose = bridge.onDroppedChatAttachments((event) => {
+      events.push(event);
+      return event.phase === "started";
+    });
+    const drop = mocks.dropListener;
+    if (drop === undefined) throw new TypeError("drop listener missing");
+    mocks.getPathForFile.mockReturnValue("/tmp/synthetic-recovery.jpg");
+    let resolveAdmission!: (value: unknown) => void;
+    mocks.invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAdmission = resolve;
+        }),
+    );
+    const event = {
+      target: new mocks.FakeElement(),
+      preventDefault: vi.fn(),
+      dataTransfer: { files: [{}] },
+    };
+
+    drop(event);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ phase: "started" });
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:chat-attachment:drop", [
+      "/tmp/synthetic-recovery.jpg",
+    ]);
+    resolveAdmission([
+      {
+        selectionId: "selection-drop-1",
+        displayName: "synthetic-recovery.jpg",
+        status: "accepted",
+        attachmentId: "attachment-drop-1",
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[1]).toEqual({
+      phase: "settled",
+      operationId: events[0]!.operationId,
+      results: [
+        {
+          selectionId: "selection-drop-1",
+          displayName: "synthetic-recovery.jpg",
+          status: "accepted",
+          attachmentId: "attachment-drop-1",
+        },
+      ],
+    });
+
+    mocks.invoke.mockRejectedValueOnce(new Error("synthetic admission failure"));
+    drop(event);
+    await vi.waitFor(() => expect(events).toHaveLength(4));
+    expect(events[3]).toEqual({
+      phase: "settled",
+      operationId: events[2]!.operationId,
+      results: null,
+    });
+    dispose();
+
+    mocks.invoke.mockClear();
+    const disposeBlocked = bridge.onDroppedChatAttachments(() => false);
+    const blockedDrop = mocks.dropListener;
+    if (blockedDrop === undefined) throw new TypeError("blocked drop listener missing");
+    blockedDrop(event);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    disposeBlocked();
   });
 
   it("sends only the three supported appearances to the main process", () => {

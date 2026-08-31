@@ -120,6 +120,12 @@ export interface ChatView {
 export interface ChatController {
   start(): Promise<void>;
   resume(): Promise<void>;
+  refreshAttachments(): Promise<void>;
+  beginDroppedAttachmentAdmission(operationId: string): boolean;
+  settleDroppedAttachmentAdmission(
+    operationId: string,
+    results: readonly AttachmentAdmissionReadModel[] | null,
+  ): void;
   submit(message: string, attachmentIds?: readonly string[]): Promise<boolean>;
   chooseAttachments(): Promise<void>;
   pasteAttachment(): Promise<void>;
@@ -245,10 +251,19 @@ export function createChatController(input: {
   let queueMutationError: string | null = null;
   let attachmentSurface: ChatAttachmentComposerReadModel | null = null;
   let attachmentAdmissions: readonly AttachmentAdmissionReadModel[] = [];
-  let attachmentBusy = false;
   let attachmentError: string | null = null;
   let attachmentTextRevision = 0;
   let attachmentTextSaveTask: Promise<void> = Promise.resolve();
+  let attachmentGeneration = 0;
+  let attachmentSurfaceRevision = 0;
+  let attachmentOperationSequence = 0;
+  const attachmentWriteTokens = new Set<number>();
+  const attachmentBusyTokens = new Set<number>();
+  const attachmentWriteWaiters = new Set<() => void>();
+  const droppedAttachmentAdmissions = new Map<
+    string,
+    { readonly token: number; readonly generation: number }
+  >();
   const attachmentSummaries = new Map<string, ChatSentAttachment>();
   let planningRequests: readonly PlanningRequestDelivery[] = [];
   let planningRequestsLoaded = false;
@@ -281,6 +296,7 @@ export function createChatController(input: {
     !decisionBlocksWork() &&
     activeTask === undefined &&
     outstandingChatTasks.size === 0 &&
+    attachmentWriteTokens.size === 0 &&
     queuedRetry === undefined &&
     resetTask === undefined;
   const render = (appendDelta?: ChatAppendDelta): void => {
@@ -303,7 +319,7 @@ export function createChatController(input: {
           attachments: {
             value: attachmentSurface,
             admissions: attachmentAdmissions,
-            busy: attachmentBusy,
+            busy: attachmentBusyTokens.size > 0,
             error: attachmentError,
           },
           planningRequests: {
@@ -331,6 +347,35 @@ export function createChatController(input: {
       );
     } catch {}
   };
+  const attachmentGenerationIsCurrent = (generation: number): boolean =>
+    !disposed && generation === attachmentGeneration;
+  const attachmentSurfaceIsCurrent = (generation: number, revision: number): boolean =>
+    attachmentGenerationIsCurrent(generation) && revision === attachmentSurfaceRevision;
+  const claimAttachmentSurface = (): number => ++attachmentSurfaceRevision;
+  const beginAttachmentWrite = (
+    busy: boolean,
+  ): { readonly token: number; readonly generation: number } | null => {
+    if (disposed || resetBlocksWork()) return null;
+    const token = ++attachmentOperationSequence;
+    claimAttachmentSurface();
+    attachmentWriteTokens.add(token);
+    if (busy) attachmentBusyTokens.add(token);
+    render();
+    return { token, generation: attachmentGeneration };
+  };
+  const finishAttachmentWrite = (token: number): void => {
+    attachmentWriteTokens.delete(token);
+    attachmentBusyTokens.delete(token);
+    if (attachmentWriteTokens.size === 0) {
+      for (const resolve of attachmentWriteWaiters) resolve();
+      attachmentWriteWaiters.clear();
+    }
+    render();
+  };
+  const waitForAttachmentWrites = (): Promise<void> =>
+    attachmentWriteTokens.size === 0
+      ? Promise.resolve()
+      : new Promise((resolve) => attachmentWriteWaiters.add(resolve));
   const reduce = (
     action: Parameters<typeof reduceChatState>[1],
     appendDelta?: ChatAppendDelta,
@@ -812,12 +857,38 @@ export function createChatController(input: {
     return snapshot;
   };
 
-  const refreshAttachments = async (client?: CoachClient): Promise<void> => {
-    const activeClient = client ?? (await input.clients.getClient());
-    const surface = await activeClient.call("getChatAttachmentComposer", {
-      chatId: DESKTOP_CHAT_ID,
-    });
-    if (disposed) return;
+  const refreshAttachments = async (
+    client?: CoachClient,
+    generation = attachmentGeneration,
+    reportError = true,
+  ): Promise<void> => {
+    const attemptRevision = attachmentSurfaceRevision;
+    let activeClient: CoachClient;
+    try {
+      activeClient = client ?? (await input.clients.getClient());
+    } catch {
+      if (reportError && attachmentSurfaceIsCurrent(generation, attemptRevision)) {
+        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+        render();
+      }
+      return;
+    }
+    if (attachmentWriteTokens.size > 0) await waitForAttachmentWrites();
+    if (!attachmentGenerationIsCurrent(generation)) return;
+    const revision = claimAttachmentSurface();
+    let surface: ChatAttachmentComposerReadModel;
+    try {
+      surface = await activeClient.call("getChatAttachmentComposer", {
+        chatId: DESKTOP_CHAT_ID,
+      });
+    } catch {
+      if (reportError && attachmentSurfaceIsCurrent(generation, revision)) {
+        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+        render();
+      }
+      return;
+    }
+    if (!attachmentSurfaceIsCurrent(generation, revision)) return;
     attachmentSurface = surface;
     attachmentError = null;
     render();
@@ -962,58 +1033,62 @@ export function createChatController(input: {
       });
   };
 
-  const receiveAdmissions = (results: readonly AttachmentAdmissionReadModel[]): void => {
-    if (disposed) return;
+  const receiveAdmissions = (
+    results: readonly AttachmentAdmissionReadModel[],
+    generation = attachmentGeneration,
+  ): void => {
+    if (!attachmentGenerationIsCurrent(generation)) return;
     attachmentAdmissions = results.filter((result) => result.status !== "accepted");
     attachmentError = null;
     render();
-    void refreshAttachments().catch(() => {
-      if (disposed) return;
-      attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
-      render();
-    });
+    void refreshAttachments(undefined, generation);
   };
 
   const runNativeAttachmentAction = async (
     operation: (() => Promise<readonly AttachmentAdmissionReadModel[]>) | undefined,
   ): Promise<void> => {
-    if (operation === undefined || disposed || attachmentBusy || resetBlocksWork()) return;
-    attachmentBusy = true;
+    if (operation === undefined || attachmentBusyTokens.size > 0) return;
+    const ownership = beginAttachmentWrite(true);
+    if (ownership === null) return;
     attachmentError = null;
     render();
     try {
-      receiveAdmissions(await operation());
-    } catch {
-      if (!disposed) attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
-    } finally {
-      if (!disposed) {
-        attachmentBusy = false;
-        render();
+      const results = await operation();
+      if (attachmentGenerationIsCurrent(ownership.generation)) {
+        receiveAdmissions(results, ownership.generation);
       }
+    } catch {
+      if (attachmentGenerationIsCurrent(ownership.generation)) {
+        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+      }
+    } finally {
+      finishAttachmentWrite(ownership.token);
     }
   };
 
   const mutateAttachment = async (
     operation: (client: CoachClient) => Promise<ChatAttachmentComposerReadModel>,
   ): Promise<void> => {
-    if (disposed || resetBlocksWork()) return;
-    attachmentBusy = true;
+    if (attachmentBusyTokens.size > 0) return;
+    const ownership = beginAttachmentWrite(true);
+    if (ownership === null) return;
+    let revision = attachmentSurfaceRevision;
     attachmentError = null;
     render();
     try {
       const client = await input.clients.getClient();
+      revision = claimAttachmentSurface();
       const surface = await operation(client);
-      if (!disposed) {
+      if (attachmentSurfaceIsCurrent(ownership.generation, revision)) {
         attachmentSurface = surface;
         attachmentError = null;
       }
     } catch {
-      if (!disposed) attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
-    } finally {
-      if (!disposed) {
-        attachmentBusy = false;
-        render();
+      if (attachmentSurfaceIsCurrent(ownership.generation, revision)) {
+        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
       }
+    } finally {
+      finishAttachmentWrite(ownership.token);
     }
   };
 
@@ -1370,12 +1445,8 @@ export function createChatController(input: {
         render();
       }
     })();
-    const attachmentLoadTask = refreshAttachments().catch(() => {
-      if (!disposed) {
-        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
-        render();
-      }
-    });
+    const attachmentLoadGeneration = attachmentGeneration;
+    const attachmentLoadTask = refreshAttachments(undefined, attachmentLoadGeneration);
     const planningRequestLoadTask = recoverPlanningRequests().catch(() => {
       if (!disposed) {
         planningRequestsLoaded = false;
@@ -1405,6 +1476,29 @@ export function createChatController(input: {
     resume() {
       return start().then(() => drain());
     },
+    async refreshAttachments() {
+      if (disposed || resetBlocksWork()) return;
+      const generation = attachmentGeneration;
+      await refreshAttachments(undefined, generation);
+    },
+    beginDroppedAttachmentAdmission(operationId) {
+      if (droppedAttachmentAdmissions.has(operationId) || attachmentBusyTokens.size > 0) {
+        return false;
+      }
+      const ownership = beginAttachmentWrite(true);
+      if (ownership === null) return false;
+      droppedAttachmentAdmissions.set(operationId, ownership);
+      return true;
+    },
+    settleDroppedAttachmentAdmission(operationId, results) {
+      const ownership = droppedAttachmentAdmissions.get(operationId);
+      if (ownership === undefined) return;
+      droppedAttachmentAdmissions.delete(operationId);
+      if (results !== null && attachmentGenerationIsCurrent(ownership.generation)) {
+        receiveAdmissions(results, ownership.generation);
+      }
+      finishAttachmentWrite(ownership.token);
+    },
     submit(message, attachmentIds = []) {
       if (
         !canChat() ||
@@ -1417,6 +1511,8 @@ export function createChatController(input: {
       ) {
         return Promise.resolve(false);
       }
+      const ownership = beginAttachmentWrite(false);
+      if (ownership === null) return Promise.resolve(false);
       const submissionId = globalThis.crypto.randomUUID();
       const submittedAttachments = (attachmentSurface?.draft?.attachments ?? [])
         .filter((attachment) => attachmentIds.includes(attachment.attachmentId))
@@ -1426,26 +1522,39 @@ export function createChatController(input: {
           kind,
           extension,
         }));
-      return input.clients.getClient().then(async (client) => {
-        await attachmentTextSaveTask;
-        const acknowledged = await client.call("enqueueChatMessage", {
-          chatId: DESKTOP_CHAT_ID,
-          submissionId,
-          text: message,
-          ...(attachmentIds.length === 0 ? {} : { attachmentIds: [...attachmentIds] }),
-        });
-        if (disposed) return false;
-        for (const attachment of submittedAttachments) {
-          attachmentSummaries.set(attachment.attachmentId, attachment);
-        }
-        attachmentAdmissions = [];
-        attachmentSurface =
-          attachmentSurface === null ? null : { ...attachmentSurface, draft: null };
-        applyQueueSnapshot(acknowledged);
-        void drain();
-        void refreshAttachments(client).catch(() => {});
-        return true;
-      });
+      return input.clients.getClient().then(
+        async (client) => {
+          try {
+            await attachmentTextSaveTask;
+            const revision = claimAttachmentSurface();
+            const acknowledged = await client.call("enqueueChatMessage", {
+              chatId: DESKTOP_CHAT_ID,
+              submissionId,
+              text: message,
+              ...(attachmentIds.length === 0 ? {} : { attachmentIds: [...attachmentIds] }),
+            });
+            if (!attachmentGenerationIsCurrent(ownership.generation)) return false;
+            for (const attachment of submittedAttachments) {
+              attachmentSummaries.set(attachment.attachmentId, attachment);
+            }
+            if (attachmentSurfaceIsCurrent(ownership.generation, revision)) {
+              attachmentAdmissions = [];
+              attachmentSurface =
+                attachmentSurface === null ? null : { ...attachmentSurface, draft: null };
+            }
+            applyQueueSnapshot(acknowledged);
+            void drain();
+            void refreshAttachments(client, ownership.generation, false);
+            return true;
+          } finally {
+            finishAttachmentWrite(ownership.token);
+          }
+        },
+        (error: unknown) => {
+          finishAttachmentWrite(ownership.token);
+          throw error;
+        },
+      );
     },
     chooseAttachments() {
       return runNativeAttachmentAction(input.nativeAttachments?.choose);
@@ -1454,28 +1563,46 @@ export function createChatController(input: {
       return runNativeAttachmentAction(input.nativeAttachments?.paste);
     },
     receiveAttachmentAdmissions(results) {
+      if (disposed || resetBlocksWork() || attachmentBusyTokens.size > 0) return;
       receiveAdmissions(results);
     },
     saveAttachmentDraftText(text) {
-      if (disposed || resetBlocksWork()) return;
-      const revision = ++attachmentTextRevision;
-      const task = attachmentTextSaveTask.then(async () => {
-        try {
-          const client = await input.clients.getClient();
-          const surface = await client.call("saveChatAttachmentDraftText", {
-            chatId: DESKTOP_CHAT_ID,
-            text,
-          });
-          if (disposed || revision !== attachmentTextRevision) return;
-          attachmentSurface = surface;
-          attachmentError = null;
-          render();
-        } catch {
-          if (disposed || revision !== attachmentTextRevision) return;
-          attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
-          render();
-        }
-      });
+      const ownership = beginAttachmentWrite(false);
+      if (ownership === null) return;
+      const textRevision = ++attachmentTextRevision;
+      let surfaceRevision = attachmentSurfaceRevision;
+      const task = attachmentTextSaveTask
+        .then(async () => {
+          try {
+            const client = await input.clients.getClient();
+            surfaceRevision = claimAttachmentSurface();
+            const surface = await client.call("saveChatAttachmentDraftText", {
+              chatId: DESKTOP_CHAT_ID,
+              text,
+            });
+            if (
+              !attachmentSurfaceIsCurrent(ownership.generation, surfaceRevision) ||
+              textRevision !== attachmentTextRevision
+            ) {
+              return;
+            }
+            attachmentSurface = surface;
+            attachmentError = null;
+            render();
+          } catch {
+            if (
+              !attachmentSurfaceIsCurrent(ownership.generation, surfaceRevision) ||
+              textRevision !== attachmentTextRevision
+            ) {
+              return;
+            }
+            attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+            render();
+          }
+        })
+        .finally(() => {
+          finishAttachmentWrite(ownership.token);
+        });
       attachmentTextSaveTask = task;
     },
     removeAttachment(attachmentId) {
@@ -1792,6 +1919,7 @@ export function createChatController(input: {
       state = reduceChatState(state, {
         type: "open-new-conversation",
         hasHydratedHistory: hydration.turns.length > 0 || hydration.entries.length > 0,
+        hasAttachmentDraft: attachmentSurface?.draft != null,
       });
       render();
       return true;
@@ -1807,20 +1935,48 @@ export function createChatController(input: {
       }
       updateReset(() => hydrator.beginReset(), { type: "begin-reset" });
       const resetEpoch = ++epoch;
+      const resetAttachmentGeneration = ++attachmentGeneration;
+      claimAttachmentSurface();
       const task = (async () => {
         try {
+          if (attachmentWriteTokens.size > 0) await waitForAttachmentWrites();
+          if (
+            disposed ||
+            epoch !== resetEpoch ||
+            !attachmentGenerationIsCurrent(resetAttachmentGeneration)
+          ) {
+            return;
+          }
           const client = await input.clients.getClient();
           const result = await client.call("resetSession", { chatId: DESKTOP_CHAT_ID });
-          if (disposed || epoch !== resetEpoch) return;
-          try {
-            attachmentSurface = await client.call("clearChatAttachmentDraft", {
-              chatId: DESKTOP_CHAT_ID,
-            });
-            attachmentAdmissions = [];
-            attachmentError = null;
-          } catch {
-            attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+          if (
+            disposed ||
+            epoch !== resetEpoch ||
+            !attachmentGenerationIsCurrent(resetAttachmentGeneration)
+          ) {
+            return;
           }
+          await attachmentTextSaveTask;
+          if (
+            disposed ||
+            epoch !== resetEpoch ||
+            !attachmentGenerationIsCurrent(resetAttachmentGeneration)
+          ) {
+            return;
+          }
+          const clearedAttachmentSurface = await client.call("clearChatAttachmentDraft", {
+            chatId: DESKTOP_CHAT_ID,
+          });
+          if (
+            disposed ||
+            epoch !== resetEpoch ||
+            !attachmentGenerationIsCurrent(resetAttachmentGeneration)
+          ) {
+            return;
+          }
+          attachmentSurface = clearedAttachmentSurface;
+          attachmentAdmissions = [];
+          attachmentError = null;
           sequence += 1;
           retryClient = undefined;
           queuedRetry = undefined;
@@ -1839,7 +1995,13 @@ export function createChatController(input: {
               : NEW_CONVERSATION_MEMORY_WARNING_COPY,
           });
         } catch {
-          if (disposed || epoch !== resetEpoch) return;
+          if (
+            disposed ||
+            epoch !== resetEpoch ||
+            !attachmentGenerationIsCurrent(resetAttachmentGeneration)
+          ) {
+            return;
+          }
           updateReset(() => hydrator.resetFailed(), {
             type: "reset-failed",
             announcement: NEW_CONVERSATION_UNCERTAIN_COPY,
@@ -1909,6 +2071,14 @@ export function createChatController(input: {
       hydrator.dispose();
       decision = null;
       epoch += 1;
+      attachmentGeneration += 1;
+      claimAttachmentSurface();
+      attachmentTextRevision += 1;
+      attachmentWriteTokens.clear();
+      attachmentBusyTokens.clear();
+      droppedAttachmentAdmissions.clear();
+      for (const resolve of attachmentWriteWaiters) resolve();
+      attachmentWriteWaiters.clear();
       sequence += 1;
     },
   };

@@ -790,6 +790,7 @@ async function launch(input: {
     colorScheme: input.colorScheme ?? "light",
     reducedMotion: input.reducedMotion,
     hidden: input.hidden,
+    routeChatAttachmentComposer: true,
   });
   fixtures.push(fixture);
   await fixture.evaluate<void>(`
@@ -1890,7 +1891,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(readingRoom.composerHeight).toBeGreaterThan(0);
     await fixture.setViewport(1180, 820);
     expect(await stackedProjectionGeometry(fixture)).toEqual({
-      attachmentIssue: true,
+      attachmentIssue: false,
       planningIssue: true,
       composerWithinViewport: true,
       disclaimerWithinViewport: true,
@@ -1901,7 +1902,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     });
     await fixture.setViewport(760, 820);
     expect(await stackedProjectionGeometry(fixture)).toEqual({
-      attachmentIssue: true,
+      attachmentIssue: false,
       planningIssue: true,
       composerWithinViewport: true,
       disclaimerWithinViewport: true,
@@ -2845,7 +2846,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       contextVisible: true,
     });
     expect(await stackedProjectionGeometry(fixture)).toEqual({
-      attachmentIssue: true,
+      attachmentIssue: false,
       planningIssue: true,
       composerWithinViewport: true,
       disclaimerWithinViewport: true,
@@ -2857,7 +2858,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
 
     await fixture.setViewport(760, 820);
     expect(await stackedProjectionGeometry(fixture)).toEqual({
-      attachmentIssue: true,
+      attachmentIssue: false,
       planningIssue: true,
       composerWithinViewport: true,
       disclaimerWithinViewport: true,

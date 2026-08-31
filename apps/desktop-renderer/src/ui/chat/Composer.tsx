@@ -86,6 +86,7 @@ export function Composer(props: {
   useEffect(
     () => () => {
       if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
     },
     [],
   );
@@ -97,6 +98,8 @@ export function Composer(props: {
         textarea.current?.focus();
       },
       reset() {
+        if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+        saveTimer.current = null;
         const input = textarea.current;
         if (input !== null) {
           input.value = "";
@@ -201,7 +204,9 @@ export function Composer(props: {
     <form
       ref={form}
       className="composer relative"
-      data-chat-attachment-dropzone={props.surface === undefined ? "true" : undefined}
+      data-chat-attachment-dropzone={
+        props.surface === undefined && !inputDisabled && canChat ? "true" : undefined
+      }
       hidden={props.hidden}
       onSubmit={(event) => {
         event.preventDefault();
@@ -247,6 +252,7 @@ export function Composer(props: {
             setDismissed(false);
             if (saveTimer.current !== null) clearTimeout(saveTimer.current);
             saveTimer.current = setTimeout(() => {
+              saveTimer.current = null;
               if (props.surface === undefined) actions?.saveAttachmentDraftText(value);
             }, 300);
           }}
@@ -260,18 +266,20 @@ export function Composer(props: {
           className={`chat-composer__toolbar flex items-center ${props.leadingAction !== undefined || props.surface === undefined ? "justify-between" : "justify-end"}`}
         >
           {props.leadingAction ??
-          (props.surface === undefined ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="Attach files"
-              disabled={actions === null || inputDisabled || !canChat || attachmentSurface === null}
-              onClick={() => void actions?.chooseAttachments()}
-            >
-              <Paperclip aria-hidden="true" />
-            </Button>
-          ) : null)}
+            (props.surface === undefined ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Attach files"
+                disabled={
+                  actions === null || inputDisabled || !canChat || attachmentSurface === null
+                }
+                onClick={() => void actions?.chooseAttachments()}
+              >
+                <Paperclip aria-hidden="true" />
+              </Button>
+            ) : null)}
           {status === "streaming" ? (
             <Button
               type="button"

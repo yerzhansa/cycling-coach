@@ -451,6 +451,31 @@ export async function launchDesktopFixture(input: {
               ReturnType<NonNullable<CoachOperations["getChatAttachmentComposer"]>>
             >;
           },
+          async saveChatAttachmentDraftText(request) {
+            return finalFrame(await invoke("saveChatAttachmentDraftText", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["saveChatAttachmentDraftText"]>>
+            >;
+          },
+          async removeChatAttachment(request) {
+            return finalFrame(await invoke("removeChatAttachment", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["removeChatAttachment"]>>
+            >;
+          },
+          async retryChatAttachment(request) {
+            return finalFrame(await invoke("retryChatAttachment", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["retryChatAttachment"]>>
+            >;
+          },
+          async selectChatAttachmentWorkout(request) {
+            return finalFrame(await invoke("selectChatAttachmentWorkout", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["selectChatAttachmentWorkout"]>>
+            >;
+          },
+          async clearChatAttachmentDraft(request) {
+            return finalFrame(await invoke("clearChatAttachmentDraft", request)) as Awaited<
+              ReturnType<NonNullable<CoachOperations["clearChatAttachmentDraft"]>>
+            >;
+          },
         }
       : {}),
     ...(input.routeChatAttachmentOperations === true

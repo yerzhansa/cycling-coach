@@ -144,6 +144,7 @@ function editableState(state: ProviderModelSettingsState): EditableState | null 
 export function createProviderModelSettingsController(input: {
   readonly load: () => Promise<OnboardingLlmConfiguration>;
   readonly apply: (selection: OnboardingLlmSelection) => Promise<OnboardingLlmSelectionResult>;
+  readonly onSaved?: (selection: OnboardingLlmSelection) => Promise<void> | void;
   readonly openSetup: () => void;
   readonly view: ProviderModelSettingsView;
   readonly beginMutation?: () => (() => void) | null;
@@ -293,7 +294,7 @@ export function createProviderModelSettingsController(input: {
     const pending = Promise.resolve()
       .then(() => input.apply(selection))
       .then(
-        (result) => {
+        async (result) => {
           if (disposed || generation !== operationGeneration) return;
           if (result.status === "refused") {
             render({
@@ -304,6 +305,8 @@ export function createProviderModelSettingsController(input: {
             });
             return;
           }
+          await input.onSaved?.(selection);
+          if (disposed || generation !== operationGeneration) return;
           const active = { provider: selection.provider, model: selection.model };
           render({
             status: "saved",

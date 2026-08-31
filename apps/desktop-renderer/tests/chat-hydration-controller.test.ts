@@ -83,6 +83,9 @@ function coachClient(input: {
       if (method === "getChatAttachmentComposer") {
         return Promise.resolve(emptyAttachmentComposer()) as never;
       }
+      if (method === "clearChatAttachmentDraft") {
+        return Promise.resolve(emptyAttachmentComposer()) as never;
+      }
       if (method === "getChatQueue") {
         return Promise.resolve({
           schemaVersion: 1,

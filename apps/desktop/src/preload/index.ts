@@ -1345,6 +1345,7 @@ async function invokeTelegramSenders(): Promise<unknown> {
 
 let dropDisposer: (() => void) | undefined;
 let chatAttachmentDropDisposer: (() => void) | undefined;
+let chatAttachmentDropSequence = 0;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 const chatGptLoginProgressListeners = new Set<(progress: PreloadChatGptLoginProgress) => void>();
 const planProgressListeners = new Set<(progress: PlanProgressEvent) => void>();
@@ -1738,10 +1739,28 @@ contextBridge.exposeInMainWorld(
           .filter((path) => PlatformAbsolutePathSchema.safeParse(path).success)
           .slice(0, CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage);
         if (paths.length === 0) return;
-        void ipcRenderer
-          .invoke(DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL, paths)
-          .then((value) => listener(parseAttachmentAdmissions(value)))
-          .catch(() => {});
+        const operationId = `drop-${++chatAttachmentDropSequence}`;
+        let accepted = false;
+        try {
+          accepted = listener({ phase: "started", operationId }) === true;
+        } catch {}
+        if (!accepted) return;
+        void ipcRenderer.invoke(DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL, paths).then(
+          (value) => {
+            let results: readonly AttachmentAdmissionReadModel[] | null = null;
+            try {
+              results = parseAttachmentAdmissions(value);
+            } catch {}
+            try {
+              listener({ phase: "settled", operationId, results });
+            } catch {}
+          },
+          () => {
+            try {
+              listener({ phase: "settled", operationId, results: null });
+            } catch {}
+          },
+        );
       };
       const onDragOver = (event: DragEvent): void => {
         const target = event.target;
