@@ -8,13 +8,25 @@ import {
   ExecutePlanTransitionRpcResultSchema,
   GetPlanStateRpcParamsSchema,
   GetPlanStateRpcResultSchema,
+  PlanGetContextV2RequestSchema,
+  PlanGetContextV2ResultSchema,
+  PlanListV2RequestSchema,
+  PlanListV2ResultSchema,
   PlanProgressEventSchema,
   PlanRaceCourseFileSelectionSchema,
+  PlanningV2CommandResultSchema,
+  PlanningV2CommandSchema,
   type ExecutePlanTransitionRpcParams,
   type ExecutePlanTransitionRpcResult,
   type GetPlanStateRpcParams,
   type GetPlanStateRpcResult,
+  type PlanGetContextV2Request,
+  type PlanGetContextV2Result,
+  type PlanListV2Request,
+  type PlanListV2Result,
   type PlanProgressEvent,
+  type PlanningV2Command,
+  type PlanningV2CommandResult,
 } from "@enduragent/coach-contract";
 import { homedir } from "node:os";
 import { extname, isAbsolute } from "node:path";
@@ -24,6 +36,9 @@ import {
   DESKTOP_PLAN_PROGRESS_CHANNEL,
   DESKTOP_PLAN_STATE_CHANNEL,
   DESKTOP_PLAN_TRANSITION_CHANNEL,
+  DESKTOP_PLAN_V2_COMMAND_CHANNEL,
+  DESKTOP_PLAN_V2_CONTEXT_CHANNEL,
+  DESKTOP_PLAN_V2_LIST_CHANNEL,
 } from "./constants.js";
 import { isTrustedConnectionRequest } from "./security.js";
 
@@ -38,6 +53,9 @@ export interface DesktopPlanningClient {
     request: ExecutePlanTransitionRpcParams,
     onEvent?: (event: PlanProgressEvent) => void,
   ): Promise<ExecutePlanTransitionRpcResult>;
+  listPlans(request: PlanListV2Request): Promise<PlanListV2Result>;
+  getPlanContext(request: PlanGetContextV2Request): Promise<PlanGetContextV2Result>;
+  executePlanningCommand(request: PlanningV2Command): Promise<PlanningV2CommandResult>;
 }
 
 export interface DesktopPlanningDialogPort {
@@ -45,6 +63,30 @@ export interface DesktopPlanningDialogPort {
     window: BrowserWindow,
     options: OpenDialogOptions,
   ): Promise<{ readonly canceled: boolean; readonly filePaths: readonly string[] }>;
+}
+
+async function callPlanningV2Command(
+  client: CoachClient,
+  request: PlanningV2Command,
+): Promise<PlanningV2CommandResult> {
+  switch (request.name) {
+    case "plan_creation.start":
+      return client.call("plan_creation.start", request);
+    case "plan_creation.answer":
+      return client.call("plan_creation.answer", request);
+    case "plan_creation.preview":
+      return client.call("plan_creation.preview", request);
+    case "plan_creation.activate":
+      return client.call("plan_creation.activate", request);
+    case "plan_creation.discard":
+      return client.call("plan_creation.discard", request);
+    case "plan_change.preview":
+      return client.call("plan_change.preview", request);
+    case "plan_change.apply":
+      return client.call("plan_change.apply", request);
+    case "plan.close":
+      return client.call("plan.close", request);
+  }
 }
 
 export function createConnectionPlanningClient(
@@ -84,6 +126,9 @@ export function createConnectionPlanningClient(
         throw error;
       }
     },
+    listPlans: (request) => call((client) => client.call("plan.list", request)),
+    getPlanContext: (request) => call((client) => client.call("plan.get_context", request)),
+    executePlanningCommand: (request) => call((client) => callPlanningV2Command(client, request)),
   };
 }
 
@@ -96,6 +141,9 @@ export function installDesktopPlanningIpc(input: {
     request: ExecutePlanTransitionRpcParams,
     onEvent: (event: PlanProgressEvent) => void,
   ) => Promise<ExecutePlanTransitionRpcResult>;
+  readonly listPlans: (request: PlanListV2Request) => Promise<PlanListV2Result>;
+  readonly getPlanContext: (request: PlanGetContextV2Request) => Promise<PlanGetContextV2Result>;
+  readonly executePlanningCommand: (request: PlanningV2Command) => Promise<PlanningV2CommandResult>;
 }): () => void {
   input.ipcMain.handle(
     DESKTOP_PLAN_STATE_CHANNEL,
@@ -145,6 +193,58 @@ export function installDesktopPlanningIpc(input: {
     },
   );
   input.ipcMain.handle(
+    DESKTOP_PLAN_V2_LIST_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (!isTrustedConnectionRequest(event, input.currentWindow())) {
+        throw new Error("untrusted desktop Planning request");
+      }
+      const parsed = args.length === 1 ? PlanListV2RequestSchema.safeParse(args[0]) : undefined;
+      if (parsed === undefined || !parsed.success) {
+        throw new TypeError("invalid desktop Planning request");
+      }
+      try {
+        return PlanListV2ResultSchema.parse(await input.listPlans(parsed.data));
+      } catch {
+        throw new TypeError("desktop Planning unavailable");
+      }
+    },
+  );
+  input.ipcMain.handle(
+    DESKTOP_PLAN_V2_CONTEXT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (!isTrustedConnectionRequest(event, input.currentWindow())) {
+        throw new Error("untrusted desktop Planning request");
+      }
+      const parsed =
+        args.length === 1 ? PlanGetContextV2RequestSchema.safeParse(args[0]) : undefined;
+      if (parsed === undefined || !parsed.success) {
+        throw new TypeError("invalid desktop Planning request");
+      }
+      try {
+        return PlanGetContextV2ResultSchema.parse(await input.getPlanContext(parsed.data));
+      } catch {
+        throw new TypeError("desktop Planning unavailable");
+      }
+    },
+  );
+  input.ipcMain.handle(
+    DESKTOP_PLAN_V2_COMMAND_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (!isTrustedConnectionRequest(event, input.currentWindow())) {
+        throw new Error("untrusted desktop Planning request");
+      }
+      const parsed = args.length === 1 ? PlanningV2CommandSchema.safeParse(args[0]) : undefined;
+      if (parsed === undefined || !parsed.success) {
+        throw new TypeError("invalid desktop Planning request");
+      }
+      try {
+        return PlanningV2CommandResultSchema.parse(await input.executePlanningCommand(parsed.data));
+      } catch {
+        throw new TypeError("desktop Planning unavailable");
+      }
+    },
+  );
+  input.ipcMain.handle(
     DESKTOP_PLAN_COURSE_FILE_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
       const window = input.currentWindow();
@@ -181,6 +281,9 @@ export function installDesktopPlanningIpc(input: {
   return () => {
     input.ipcMain.removeHandler(DESKTOP_PLAN_STATE_CHANNEL);
     input.ipcMain.removeHandler(DESKTOP_PLAN_TRANSITION_CHANNEL);
+    input.ipcMain.removeHandler(DESKTOP_PLAN_V2_LIST_CHANNEL);
+    input.ipcMain.removeHandler(DESKTOP_PLAN_V2_CONTEXT_CHANNEL);
+    input.ipcMain.removeHandler(DESKTOP_PLAN_V2_COMMAND_CHANNEL);
     input.ipcMain.removeHandler(DESKTOP_PLAN_COURSE_FILE_CHANNEL);
   };
 }
