@@ -17,7 +17,6 @@ import { nodeFileSystem } from "@enduragent/kernel-node/filesystem";
 import { createNodeCrypto } from "@enduragent/kernel-node/ingest";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
-  PowerProgressProjectionError,
   createPowerProgressStateSource,
   projectPowerProgressPanel,
   projectPowerProgressState,
@@ -216,19 +215,42 @@ describe("Power Progress state projection", () => {
     ).toEqual({ kind: "unavailable", reason: "refresh-failed" });
   });
 
-  it("fails closed when the exact prior power window is absent", () => {
+  it("keeps the panel computed when only the current power window has anchors", () => {
     const selected = curves();
-    const malformed = {
+    const currentOnly = {
       ...selected,
       powerCurves: { list: selected.powerCurves!.list.slice(0, 1) },
     };
-    expect(() =>
+    const result = projectPowerProgressPanel({
+      current: current(),
+      curves: currentOnly,
+      nowEpochMilliseconds: Date.parse(FROZEN_AT),
+    });
+
+    expect(result.kind).toBe("computed");
+    if (result.kind !== "computed") return;
+    expect(result.rotation).toBe("unknown");
+    expect(result.anchors[0]).toEqual({
+      durationSeconds: 5,
+      current: { kind: "computed", watts: 1_100 },
+      previous: { kind: "unavailable" },
+      change: { kind: "unavailable" },
+    });
+  });
+
+  it("returns insufficient data when neither power window has an anchor", () => {
+    const selected = curves();
+    const withoutPower = {
+      ...selected,
+      powerCurves: { list: [] },
+    };
+    expect(
       projectPowerProgressPanel({
         current: current(),
-        curves: malformed,
+        curves: withoutPower,
         nowEpochMilliseconds: Date.parse(FROZEN_AT),
       }),
-    ).toThrow(new PowerProgressProjectionError());
+    ).toEqual({ kind: "unavailable", reason: "insufficient-data" });
   });
 
   it("reads verified persisted evidence and retains it after a later failed generation", async () => {

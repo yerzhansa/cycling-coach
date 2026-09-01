@@ -1,4 +1,5 @@
-import { addCivilDays, inclusiveCivilDays, weekdayForDateKey } from "@enduragent/kernel/planning";
+import { dateKeyFromText, inclusiveCivilDays } from "@enduragent/kernel/planning";
+import { addCivilDays, mondayOfWeek } from "./civil-week.js";
 import type { ProjectedWorkoutMatch } from "./workout-match.js";
 
 export const WEEKLY_REVIEW_RACE_QUIET_DAYS = 7 as const;
@@ -16,6 +17,15 @@ export interface WeeklyReviewWindow {
   readonly weekEndDateKey: number;
 }
 
+function civilDateFromDateKey(value: number): string {
+  const compact = String(value).padStart(8, "0");
+  return `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`;
+}
+
+function addDateKeyDays(value: number, days: number): number {
+  return dateKeyFromText(addCivilDays(civilDateFromDateKey(value), days));
+}
+
 export function selectWeeklyReviewWindow(input: {
   readonly todayDateKey: number;
   readonly planStartDateKey: number;
@@ -24,15 +34,14 @@ export function selectWeeklyReviewWindow(input: {
   readonly enabled: boolean;
 }): WeeklyReviewWindow | null {
   if (!input.enabled || input.lastSuccessfulSyncDateKey === null) return null;
-  const daysSinceMonday = (weekdayForDateKey(input.todayDateKey) + 6) % 7;
-  const currentWeekStart = addCivilDays(input.todayDateKey, -daysSinceMonday);
+  const currentWeekStart = dateKeyFromText(mondayOfWeek(civilDateFromDateKey(input.todayDateKey)));
   if (input.lastSuccessfulSyncDateKey < currentWeekStart) return null;
   if (input.targetDateKey !== null && input.targetDateKey >= input.todayDateKey) {
     const daysToRace = inclusiveCivilDays(input.todayDateKey, input.targetDateKey) - 1;
     if (daysToRace <= WEEKLY_REVIEW_RACE_QUIET_DAYS) return null;
   }
-  const weekStartDateKey = addCivilDays(currentWeekStart, -7);
-  const weekEndDateKey = addCivilDays(weekStartDateKey, 6);
+  const weekStartDateKey = addDateKeyDays(currentWeekStart, -7);
+  const weekEndDateKey = addDateKeyDays(weekStartDateKey, 6);
   if (weekEndDateKey < input.planStartDateKey) return null;
   return Object.freeze({
     weekStartDateKey: Math.max(weekStartDateKey, input.planStartDateKey),

@@ -1,5 +1,6 @@
 import {
   PowerProgressPanelSchema,
+  type PowerProgressAnchor,
   type PowerProgressComputed,
   type PowerProgressPanel,
 } from "@enduragent/coach-contract";
@@ -19,6 +20,7 @@ import {
   computeHrCurveDelta,
   computePowerCurveDelta,
   computeSustainabilityProfile,
+  roundHalfEven,
   type HrCurveAnchor,
   type PowerCurveAnchor,
   type SustainabilitySportBlock,
@@ -177,11 +179,50 @@ function sourceContext(
   return "unknown";
 }
 
+function windowPowerValue(
+  curves: ProjectedCurves,
+  window: { readonly start: string; readonly end: string },
+  durationSeconds: number,
+): number | null {
+  const curve = curves.powerCurves?.list.find(
+    (candidate) => candidate.id === `r.${window.start}.${window.end}`,
+  );
+  if (curve === undefined) return null;
+  const index = curve.secs.indexOf(durationSeconds);
+  const value = index < 0 ? null : curve.watts[index];
+  return typeof value === "number" && value > 0 ? value : null;
+}
+
+function powerAnchorsFromCurves(
+  curves: ProjectedCurves,
+  currentWindow: { readonly start: string; readonly end: string },
+  previousWindow: { readonly start: string; readonly end: string },
+): readonly PowerProgressAnchor[] | null {
+  const anchors = POWER_ANCHORS.map(([durationSeconds]) => {
+    const current = windowPowerValue(curves, currentWindow, durationSeconds);
+    const previous = windowPowerValue(curves, previousWindow, durationSeconds);
+    return {
+      durationSeconds,
+      current: watts(current),
+      previous: watts(previous),
+      change:
+        current === null || previous === null
+          ? change(null)
+          : change(roundHalfEven(((current - previous) / previous) * 100, 1)),
+    };
+  });
+  return anchors.some(
+    (anchor) => anchor.current.kind === "computed" || anchor.previous.kind === "computed",
+  )
+    ? anchors
+    : null;
+}
+
 function projectPowerProgressPanelUnchecked(input: {
   readonly current: NonNullable<AnalyticsCurveState["current"]>;
   readonly curves: ProjectedCurves;
   readonly nowEpochMilliseconds: number;
-}): PowerProgressComputed {
+}): PowerProgressPanel {
   const generation = input.current.generation;
   const metricInput = buildMetricInput(
     {
@@ -193,11 +234,29 @@ function projectPowerProgressPanelUnchecked(input: {
     `${generation.frozenOn}T12:00:00.000Z`,
   );
   const power = computePowerCurveDelta(metricInput);
+  if (power.window_days !== 28) {
+    invalidProjection();
+  }
+  const projectedPower =
+    power.anchors === null
+      ? powerAnchorsFromCurves(
+          input.curves,
+          generation.windows.current,
+          generation.windows.previous,
+        )
+      : POWER_ANCHORS.map(([durationSeconds, key]) =>
+          powerAnchor(durationSeconds, power.anchors?.[key]),
+        );
+  if (projectedPower === null) {
+    return PowerProgressPanelSchema.parse({
+      kind: "unavailable",
+      reason: "insufficient-data",
+    });
+  }
   if (
-    power.window_days !== 28 ||
-    power.anchors === null ||
-    !exactWindow(power.current_window, generation.windows.current) ||
-    !exactWindow(power.previous_window, generation.windows.previous)
+    power.anchors !== null &&
+    (!exactWindow(power.current_window, generation.windows.current) ||
+      !exactWindow(power.previous_window, generation.windows.previous))
   ) {
     invalidProjection();
   }
@@ -238,10 +297,8 @@ function projectPowerProgressPanelUnchecked(input: {
     kind: "computed",
     currentWindow: generation.windows.current,
     previousWindow: generation.windows.previous,
-    anchors: POWER_ANCHORS.map(([durationSeconds, key]) =>
-      powerAnchor(durationSeconds, power.anchors?.[key]),
-    ),
-    rotation: rotation(power.rotation_index),
+    anchors: projectedPower,
+    rotation: power.anchors === null ? "unknown" : rotation(power.rotation_index),
     heartRateContext,
     sustainabilityContext,
     freshness: freshnessAt(generation.frozenEpochSeconds, input.nowEpochMilliseconds),
@@ -253,7 +310,7 @@ function projectPowerProgressPanelUnchecked(input: {
 
 export function projectPowerProgressPanel(
   input: Parameters<typeof projectPowerProgressPanelUnchecked>[0],
-): PowerProgressComputed {
+): PowerProgressPanel {
   try {
     return projectPowerProgressPanelUnchecked(input);
   } catch (error) {
@@ -282,6 +339,7 @@ export function projectPowerProgressState(input: {
     curves: input.curves,
     nowEpochMilliseconds: input.nowEpochMilliseconds,
   });
+  if (computed.kind === "unavailable") return computed;
   if (input.state.refreshFailure === null) return computed;
   return PowerProgressPanelSchema.parse({
     kind: "stale",
