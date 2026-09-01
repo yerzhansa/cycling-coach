@@ -50,10 +50,17 @@ import { credentialDrafts } from "../src/state/credential-drafts";
 import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
 import { READY_ONBOARDING, setupReady } from "../src/state/onboarding-slice";
 import { useEnduragentStore } from "../src/state/store";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
+import type { TrainingSyncDroppedActivities } from "../src/training-sync";
+import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import type { DesktopUpdateState } from "../src/update/controller";
 import { createDesktopUpdateController } from "../src/update/controller";
 import { CONVERSATION_FIELDS } from "../src/ui/settings/copy";
 import { SettingsView } from "../src/ui/settings/SettingsView";
+import {
+  clearTrainingRestrictionFocusRequest,
+  requestTrainingRestrictionFocus,
+} from "../src/ui/settings/restriction-focus";
 import { testBridge } from "./onboarding-harness";
 
 interface Deferred<T> {
@@ -153,6 +160,23 @@ function spendSummary(overrides: Partial<SpendSummary> = {}): SpendSummary {
     ],
     ...overrides,
   } as SpendSummary;
+}
+
+function stravaDroppedActivities(): TrainingSyncDroppedActivities {
+  return {
+    overall: {
+      total: 67,
+      visible: 5,
+      restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+      other: 2,
+    },
+    recent7Days: {
+      total: 5,
+      visible: 1,
+      restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+      other: 0,
+    },
+  };
 }
 
 function telegramStatus(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
@@ -464,6 +488,7 @@ beforeEach(() => {
     activeView: "settings",
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
+    sync: IDLE_MANUAL_SYNC,
     chatActions: null,
     onboarding: {
       ...READY_ONBOARDING,
@@ -515,7 +540,9 @@ afterEach(() => {
     activeView: "chat",
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
+    sync: IDLE_MANUAL_SYNC,
   });
+  clearTrainingRestrictionFocusRequest();
 });
 
 async function renderSettings(options: HarnessOptions = {}) {
@@ -529,6 +556,61 @@ async function renderSettings(options: HarnessOptions = {}) {
   });
   return harness;
 }
+
+describe("training restriction repair", () => {
+  it("shows the repair card only while Strava restrictions exist", () => {
+    useEnduragentStore.setState({
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+    });
+    render(<SettingsView />);
+
+    const settings = screen.getByRole("region", { name: "Settings" });
+    const notice = settings.querySelector("#strava-restricted-activities");
+    expect(notice).not.toBeNull();
+    expect(notice).toHaveTextContent("60 of 67 activities are hidden by Strava");
+    expect(notice).toHaveTextContent("recording source directly to intervals.icu");
+    expect(notice).toHaveTextContent("Import All Strava Data");
+    expect(notice).toHaveTextContent("intervals.icu supporter subscription");
+
+    act(() => {
+      useEnduragentStore.setState({
+        sync: toManualSyncViewState({
+          status: "succeeded",
+          operation: 2,
+          kind: "no-change",
+          droppedActivities: {
+            overall: { total: 5, visible: 5, restrictions: [], other: 0 },
+            recent7Days: { total: 5, visible: 5, restrictions: [], other: 0 },
+          },
+        }),
+      });
+    });
+
+    expect(settings.querySelector("#strava-restricted-activities")).toBeNull();
+  });
+
+  it("focuses the Settings heading when a pending request has no repair card", async () => {
+    requestTrainingRestrictionFocus();
+    render(<SettingsView />);
+
+    const heading = screen.getByRole("heading", { level: 1, name: "Settings" });
+    await waitFor(() => {
+      expect(heading).toHaveFocus();
+    });
+  });
+
+  it("leaves focus alone on an ordinary Settings mount", () => {
+    render(<SettingsView />);
+
+    const heading = screen.getByRole("heading", { level: 1, name: "Settings" });
+    expect(heading).not.toHaveFocus();
+  });
+});
 
 describe("settings setup inventory", () => {
   it("reloads a stale credential inventory before confirming an Intervals deletion", async () => {

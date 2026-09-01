@@ -1085,7 +1085,7 @@ describe("training page sync", () => {
     expect(message).toHaveTextContent("Enduragent couldn’t verify the sync result.");
   });
 
-  it("shows the Strava action card only when restricted activities exist", () => {
+  it("keeps Strava repair guidance out of Training", () => {
     useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
     render(<TrainingView />);
 
@@ -1111,12 +1111,7 @@ describe("training page sync", () => {
       }),
     });
 
-    const notice = document.querySelector("#strava-restricted-activities");
-    expect(notice).not.toBeNull();
-    expect(notice).toHaveTextContent("60 of 67 activities are hidden by Strava");
-    expect(notice).toHaveTextContent("recording source directly to intervals.icu");
-    expect(notice).toHaveTextContent("Import All Strava Data");
-    expect(notice).toHaveTextContent("intervals.icu supporter subscription");
+    expect(document.querySelector("#strava-restricted-activities")).toBeNull();
     expect(document.querySelector(".training-sync-message")).toHaveTextContent(
       "A Strava API restriction prevents intervals.icu from sharing 60 activities",
     );
@@ -1133,7 +1128,9 @@ describe("training page sync", () => {
       }),
     });
 
-    expect(document.querySelector("#strava-restricted-activities")).toBeNull();
+    expect(document.querySelector(".training-sync-message")).not.toHaveTextContent(
+      "Strava API restriction",
+    );
   });
 
   it("disables the sync action until the controller is bound", () => {

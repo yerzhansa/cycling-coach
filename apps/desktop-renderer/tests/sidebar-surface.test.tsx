@@ -4,10 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
-import {
-  restoreManualSyncFocus,
-  setManualSyncFocusTarget,
-} from "../src/state/manual-sync-focus";
+import { restoreManualSyncFocus, setManualSyncFocusTarget } from "../src/state/manual-sync-focus";
 import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice";
 import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
 import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
@@ -16,7 +13,7 @@ import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import { Sidebar } from "../src/ui/sidebar/Sidebar";
-import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restriction-focus";
+import { clearTrainingRestrictionFocusRequest } from "../src/ui/settings/restriction-focus";
 import { planReadModel } from "./plan-fixtures";
 
 function stubActions(): ChatActions {
@@ -499,7 +496,7 @@ describe("sidebar sync chip", () => {
     ).toBeNull();
 
     await user.click(link);
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     clearTrainingRestrictionFocusRequest();
@@ -508,14 +505,14 @@ describe("sidebar sync chip", () => {
     await user.tab();
     expect(link).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     clearTrainingRestrictionFocusRequest();
     update({ activeView: "chat" });
     fireEvent.pointerDown(link, { pointerType: "touch" });
     fireEvent.click(link, { detail: 1 });
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     clearTrainingRestrictionFocusRequest();
@@ -529,7 +526,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toBeDisabled();
     expect(link).toBeEnabled();
     await user.click(link);
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     update({

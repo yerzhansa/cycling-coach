@@ -20,8 +20,9 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import {
   clearTrainingRestrictionFocusRequest,
+  requestTrainingRestrictionFocus,
   takeTrainingRestrictionFocusRequest,
-} from "../src/ui/training/restriction-focus";
+} from "../src/ui/settings/restriction-focus";
 import { planReadModel } from "./plan-fixtures";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
@@ -330,7 +331,7 @@ describe("shell", () => {
     expect(trainingButton).toHaveFocus();
   });
 
-  it("moves focus from a mounted ride review to the Training action card", async () => {
+  it("moves focus from a mounted ride review to the Settings action card", async () => {
     const user = userEvent.setup();
     const request = vi.fn();
     useEnduragentStore.setState({
@@ -363,20 +364,21 @@ describe("shell", () => {
     remedy.focus();
     await user.keyboard("{Enter}");
 
+    const settings = await screen.findByRole("region", { name: "Settings" });
     const card = await waitFor(() => {
-      const element = document.querySelector<HTMLElement>("#strava-restricted-activities");
+      const element = settings.querySelector<HTMLElement>("#strava-restricted-activities");
       expect(element).not.toBeNull();
-      return element as HTMLElement;
+      return element;
     });
     await waitFor(() => {
       expect(card).toHaveFocus();
     });
-    expect(useEnduragentStore.getState().activeView).toBe("training");
-    expect(useEnduragentStore.getState().selectedRide).toBeNull();
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
+    expect(useEnduragentStore.getState().selectedRide).toEqual(SELECTED_RIDE);
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("preserves a selected ride and does not arm focus when navigation is blocked", async () => {
+  it("focuses the Settings action card when saving keeps Settings active", async () => {
     const user = userEvent.setup();
     const request = vi.fn();
     useEnduragentStore.setState({
@@ -396,12 +398,42 @@ describe("shell", () => {
     });
     render(<Shell onReady={() => {}} />);
 
+    const settings = await screen.findByRole("region", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "60 hidden by Strava. How to fix this" }));
 
+    const card = await waitFor(() => {
+      const element = settings.querySelector<HTMLElement>("#strava-restricted-activities");
+      expect(element).not.toBeNull();
+      return element;
+    });
+    await waitFor(() => {
+      expect(card).toHaveFocus();
+    });
     expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(useEnduragentStore.getState().selectedRide).toEqual(SELECTED_RIDE);
     expect(takeTrainingRestrictionFocusRequest()).toBe(false);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("drops an unconsumed repair-focus request when navigation leaves Settings", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({
+      activeView: "settings",
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+    });
+    render(<Shell onReady={() => {}} />);
+    await screen.findByRole("region", { name: "Settings" });
+
+    requestTrainingRestrictionFocus();
+    await user.click(screen.getByRole("button", { name: "Training" }));
+    await screen.findByRole("region", { name: "Training" });
+
+    expect(takeTrainingRestrictionFocusRequest()).toBe(false);
   });
 
   it("keeps the chat surface mounted while another view is shown", async () => {
