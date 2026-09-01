@@ -1,3 +1,4 @@
+import type { TrainingHistoryComputed } from "@enduragent/coach-contract";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,14 +48,54 @@ const REQUIRED_ONBOARDING = Object.freeze({
 
 const SELECTED_RIDE = Object.freeze({
   id: "a".repeat(64),
+  title: null,
   subSport: "road",
   startEpochSeconds: 900_000_000,
   timezoneOffsetSeconds: 0,
   localDate: "1998-07-09",
+  ridingSeconds: 3_500,
+  ridingTimeBasis: "moving" as const,
   elapsedSeconds: 3_600,
-  movingSeconds: 3_500,
   distanceMeters: 32_000,
+  load: null,
+  averagePowerWatts: null,
+  averageHeartRateBpm: null,
+  perceivedExertion: null,
+  energyKilojoules: null,
 });
+
+const SELECTED_RIDE_HISTORY = {
+  kind: "computed",
+  asOf: "1998-07-19T08:00:00.000Z",
+  calendarTimeZone: "UTC",
+  displayMode: "current",
+  coverage: {
+    kind: "contiguous",
+    start: "1998-06-01",
+    through: "1998-07-19",
+    committedAt: "1998-07-19T07:55:00.000Z",
+  },
+  anchorWeek: {
+    id: "anchor",
+    window: { start: "1998-07-06", end: "1998-07-12" },
+    calendarState: "closed",
+    coverage: { kind: "complete" },
+    totals: {
+      rideCount: { kind: "computed", value: 1 },
+      ridingSeconds: { kind: "computed", value: 3_500 },
+      distanceMeters: { kind: "computed", value: 32_000 },
+      load: { kind: "unavailable", reason: "no-recorded-value" },
+    },
+    rides: {
+      count: { kind: "exact", value: 1 },
+      items: [SELECTED_RIDE],
+      truncated: false,
+    },
+    trend: { kind: "unavailable", reason: "limited-history" },
+    callout: null,
+  },
+  previousWeek: null,
+} as const satisfies TrainingHistoryComputed;
 
 function stubActions(): ChatActions {
   return {
@@ -344,6 +385,10 @@ describe("shell", () => {
           lastSynced: "1998-07-19T07:55:00.000Z",
           freshness: "fresh",
           degraded: false,
+        },
+        trainingContext: {
+          ...EMPTY_TRAINING_SURFACE.trainingContext,
+          trainingHistory: SELECTED_RIDE_HISTORY,
         },
       },
       selectedRide: SELECTED_RIDE,

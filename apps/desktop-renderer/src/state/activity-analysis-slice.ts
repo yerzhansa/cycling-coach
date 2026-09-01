@@ -7,6 +7,7 @@ import {
 import type { EnduragentState } from "./store";
 
 export interface RideAnalysisActions {
+  start(): void;
   refresh(sections: readonly ActivityAnalysisSection[]): void;
 }
 

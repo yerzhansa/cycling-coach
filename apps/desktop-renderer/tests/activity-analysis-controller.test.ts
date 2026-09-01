@@ -87,11 +87,16 @@ function setup(call: CoachClient["call"]) {
 }
 
 describe("ride analysis controller", () => {
-  it("loads the visible ride-analysis sections for a selected canonical ride", async () => {
+  it("waits for the disclosure before loading the selected canonical ride", async () => {
     const call = vi.fn(async () => result()) as unknown as CoachClient["call"];
     const { controller, states } = setup(call);
 
     await controller.select(FIRST);
+
+    expect(call).not.toHaveBeenCalled();
+    expect(states.at(-1)).toMatchObject({ activityId: FIRST, status: "idle" });
+
+    await controller.start();
 
     expect(call).toHaveBeenCalledWith(
       "getActivityAnalysis",
@@ -136,12 +141,17 @@ describe("ride analysis controller", () => {
     ) as unknown as CoachClient["call"];
     const { controller, states } = setup(call);
 
-    const first = controller.select(FIRST);
+    await controller.select(FIRST);
+    const first = controller.start();
     await vi.waitFor(() => expect(calls).toEqual([FIRST]));
     await controller.select(SECOND);
+    await controller.start();
     await first;
 
-    expect(states.at(-1)).toMatchObject({ activityId: SECOND, status: "ready" });
+    expect(states.at(-1)).toMatchObject({
+      activityId: SECOND,
+      status: "ready",
+    });
   });
 
   it("preserves completed evidence when a refresh transport fails", async () => {
@@ -153,6 +163,7 @@ describe("ride analysis controller", () => {
     const { controller, states } = setup(call);
 
     await controller.select(FIRST);
+    await controller.start();
     fail = true;
     await controller.load(["aerobic-drift"], true);
 
@@ -173,6 +184,7 @@ describe("ride analysis controller", () => {
     }) as unknown as CoachClient["call"];
     const { controller, states } = setup(call);
     await controller.select(FIRST);
+    await controller.start();
 
     fail = true;
     await controller.load(["intervals"], true);
@@ -188,9 +200,32 @@ describe("ride analysis controller", () => {
     const call = vi.fn(async () => result()) as unknown as CoachClient["call"];
     const { controller, states } = setup(call);
     await controller.select(FIRST);
+    await controller.start();
 
     await controller.select(null);
 
-    expect(states.at(-1)).toMatchObject({ activityId: null, status: "idle", sections: {} });
+    expect(states.at(-1)).toMatchObject({
+      activityId: null,
+      status: "idle",
+      sections: {},
+    });
+  });
+
+  it("reuses successful analysis when a ride is reopened during the session", async () => {
+    const call = vi.fn(async () => result()) as unknown as CoachClient["call"];
+    const { controller, states } = setup(call);
+
+    await controller.select(FIRST);
+    await controller.start();
+    await controller.select(null);
+    await controller.select(FIRST);
+
+    expect(states.at(-1)).toMatchObject({
+      activityId: FIRST,
+      status: "ready",
+      revision: REVISION,
+    });
+    await controller.start();
+    expect(call).toHaveBeenCalledTimes(1);
   });
 });

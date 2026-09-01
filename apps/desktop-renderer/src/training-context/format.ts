@@ -1,3 +1,5 @@
+import type { UnitsPreference } from "@enduragent/coach-contract";
+
 export function formatDateLabel(value: string): string {
   const match = /^(\d{4}-\d{2}-\d{2})/u.exec(value);
   if (match === null) return "Unknown date";
@@ -5,6 +7,12 @@ export function formatDateLabel(value: string): string {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === match[1]
     ? match[1]
     : "Unknown date";
+}
+
+export function formatShortDateLabel(value: string): string {
+  const label = formatDateLabel(value);
+  if (label === "Unknown date") return label;
+  return `${Number(label.slice(5, 7))}/${Number(label.slice(8, 10))}`;
 }
 
 const UTC_INSTANT_PATTERN =
@@ -45,4 +53,21 @@ export function formatPercentage(value: number): string {
 export function formatSleepDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+export function formatRidingDuration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours === 0) return `${remainder}m`;
+  if (remainder === 0) return `${hours}h`;
+  return `${hours}h ${remainder}m`;
+}
+
+export function formatDistance(value: number, units: UnitsPreference): string {
+  const converted = units === "imperial" ? value / 1_609.344 : value / 1_000;
+  const rounded = Math.round(converted * 10) / 10;
+  return `${rounded.toFixed(Number.isInteger(rounded) ? 0 : 1)} ${
+    units === "imperial" ? "mi" : "km"
+  }`;
 }

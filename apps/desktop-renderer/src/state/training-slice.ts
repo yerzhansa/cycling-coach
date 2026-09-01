@@ -1,4 +1,7 @@
-import { UNKNOWN_CYCLING_TRAINING_CONTEXT, type RecentRide } from "@enduragent/coach-contract";
+import {
+  UNKNOWN_CYCLING_TRAINING_CONTEXT,
+  type TrainingHistoryRide,
+} from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { TrainingContextViewState } from "../training-context/controller";
 import type { EnduragentState } from "./store";
@@ -16,22 +19,25 @@ export const EMPTY_TRAINING_SURFACE: TrainingContextViewState = Object.freeze({
 
 export interface TrainingSlice {
   readonly training: TrainingContextViewState;
-  readonly selectedRide: RecentRide | null;
+  readonly selectedRide: TrainingHistoryRide | null;
   setTraining: (next: TrainingContextViewState) => void;
-  openRide: (ride: RecentRide) => void;
+  openRide: (ride: TrainingHistoryRide) => void;
   closeRide: () => void;
 }
 
 function reconciledRide(
-  current: RecentRide | null,
+  current: TrainingHistoryRide | null,
   next: TrainingContextViewState,
-): RecentRide | null {
-  const recent = next.trainingContext.recentRides;
+): TrainingHistoryRide | null {
   if (current === null) return null;
-  if (recent.kind === "computed") {
-    return recent.items.find((ride) => ride.id === current.id) ?? null;
-  }
-  return recent.reason === "temporary-failure" ? current : null;
+  const panel = next.trainingContext.trainingHistory;
+  if (panel.kind === "unavailable") return null;
+  const history = panel.kind === "stale" ? panel.lastGood : panel;
+  return (
+    history.anchorWeek.rides.items.find((ride) => ride.id === current.id) ??
+    history.previousWeek?.rides.items.find((ride) => ride.id === current.id) ??
+    null
+  );
 }
 
 export const createTrainingSlice: StateCreator<EnduragentState, [], [], TrainingSlice> = (
@@ -41,7 +47,10 @@ export const createTrainingSlice: StateCreator<EnduragentState, [], [], Training
   training: EMPTY_TRAINING_SURFACE,
   selectedRide: null,
   setTraining(next) {
-    set({ training: next, selectedRide: reconciledRide(get().selectedRide, next) });
+    set({
+      training: next,
+      selectedRide: reconciledRide(get().selectedRide, next),
+    });
   },
   openRide(ride) {
     set({ selectedRide: ride });

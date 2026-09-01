@@ -99,6 +99,9 @@ export function bootRenderer(): Disposer {
     },
   });
   store.getState().bindRideAnalysisActions({
+    start: () => {
+      void rideAnalysisController.start();
+    },
     refresh: (sections) => {
       void rideAnalysisController.load(sections, true);
     },
