@@ -1202,6 +1202,69 @@ describe("Plan surface", () => {
     expect(useEnduragentStore.getState().plan).toBe(planBeforeExport);
   });
 
+  it("disables the export controls and reports status while a workout archive runs", () => {
+    const state = activePlanState([
+      {
+        id: "00000000000000000000000005",
+        date: "1998-07-17",
+        sport: "cycling",
+        name: "Long endurance",
+        durationS: 7_200,
+      },
+    ]);
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+      trainingExport: { status: "running", target: "workout-archive" },
+      trainingExportActions: {
+        exportActivity: vi.fn(async () => {}),
+        exportWorkoutArchive: vi.fn(async () => {}),
+      },
+    });
+    render(<PlanView />);
+
+    const matchSection = screen
+      .getByRole("heading", { name: "WorkoutMatch · this week" })
+      .closest("section");
+    if (matchSection === null) throw new Error("WorkoutMatch section is missing");
+    const match = within(matchSection);
+    expect(match.getByRole("combobox", { name: "Workout format" })).toBeDisabled();
+    const exportButton = match.getByRole("button", { name: "Export workouts" });
+    expect(exportButton).toBeDisabled();
+    expect(exportButton).toHaveAttribute("aria-busy", "true");
+    expect(match.getByRole("status")).toHaveTextContent("Choose where to save the file.");
+  });
+
+  it("shows the workout-archive outcome in the Plan status region", () => {
+    const state = activePlanState([
+      {
+        id: "00000000000000000000000005",
+        date: "1998-07-17",
+        sport: "cycling",
+        name: "Long endurance",
+        durationS: 7_200,
+      },
+    ]);
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+      trainingExport: { status: "cancelled", target: "workout-archive" },
+      trainingExportActions: {
+        exportActivity: vi.fn(async () => {}),
+        exportWorkoutArchive: vi.fn(async () => {}),
+      },
+    });
+    render(<PlanView />);
+
+    const matchSection = screen
+      .getByRole("heading", { name: "WorkoutMatch · this week" })
+      .closest("section");
+    if (matchSection === null) throw new Error("WorkoutMatch section is missing");
+    expect(within(matchSection).getByRole("status")).toHaveTextContent(
+      "Export cancelled. No file was changed.",
+    );
+  });
+
   it("does not render Workout archive export when WorkoutMatch has no workouts", () => {
     const state = activePlanState([]);
     useEnduragentStore.setState({
