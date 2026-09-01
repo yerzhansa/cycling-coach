@@ -4,4 +4,5 @@
 |---|---|
 | Chat and past chats | [`chat-history.md`](chat-history.md) |
 | Setup | [`setup.md`](setup.md) |
+| Settings connections | [`settings-connections.md`](settings-connections.md) — Settings-owned coach, Intervals.icu/training-account, and Telegram connection management use deterministic renderer `vitest`; native Windows rows are `vm-only`. |
 | Training | [`training.md`](training.md) — deterministic Training scenarios use isolated `ready()` renderer state with renderer/desktop `vitest`; native Windows rows are `vm-only`. |
