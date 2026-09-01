@@ -107,12 +107,8 @@ export function SyncChip(): ReactElement {
                 href={`#${STRAVA_RESTRICTION_CARD_ID}`}
                 aria-label={`${restrictionLabel}. How to fix this`}
                 className="pointer-events-auto mt-px flex w-full min-w-0 items-center gap-1 text-[11px] no-underline"
-                onClick={(event) => {
+                onClick={() => {
                   setActiveView("settings");
-                  if (useEnduragentStore.getState().activeView !== "settings") {
-                    event.preventDefault();
-                    return;
-                  }
                   requestTrainingRestrictionFocus();
                   focusTrainingRestrictionIfPresent(
                     document.getElementById(STRAVA_RESTRICTION_CARD_ID),

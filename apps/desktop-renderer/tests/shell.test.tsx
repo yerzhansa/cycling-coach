@@ -20,6 +20,7 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import {
   clearTrainingRestrictionFocusRequest,
+  requestTrainingRestrictionFocus,
   takeTrainingRestrictionFocusRequest,
 } from "../src/ui/settings/restriction-focus";
 import { planReadModel } from "./plan-fixtures";
@@ -412,6 +413,27 @@ describe("shell", () => {
     expect(useEnduragentStore.getState().selectedRide).toEqual(SELECTED_RIDE);
     expect(takeTrainingRestrictionFocusRequest()).toBe(false);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("drops an unconsumed repair-focus request when navigation leaves Settings", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({
+      activeView: "settings",
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+    });
+    render(<Shell onReady={() => {}} />);
+    await screen.findByRole("region", { name: "Settings" });
+
+    requestTrainingRestrictionFocus();
+    await user.click(screen.getByRole("button", { name: "Training" }));
+    await screen.findByRole("region", { name: "Training" });
+
+    expect(takeTrainingRestrictionFocusRequest()).toBe(false);
   });
 
   it("keeps the chat surface mounted while another view is shown", async () => {

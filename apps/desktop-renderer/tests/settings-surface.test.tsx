@@ -603,6 +603,13 @@ describe("training restriction repair", () => {
       expect(heading).toHaveFocus();
     });
   });
+
+  it("leaves focus alone on an ordinary Settings mount", () => {
+    render(<SettingsView />);
+
+    const heading = screen.getByRole("heading", { level: 1, name: "Settings" });
+    expect(heading).not.toHaveFocus();
+  });
 });
 
 describe("settings setup inventory", () => {

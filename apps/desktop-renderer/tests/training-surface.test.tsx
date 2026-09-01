@@ -1125,6 +1125,10 @@ describe("training page sync", () => {
         },
       }),
     });
+
+    expect(document.querySelector(".training-sync-message")).not.toHaveTextContent(
+      "Strava API restriction",
+    );
   });
 
   it("disables the sync action until the controller is bound", () => {
