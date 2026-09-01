@@ -217,11 +217,19 @@ export function createPersistedAthleteStateSource(
         if (input.recentRidesSource !== undefined && isMissingFile(latestResult.reason)) {
           const now = input.now?.() ?? new Date();
           const asOf = now.toISOString();
-          const recentRides = await readRecentRides(
-            input.recentRidesSource,
-            asOf,
-            Math.floor(now.getTime() / 1_000),
-          );
+          const asOfEpochSeconds = Math.floor(now.getTime() / 1_000);
+          const [recentRides, trainingHistory] = await Promise.all([
+            readRecentRides(input.recentRidesSource, asOf, asOfEpochSeconds),
+            trainingHistoryIdentity === null
+              ? Promise.resolve({ kind: "unavailable", reason: "not-synced" } as const)
+              : readTrainingHistory(trainingHistoryIdentity, {
+                  asOf,
+                  asOfEpochSeconds,
+                  calendarTimeZone: trainingHistoryIdentity.calendarTimeZone,
+                  freshness: "fresh",
+                  sourceRestricted: false,
+                }),
+          ]);
           return AthleteStateSchema.parse({
             schemaVersion: LATEST_SCHEMA_VERSION,
             lastUpdated: asOf,
@@ -237,6 +245,7 @@ export function createPersistedAthleteStateSource(
             trainingContext: {
               ...UNKNOWN_CYCLING_TRAINING_CONTEXT,
               recentRides,
+              trainingHistory,
             },
           });
         }

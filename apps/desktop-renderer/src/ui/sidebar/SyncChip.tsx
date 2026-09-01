@@ -1,7 +1,10 @@
-import { useRef, type ReactElement } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { setManualSyncFocusTarget } from "../../state/manual-sync-focus";
+import {
+  setManualSyncFocusFallback,
+  setManualSyncFocusTarget,
+} from "../../state/manual-sync-focus";
 import { useEnduragentStore } from "../../state/store";
 import type { TrainingContextViewState } from "../../training-context/controller";
 import {
@@ -45,6 +48,7 @@ export function SyncChip(): ReactElement {
   const actions = useEnduragentStore((store) => store.syncActions);
   const setActiveView = useEnduragentStore((store) => store.setActiveView);
   const chip = useRef<HTMLButtonElement>(null);
+  const wrapper = useRef<HTMLDivElement>(null);
   const status = syncChipStatus(training, sync);
   const synced = training.metadata?.lastSynced ?? null;
   const detail = status === "synced" && synced !== null ? formatUtcTimestamp(synced) : null;
@@ -56,8 +60,15 @@ export function SyncChip(): ReactElement {
         ? "1 hidden by Strava"
         : `${restriction.count} hidden by Strava`;
 
+  useEffect(() => {
+    setManualSyncFocusFallback(wrapper.current);
+    return () => setManualSyncFocusFallback(null);
+  }, []);
+
   return (
     <div
+      ref={wrapper}
+      tabIndex={-1}
       className="relative flex min-h-ctl min-w-0 w-full items-center gap-2 px-row py-1.5 text-left text-xs font-normal text-ink-2"
       data-sync-chip=""
       data-status={status}

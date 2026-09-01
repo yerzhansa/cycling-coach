@@ -8,7 +8,10 @@ import {
 } from "../src/training-context/controller";
 import {
   formatDateLabel,
+  formatDistance,
   formatPercentage,
+  formatRidingDuration,
+  formatShortDateLabel,
   formatSleepDuration,
   formatUtcTimestamp,
   formatWholeNumber,
@@ -21,7 +24,7 @@ const context: CyclingTrainingContext = {
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
   cyclingLoad: {
     kind: "computed",
-    asOf: "2026-07-18T00:00:00.000Z",
+    asOf: "1998-07-18T00:00:00.000Z",
     source: "intervals.icu",
     windowDays: 7,
     value: 120,
@@ -36,10 +39,10 @@ const context: CyclingTrainingContext = {
 function athlete(trainingContext: CyclingTrainingContext | undefined = context): AthleteState {
   return {
     schemaVersion: "3",
-    lastUpdated: "2026-07-18T00:00:00.000Z",
+    lastUpdated: "1998-07-18T00:00:00.000Z",
     freshness: "flag",
     degraded: true,
-    lastSynced: "2026-07-17T23:00:00.000Z",
+    lastSynced: "1998-07-17T23:00:00.000Z",
     athleteProfile: { hidden: true },
     currentStatus: { hidden: true },
     derivedMetrics: { hidden: true },
@@ -82,8 +85,8 @@ describe("training context controller", () => {
     expect(states.at(-1)).toEqual({
       status: "ready",
       metadata: {
-        lastUpdated: "2026-07-18T00:00:00.000Z",
-        lastSynced: "2026-07-17T23:00:00.000Z",
+        lastUpdated: "1998-07-18T00:00:00.000Z",
+        lastSynced: "1998-07-17T23:00:00.000Z",
         freshness: "flag",
         degraded: true,
       },
@@ -327,11 +330,16 @@ describe("training context controller", () => {
 
 describe("training context display formatters", () => {
   it("formats only display values without clock or locale inputs", () => {
-    expect(formatDateLabel("2026-07-18T12:00:00Z")).toBe("2026-07-18");
-    expect(formatDateLabel("2026-02-30")).toBe("Unknown date");
+    expect(formatDateLabel("1998-07-18T12:00:00Z")).toBe("1998-07-18");
+    expect(formatDateLabel("1998-02-30")).toBe("Unknown date");
+    expect(formatShortDateLabel("1998-07-18")).toBe("7/18");
     expect(formatWholeNumber(12.6)).toBe("13");
     expect(formatPercentage(0.756)).toBe("76%");
     expect(formatSleepDuration(27_901)).toBe("7h 45m");
+    expect(formatRidingDuration(7_200)).toBe("2h");
+    expect(formatRidingDuration(5_100)).toBe("1h 25m");
+    expect(formatDistance(42_120, "metric")).toBe("42.1 km");
+    expect(formatDistance(42_120, "imperial")).toBe("26.2 mi");
   });
 
   it("distinguishes same-day sync seconds while mutation labels remain date-only", () => {

@@ -179,6 +179,231 @@ describe("training history projection", () => {
     });
   });
 
+  it("selects the unique longest returned ride in the complete 28-day window", async () => {
+    const winner = ride({
+      id: "1".repeat(64),
+      localDate: "1998-07-08",
+      movingSeconds: 7_200,
+    });
+    const result = await read({
+      asOf: "1998-07-12T12:00:00.000Z",
+      rows: [
+        winner,
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [
+        commit({
+          id: 1,
+          newest: "1998-07-12",
+          committedAt: "1998-07-12T12:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toEqual({
+      kind: "longest-ride-28d",
+      rideId: winner.id,
+      durationSeconds: 7_200,
+      window: { start: "1998-06-15", end: "1998-07-12" },
+      comparisonRideCount: 4,
+    });
+    expect(result.projection.previousWeek?.callout).toBeNull();
+  });
+
+  it("returns no callout when the winner is not one of the returned ride items", async () => {
+    const visible = Array.from({ length: 50 }, (_, index) =>
+      ride({
+        id: (index + 1).toString(16).padStart(64, "0"),
+        localDate: "1998-07-08",
+        movingSeconds: 3_600 + index,
+      }),
+    );
+    const result = await read({
+      rows: [
+        ...visible,
+        ride({ id: "f".repeat(64), localDate: "1998-07-06", movingSeconds: 10_000 }),
+      ],
+      commits: [commit({ id: 1 })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.rides.items).toHaveLength(50);
+    expect(result.projection.anchorWeek.rides.truncated).toBe(true);
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout when the longest riding time is tied", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-07", movingSeconds: 7_200 }),
+        ride({ id: "3".repeat(64), localDate: "1998-07-04", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1 })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout with fewer than four comparable rides", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1 })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout when any ride in the comparison window lacks riding time", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({
+          id: "3".repeat(64),
+          localDate: "1998-06-28",
+          movingSeconds: null,
+          elapsedSeconds: null,
+        }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1 })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout for incomplete source coverage", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1 })],
+      sourceRestricted: true,
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.coverage.kind).toBe("incomplete");
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout when contiguous history does not cover all 28 dates", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1, oldest: "1998-06-20" })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout when the history read hit its scan limit", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+        ride({ id: "5".repeat(64), localDate: "1998-05-26", movingSeconds: 4_200 }),
+      ],
+      commits: [commit({ id: 1 })],
+      scanTruncated: true,
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.coverage).toEqual({ kind: "complete" });
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("returns no callout when the unique winner falls outside the selected week", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 6_000 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 7_200 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1 })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("ends the callout window at proven coverage through when it precedes Sunday", async () => {
+    const winner = ride({
+      id: "1".repeat(64),
+      localDate: "1998-07-08",
+      movingSeconds: 7_200,
+    });
+    const result = await read({
+      rows: [
+        ride({ id: "5".repeat(64), localDate: "1998-07-11", movingSeconds: 9_000 }),
+        winner,
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1, newest: "1998-07-10" })],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.callout).toEqual({
+      kind: "longest-ride-28d",
+      rideId: winner.id,
+      durationSeconds: 7_200,
+      window: { start: "1998-06-13", end: "1998-07-10" },
+      comparisonRideCount: 4,
+    });
+  });
+
+  it("returns no callout in last-recorded display mode", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08", movingSeconds: 7_200 }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-04", movingSeconds: 6_000 }),
+        ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
+        ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
+      ],
+      commits: [commit({ id: 1 })],
+      freshness: "stale",
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.displayMode).toBe("last-recorded");
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
   it("falls back from absent moving time to elapsed time and records the basis", async () => {
     const result = await read({
       rows: [

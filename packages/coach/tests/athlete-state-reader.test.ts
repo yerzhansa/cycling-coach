@@ -140,13 +140,16 @@ function computedTrainingHistory(): TrainingHistoryComputed {
       truncated: false,
     },
     trend: { kind: "unavailable" as const, reason: "limited-history" as const },
-    callout: {
-      kind: "longest-ride-28d" as const,
-      rideId: ride.id,
-      durationSeconds: ride.ridingSeconds,
-      window: { start: "1998-06-21", end: "1998-07-18" },
-      comparisonRideCount: 4,
-    },
+    callout:
+      id === "anchor"
+        ? {
+            kind: "longest-ride-28d" as const,
+            rideId: ride.id,
+            durationSeconds: ride.ridingSeconds,
+            window: { start: "1998-06-21", end: "1998-07-18" },
+            comparisonRideCount: 4,
+          }
+        : null,
   });
   return {
     kind: "computed",
@@ -198,9 +201,12 @@ describe("persisted athlete state source", () => {
       calendarTimeZone: () => "UTC",
     });
 
-    expect((await reader.getAthleteState()).trainingContext?.trainingHistory.kind).toBe(
-      "computed",
-    );
+    const computed = (await reader.getAthleteState()).trainingContext?.trainingHistory;
+    expect(computed).toMatchObject({
+      kind: "computed",
+      anchorWeek: { callout: { kind: "longest-ride-28d" } },
+      previousWeek: { callout: null },
+    });
     response = "throw";
     const thrown = (await reader.getAthleteState()).trainingContext?.trainingHistory;
     expect(thrown).toMatchObject({
@@ -311,6 +317,36 @@ describe("persisted athlete state source", () => {
       kind: "unavailable",
       reason: "temporary-failure",
     });
+  });
+
+  it("projects training history without a Reference snapshot", async () => {
+    const root = await home();
+    const now = new Date("1998-07-18T12:00:00.000Z");
+    const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
+    const readRecentRides = vi.fn(async () => ({
+      kind: "unknown" as const,
+      reason: "not-synced" as const,
+    }));
+
+    const state = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      recentRidesSource: { readRecentRides },
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    }).getAthleteState();
+
+    expect(AthleteStateSchema.parse(state)).toEqual(state);
+    expect(readTrainingHistory).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+      calendarTimeZone: "UTC",
+      freshness: "fresh",
+      sourceRestricted: false,
+    });
+    expect(state.trainingContext?.trainingHistory).toMatchObject({ kind: "computed" });
   });
 
   it("returns canonical recent rides without a Reference snapshot", async () => {

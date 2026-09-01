@@ -328,6 +328,63 @@ function projectRide(row: TrainingHistoryFactRow): TrainingHistoryRide {
   };
 }
 
+function longestRecordedRideCallout(input: {
+  readonly selectedWeek: CivilDateWindow;
+  readonly rows: readonly TrainingHistoryFactRow[];
+  readonly returnedRides: readonly TrainingHistoryRide[];
+  readonly coverage: TrainingHistoryCoverage;
+  readonly scanTruncated: boolean;
+  readonly displayMode: "current" | "last-recorded";
+}): CompletedActivityWeek["callout"] {
+  if (
+    input.displayMode === "last-recorded" ||
+    input.scanTruncated ||
+    input.coverage.kind !== "contiguous"
+  ) {
+    return null;
+  }
+  const end =
+    input.coverage.through < input.selectedWeek.end
+      ? input.coverage.through
+      : input.selectedWeek.end;
+  const window = { start: addCivilDays(end, -27), end };
+  if (input.coverage.start > window.start) return null;
+  const rows = input.rows.filter(
+    (row) => row.localDate >= window.start && row.localDate <= window.end,
+  );
+  if (rows.length < 4 || rows.length > 1_000) return null;
+  let longest: { readonly row: TrainingHistoryFactRow; readonly durationSeconds: number } | null =
+    null;
+  let tied = false;
+  for (const row of rows) {
+    const durationSeconds = ridingTime(row).seconds;
+    if (durationSeconds === null) return null;
+    if (longest === null || durationSeconds > longest.durationSeconds) {
+      longest = { row, durationSeconds };
+      tied = false;
+    } else if (durationSeconds === longest.durationSeconds) {
+      tied = true;
+    }
+  }
+  if (
+    longest === null ||
+    tied ||
+    longest.row.localDate < input.selectedWeek.start ||
+    longest.row.localDate > input.selectedWeek.end
+  ) {
+    return null;
+  }
+  const returnedRide = input.returnedRides.find((ride) => ride.id === longest.row.id);
+  if (returnedRide?.ridingSeconds !== longest.durationSeconds) return null;
+  return {
+    kind: "longest-ride-28d",
+    rideId: longest.row.id,
+    durationSeconds: longest.durationSeconds,
+    window,
+    comparisonRideCount: rows.length,
+  };
+}
+
 function calendarState(
   window: CivilDateWindow,
   today: string,
@@ -595,21 +652,33 @@ export function createTrainingHistorySource(dependencies: {
           coverage,
           scanCutoffDate: scanCutoff,
         });
+        const anchorWeekWithoutCallout = completedWeek({
+          id: "anchor",
+          window: windows.anchor,
+          windows,
+          today,
+          coverage,
+          scanCutoffDate: scanCutoff,
+          trend: ridingTrend,
+        });
+        const anchorWeek: CompletedActivityWeek = {
+          ...anchorWeekWithoutCallout,
+          callout: longestRecordedRideCallout({
+            selectedWeek: windows.anchor,
+            rows: facts.rows,
+            returnedRides: anchorWeekWithoutCallout.rides.items,
+            coverage,
+            scanTruncated: facts.scanTruncated,
+            displayMode,
+          }),
+        };
         const projection: TrainingHistoryProjection = {
           kind: "computed",
           asOf: input.asOf,
           calendarTimeZone: input.calendarTimeZone,
           displayMode,
           coverage,
-          anchorWeek: completedWeek({
-            id: "anchor",
-            window: windows.anchor,
-            windows,
-            today,
-            coverage,
-            scanCutoffDate: scanCutoff,
-            trend: ridingTrend,
-          }),
+          anchorWeek,
           previousWeek: completedWeek({
             id: "previous",
             window: windows.previous,
