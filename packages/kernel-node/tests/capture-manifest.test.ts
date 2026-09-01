@@ -20,7 +20,10 @@ const FIRST = "12345678-1234-4123-8123-123456789abc";
 const SECOND = "22345678-1234-4123-8123-123456789abc";
 
 function manifest(captureId = FIRST): ReferenceCaptureManifest {
-  const plan = createReferenceCapturePlan(new Date("1998-07-18T12:00:00.000Z"));
+  const plan = createReferenceCapturePlan({
+    now: new Date("1998-07-18T12:00:00.000Z"),
+    calendarTimeZone: "UTC",
+  });
   const address = "a".repeat(64), snapshot = { address, rel_path: `1998/07/${address}.json.gz` };
   return validateReferenceCaptureManifest({ schema_version: 1, capture_id: captureId, source: "external-oracle", plan,
     operation_ledger: { link_kind: "capture-id", capture_id: captureId },

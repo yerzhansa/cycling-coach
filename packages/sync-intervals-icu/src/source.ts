@@ -2,7 +2,6 @@ import { canonicalJson, type ArchiveInstant, type ArchiveWriteResult } from "@en
 import type { HttpRequest, HttpResponse } from "@enduragent/kernel/ports";
 import {
   REFERENCE_CAPTURE_STREAM_TYPES,
-  createReferenceCapturePlan,
   selectReferenceCaptureStreamIds,
   validateReferenceCapturePlan,
   type DerivedCaptureMember,
@@ -521,8 +520,11 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
     });
   }
 
-  async function captureReference(now: Date, budget: SyncBudget): Promise<ReferenceCaptureBatch> {
-    const plan = createReferenceCapturePlan(now);
+  async function captureReference(
+    inputPlan: ReferenceCapturePlan,
+    budget: SyncBudget,
+  ): Promise<ReferenceCaptureBatch> {
+    const plan = validateReferenceCapturePlan(inputPlan);
     const requester = createRequester({
       http: options.httpFactory({ outer: budget.signal, perRequestTimeoutMs: budget.perRequestTimeoutMs }),
       budget,

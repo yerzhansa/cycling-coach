@@ -1560,6 +1560,7 @@ export function createPlanQaFixtureScript(
               windowDays: 28,
               items: [],
             },
+            trainingHistory: { kind: "unavailable", reason: "not-synced" },
             anchorZones: { kind: "unavailable", reason: "not-synced" },
             cyclingLoad: { kind: "unavailable", reason: "not-synced" },
             plan: { kind: "computed", asOf: "1998-08-22T08:00:00.000Z", items: [] },

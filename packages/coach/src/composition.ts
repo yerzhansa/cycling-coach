@@ -67,10 +67,13 @@ import {
   createAnalyticsCurveStateReader,
   createCanonicalActivityReader,
   createIntervalsSourceRepository,
+  createTrainingCoverageReader,
+  createTrainingHistoryReader,
   createTrustedActivitySourceResolver,
   H,
   type AnchorRepository,
 } from "@enduragent/kernel/store";
+import { createReferenceCapturePlan } from "@enduragent/kernel/reference/capture";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
 import {
@@ -123,6 +126,7 @@ import { projectAnalyticsCurveEvidence } from "@enduragent/sync-intervals-icu";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
 import { createRecentRidesSource } from "./recent-rides.js";
+import { createTrainingHistorySource } from "./training-history.js";
 import {
   assertRuntimeAthleteOwner,
   RuntimeAthleteOwnerRefusal,
@@ -882,17 +886,23 @@ export async function createLocalCoachComposition(
     now,
   });
   const ownerClock = { now, monotonicNow: () => performance.now() };
+  const referencePlan = (config: Config) =>
+    createReferenceCapturePlan({
+      now: new Date(now()),
+      calendarTimeZone: resolveUserTimezone(config.session.timezone),
+    });
   const intervalsCredentialApprovals = createIntervalsCredentialApprovalStore({ now });
   let intervalsConfigRevision = 0;
-  const ownerLookup = (intervals: Config["intervals"]) => ({
-    apiKey: intervals.apiKey,
-    athleteId: intervals.athleteId.length === 0 ? "0" : intervals.athleteId,
-    historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+  const ownerLookup = (config: Config) => ({
+    apiKey: config.intervals.apiKey,
+    athleteId:
+      config.intervals.athleteId.length === 0 ? "0" : config.intervals.athleteId,
+    historyNewestDate: referencePlan(config).window.newest,
     clock: ownerClock,
   });
   const assertIntervalsOwner = async (
-    current: Config["intervals"],
-    candidate: Config["intervals"],
+    current: Config,
+    candidate: Config,
     signal: AbortSignal,
     claimUnownedCandidateWithoutCurrent = false,
     verificationEvidence?: IntervalsCredentialVerificationEvidence,
@@ -937,12 +947,13 @@ export async function createLocalCoachComposition(
     const configRevision = intervalsConfigRevision;
     let athleteSelector = configuredAthleteSelector;
     let usedCurrentAthleteFallback = false;
+    const verificationPlan = referencePlan(unapprovedConfig);
     let verification = await verifyIntervalsCredentialAtPathWithEvidence(
       join(input.home.storeDir, "store.db"),
       {
         apiKey: request.api_key,
         athleteId: athleteSelector,
-        historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+        historyNewestDate: verificationPlan.window.newest,
         clock: ownerClock,
         signal,
       },
@@ -960,7 +971,7 @@ export async function createLocalCoachComposition(
         {
           apiKey: request.api_key,
           athleteId: athleteSelector,
-          historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+          historyNewestDate: verificationPlan.window.newest,
           clock: ownerClock,
           signal,
         },
@@ -999,8 +1010,8 @@ export async function createLocalCoachComposition(
   try {
     if (!input.deferInitialRefresh && unapprovedConfig.intervals.apiKey.length > 0) {
       const startupOwnerClaim = await assertIntervalsOwner(
-        unapprovedConfig.intervals,
-        unapprovedConfig.intervals,
+        unapprovedConfig,
+        unapprovedConfig,
         new AbortController().signal,
       );
       await startupOwnerClaim?.claim();
@@ -1243,12 +1254,19 @@ export async function createLocalCoachComposition(
       now,
     });
     const canonicalActivities = createCanonicalActivityReader(input.context.store);
+    const trainingHistory = createTrainingHistorySource({
+      facts: createTrainingHistoryReader(input.context.store),
+      coverage: createTrainingCoverageReader(input.context.store),
+    });
     const stateReader = createPersistedAthleteStateSource({
       dataDir: input.home.root,
       cyclingFtpAnchorResolver,
       now: () => new Date(now()),
       powerProgressSource: powerProgress,
       recentRidesSource: createRecentRidesSource(canonicalActivities),
+      trainingHistorySource: trainingHistory,
+      sourceOwner: () => approvedConfig().intervals.athleteId,
+      calendarTimeZone: () => resolveUserTimezone(approvedConfig().session.timezone),
       droppedActivitiesSource: () => runtime!.currentDroppedActivities(),
     });
     const buildBundle = (config: Config): RuntimeBundle => {
@@ -1557,8 +1575,8 @@ export async function createLocalCoachComposition(
         }
         try {
           pendingOwnerClaim = await assertIntervalsOwner(
-            unapprovedConfig.intervals,
-            candidate.intervals,
+            unapprovedConfig,
+            candidate,
             signal,
             unapprovedConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
             verificationEvidence,
@@ -1695,11 +1713,11 @@ export async function createLocalCoachComposition(
           const initializationSignal = AbortSignal.any([signal, initialRefreshController.signal]);
           initializationSignal.throwIfAborted();
           initialRefreshConfigCaptured = true;
-          const initialIntervals = { ...unapprovedConfig.intervals };
-          if (initialIntervals.apiKey.length > 0 && !intervalsOwnerReady) {
+          const initialConfig = copyConfig(unapprovedConfig);
+          if (initialConfig.intervals.apiKey.length > 0 && !intervalsOwnerReady) {
             const ownerClaim = await assertIntervalsOwner(
-              initialIntervals,
-              initialIntervals,
+              initialConfig,
+              initialConfig,
               initializationSignal,
             );
             initializationSignal.throwIfAborted();
@@ -1831,7 +1849,9 @@ export async function createLocalCoachComposition(
         context: input.context,
         runtime,
         intervalsCredentials: options.liveIntervals,
-        historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
+        historyNewestDate: () => referencePlan(approvedConfig()).window.newest,
+        calendarTimeZone: () =>
+          resolveUserTimezone(approvedConfig().session.timezone),
         readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
         readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
         readArchivedTranscriptPage: (request) => reconfigurable.getArchivedTranscriptPage(request),

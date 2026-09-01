@@ -112,6 +112,7 @@ describe("account identity", () => {
       apiKey,
       athleteId: "0",
       historyNewestDate: "1900-12-31",
+      calendarTimeZone: "UTC",
       clock,
       sleep: async () => {},
       baseFetch,
@@ -130,6 +131,7 @@ describe("account identity", () => {
       apiKey: accountKey,
       athleteId: "0",
       historyNewestDate: "1900-12-31",
+      calendarTimeZone: "UTC",
       clock,
       sleep: async () => {},
       baseFetch,
@@ -158,6 +160,7 @@ describe("account identity", () => {
       apiKey: "synthetic-first",
       athleteId: "0",
       historyNewestDate: "1900-12-31",
+      calendarTimeZone: "UTC",
       clock,
       sleep: async () => {},
       baseFetch: firstFetch,
@@ -580,6 +583,7 @@ describe("account identity", () => {
       apiKey: "synthetic-upgrade",
       athleteId: "0",
       historyNewestDate: "2010-12-31",
+      calendarTimeZone: "UTC",
       clock,
       sleep: async () => {},
       baseFetch,
@@ -588,7 +592,7 @@ describe("account identity", () => {
     expect(baseFetch).toHaveBeenCalledOnce();
     const upgraded = openSqliteStorage(storePath);
     try {
-      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 29 });
+      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 30 });
       expect(await upgraded.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 1 });
       expect(await upgraded.all("SELECT * FROM workout ORDER BY workout_key")).toEqual(
         beforeWorkouts,

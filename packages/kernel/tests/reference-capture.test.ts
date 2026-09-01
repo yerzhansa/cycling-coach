@@ -8,6 +8,7 @@ import {
   createReferenceCapturePlan,
   parseReferenceCaptureManifest,
   parseReferenceCapturePlan,
+  planCalendarTimeZone,
   selectReferenceCaptureStreamIds,
   serializeReferenceCaptureManifest,
   serializeReferenceCapturePlan,
@@ -30,7 +31,7 @@ const hashKey = async (fields: readonly (string | number)[]): Promise<string> =>
 function snapshot() { return { address: ADDRESS, rel_path: `1998/07/${ADDRESS}.json.gz` }; }
 
 function manifest(): ReferenceCaptureManifest {
-  const plan = createReferenceCapturePlan(NOW);
+  const plan = createReferenceCapturePlan({ now: NOW, calendarTimeZone: "UTC" });
   return validateReferenceCaptureManifest({
     schema_version: 1, capture_id: CAPTURE_ID, source: "external-oracle", plan,
     operation_ledger: { link_kind: "capture-id", capture_id: CAPTURE_ID },
@@ -62,14 +63,40 @@ function manifest(): ReferenceCaptureManifest {
 }
 
 describe("Reference capture plan and manifest", () => {
+  it("round-trips a stored v1 plan through canonical JSON without adding a timezone", () => {
+    const stored = {
+      capture_epoch_ms: NOW.getTime(),
+      frozenNow: "1998-07-18T12:34:56",
+      stream_cutoff_epoch_ms: NOW.getTime() - 21 * 86_400_000,
+      window: { newest: "1998-07-18", oldest: "1998-04-25" },
+    };
+    const bytes = `${canonicalJson(stored)}\n`;
+    const parsed = parseReferenceCapturePlan(bytes);
+    expect(canonicalJson(parsed)).toBe(canonicalJson(stored));
+    expect(Object.hasOwn(parsed, "calendar_timezone")).toBe(false);
+    expect(planCalendarTimeZone(parsed)).toBe("UTC");
+  });
+
   it("owns one clock and exact canonical bytes", () => {
-    const plan = createReferenceCapturePlan(NOW);
+    const plan = createReferenceCapturePlan({ now: NOW, calendarTimeZone: "UTC" });
     expect(plan.capture_epoch_ms).toBe(NOW.getTime());
     expect(plan.stream_cutoff_epoch_ms).toBe(NOW.getTime() - 21 * 86_400_000);
     expect(plan.frozenNow).toMatch(/^1998-07-18T/);
     expect(parseReferenceCapturePlan(serializeReferenceCapturePlan(plan))).toEqual(plan);
-    expect(() => createReferenceCapturePlan(new Date(Number.NaN))).toThrow();
+    expect(() =>
+      createReferenceCapturePlan({ now: new Date(Number.NaN), calendarTimeZone: "UTC" }),
+    ).toThrow();
     expect(() => parseReferenceCapturePlan(`${serializeReferenceCapturePlan(plan)} `)).toThrow();
+  });
+
+  it("uses the requested calendar timezone for the civil capture window", () => {
+    const now = new Date("1998-07-18T20:30:00.000Z");
+    const utc = createReferenceCapturePlan({ now, calendarTimeZone: "UTC" });
+    const almaty = createReferenceCapturePlan({ now, calendarTimeZone: "Asia/Almaty" });
+    expect(utc.window).toEqual({ oldest: "1998-04-25", newest: "1998-07-18" });
+    expect(almaty.window).toEqual({ oldest: "1998-04-26", newest: "1998-07-19" });
+    expect(almaty.frozenNow).toBe("1998-07-19T03:30:00");
+    expect(planCalendarTimeZone(almaty)).toBe("Asia/Almaty");
   });
 
   it("strictly validates every manifest object and exact bytes", () => {
@@ -83,7 +110,7 @@ describe("Reference capture plan and manifest", () => {
   });
 
   it("selects by parsed time then encounter index without key ordering", () => {
-    const plan = createReferenceCapturePlan(NOW);
+    const plan = createReferenceCapturePlan({ now: NOW, calendarTimeZone: "UTC" });
     const same = new Date(plan.capture_epoch_ms - 1_000).toISOString();
     expect(selectReferenceCaptureStreamIds([
       { id: "z", type: "Ride", start_date_local: same },

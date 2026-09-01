@@ -19,6 +19,23 @@ export interface CoverageCommitRow extends CoverageCommitInput {
   readonly coverageCommitId: number;
 }
 
+export interface BackfillCheckpointInput {
+  readonly authorityId: string;
+  readonly sourceCycle: number;
+  readonly pageOrdinal: number;
+  readonly requestedOldest: string;
+  readonly requestedNewest: string;
+  readonly calendarTimeZone: string;
+  readonly cursorAfter: string;
+  readonly droppedSourceRestricted: number;
+  readonly droppedOther: number;
+  readonly terminal: boolean;
+}
+
+export interface BackfillCheckpointRow extends BackfillCheckpointInput {
+  readonly checkpointId: number;
+}
+
 export type CoverageCommitAppendResult =
   | { readonly kind: "inserted"; readonly commitId: number }
   | { readonly kind: "already-recorded"; readonly commitId: number };
@@ -40,6 +57,17 @@ export interface TrainingCoverageRepository {
     store: Pick<SqlStore, "get">,
     input: CoverageCommitInput,
   ): Promise<CoverageCommitAppendResult>;
+  appendBackfillCheckpointInTransaction(
+    store: Pick<SqlStore, "get">,
+    input: BackfillCheckpointInput,
+  ): Promise<{
+    readonly kind: "inserted" | "already-recorded";
+    readonly checkpointId: number;
+  }>;
+  readBackfillCheckpoint(
+    store: Pick<SqlReadStore, "get">,
+    input: { readonly sourceCycle: number; readonly cursorAfter: string },
+  ): Promise<BackfillCheckpointRow | undefined>;
 }
 
 export interface TrainingCoverageReader {
@@ -76,6 +104,35 @@ const READ_COMMIT_SQL = `SELECT
   gap_state
 FROM training_history_coverage_commit
 WHERE authority_kind = ? AND authority_id = ?`;
+
+const CHECKPOINT_ROW_KEYS = [
+  "checkpoint_id",
+  "authority_id",
+  "source_cycle",
+  "page_ordinal",
+  "requested_oldest_key",
+  "requested_newest_key",
+  "calendar_timezone",
+  "cursor_after",
+  "dropped_source_restricted",
+  "dropped_other",
+  "terminal",
+] as const;
+
+const READ_CHECKPOINT_SQL = `SELECT
+  checkpoint_id,
+  authority_id,
+  source_cycle,
+  page_ordinal,
+  requested_oldest_key,
+  requested_newest_key,
+  calendar_timezone,
+  cursor_after,
+  dropped_source_restricted,
+  dropped_other,
+  terminal
+FROM training_history_backfill_checkpoint
+WHERE source_cycle = ? AND cursor_after = ?`;
 
 function strictUtf8Length(value: string): number | undefined {
   let bytes = 0;
@@ -162,6 +219,45 @@ function validateInput(input: CoverageCommitInput): {
   return { oldestKey, newestKey };
 }
 
+function validateCheckpointInput(input: BackfillCheckpointInput): {
+  readonly oldestKey: number;
+  readonly newestKey: number;
+} {
+  const oldestKey = civilDateKey(input?.requestedOldest);
+  const newestKey = civilDateKey(input?.requestedNewest);
+  const zoneBytes =
+    typeof input?.calendarTimeZone === "string"
+      ? strictUtf8Length(input.calendarTimeZone)
+      : undefined;
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    typeof input.authorityId !== "string" ||
+    input.authorityId.length < 1 ||
+    input.authorityId.length > 128 ||
+    !Number.isSafeInteger(input.sourceCycle) ||
+    input.sourceCycle < 0 ||
+    !Number.isSafeInteger(input.pageOrdinal) ||
+    input.pageOrdinal < 0 ||
+    oldestKey === undefined ||
+    newestKey === undefined ||
+    oldestKey > newestKey ||
+    zoneBytes === undefined ||
+    zoneBytes < 1 ||
+    zoneBytes > 255 ||
+    typeof input.cursorAfter !== "string" ||
+    input.cursorAfter.length < 1 ||
+    !Number.isSafeInteger(input.droppedSourceRestricted) ||
+    input.droppedSourceRestricted < 0 ||
+    !Number.isSafeInteger(input.droppedOther) ||
+    input.droppedOther < 0 ||
+    typeof input.terminal !== "boolean"
+  ) {
+    throw new TypeError("invalid training history backfill checkpoint");
+  }
+  return { oldestKey, newestKey };
+}
+
 function commitRow(row: Row): CoverageCommitRow {
   if (!hasExactKeys(row, ROW_KEYS)) invalidRow();
   const id = row.coverage_commit_id;
@@ -212,6 +308,64 @@ function sameCommit(left: CoverageCommitRow, right: CoverageCommitInput): boolea
   );
 }
 
+function checkpointRow(row: Row): BackfillCheckpointRow {
+  if (!hasExactKeys(row, CHECKPOINT_ROW_KEYS)) invalidRow();
+  const checkpointId = row.checkpoint_id;
+  const terminal = row.terminal;
+  if (
+    typeof checkpointId !== "number" ||
+    !Number.isSafeInteger(checkpointId) ||
+    checkpointId <= 0 ||
+    typeof row.authority_id !== "string" ||
+    typeof row.source_cycle !== "number" ||
+    !Number.isSafeInteger(row.source_cycle) ||
+    typeof row.page_ordinal !== "number" ||
+    !Number.isSafeInteger(row.page_ordinal) ||
+    typeof row.calendar_timezone !== "string" ||
+    typeof row.cursor_after !== "string" ||
+    typeof row.dropped_source_restricted !== "number" ||
+    !Number.isSafeInteger(row.dropped_source_restricted) ||
+    typeof row.dropped_other !== "number" ||
+    !Number.isSafeInteger(row.dropped_other) ||
+    (terminal !== 0 && terminal !== 1)
+  ) {
+    invalidRow();
+  }
+  const result: BackfillCheckpointRow = {
+    checkpointId,
+    authorityId: row.authority_id,
+    sourceCycle: row.source_cycle,
+    pageOrdinal: row.page_ordinal,
+    requestedOldest: civilDateFromKey(row.requested_oldest_key),
+    requestedNewest: civilDateFromKey(row.requested_newest_key),
+    calendarTimeZone: row.calendar_timezone,
+    cursorAfter: row.cursor_after,
+    droppedSourceRestricted: row.dropped_source_restricted,
+    droppedOther: row.dropped_other,
+    terminal: terminal === 1,
+  };
+  validateCheckpointInput(result);
+  return Object.freeze(result);
+}
+
+function sameCheckpoint(
+  left: BackfillCheckpointRow,
+  right: BackfillCheckpointInput,
+): boolean {
+  return (
+    left.authorityId === right.authorityId &&
+    left.sourceCycle === right.sourceCycle &&
+    left.pageOrdinal === right.pageOrdinal &&
+    left.requestedOldest === right.requestedOldest &&
+    left.requestedNewest === right.requestedNewest &&
+    left.calendarTimeZone === right.calendarTimeZone &&
+    left.cursorAfter === right.cursorAfter &&
+    left.droppedSourceRestricted === right.droppedSourceRestricted &&
+    left.droppedOther === right.droppedOther &&
+    left.terminal === right.terminal
+  );
+}
+
 export function createTrainingCoverageRepository(): TrainingCoverageRepository {
   return {
     async appendCommitInTransaction(store, input) {
@@ -259,6 +413,76 @@ RETURNING coverage_commit_id`,
         kind: inserted === undefined ? "already-recorded" : "inserted",
         commitId: stored.coverageCommitId,
       });
+    },
+    async appendBackfillCheckpointInTransaction(store, input) {
+      const { oldestKey, newestKey } = validateCheckpointInput(input);
+      const inserted = await store.get(
+        `INSERT INTO training_history_backfill_checkpoint (
+  authority_id,
+  source_cycle,
+  page_ordinal,
+  requested_oldest_key,
+  requested_newest_key,
+  calendar_timezone,
+  cursor_after,
+  dropped_source_restricted,
+  dropped_other,
+  terminal
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+RETURNING checkpoint_id`,
+        [
+          input.authorityId,
+          input.sourceCycle,
+          input.pageOrdinal,
+          oldestKey,
+          newestKey,
+          input.calendarTimeZone,
+          input.cursorAfter,
+          input.droppedSourceRestricted,
+          input.droppedOther,
+          input.terminal ? 1 : 0,
+        ],
+      );
+      if (
+        inserted !== undefined &&
+        (!hasExactKeys(inserted, ["checkpoint_id"]) ||
+          typeof inserted.checkpoint_id !== "number" ||
+          !Number.isSafeInteger(inserted.checkpoint_id) ||
+          inserted.checkpoint_id <= 0)
+      ) {
+        invalidRow();
+      }
+      const selected = await store.get(READ_CHECKPOINT_SQL, [
+        input.sourceCycle,
+        input.cursorAfter,
+      ]);
+      if (selected === undefined) {
+        if (inserted === undefined) throw new TrainingCoverageError("authority_conflict");
+        invalidRow();
+      }
+      const stored = checkpointRow(selected);
+      if (!sameCheckpoint(stored, input)) {
+        throw new TrainingCoverageError("authority_conflict");
+      }
+      return Object.freeze({
+        kind: inserted === undefined ? "already-recorded" : "inserted",
+        checkpointId: stored.checkpointId,
+      });
+    },
+    async readBackfillCheckpoint(store, input) {
+      if (
+        input === null ||
+        typeof input !== "object" ||
+        !Number.isSafeInteger(input.sourceCycle) ||
+        input.sourceCycle < 0 ||
+        typeof input.cursorAfter !== "string" ||
+        input.cursorAfter.length < 1
+      ) {
+        throw new TypeError("invalid training history checkpoint lookup");
+      }
+      const row = await store.get(READ_CHECKPOINT_SQL, [input.sourceCycle, input.cursorAfter]);
+      return row === undefined ? undefined : checkpointRow(row);
     },
   };
 }

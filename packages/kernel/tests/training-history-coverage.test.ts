@@ -90,6 +90,49 @@ describe("training history coverage", () => {
     );
   });
 
+  it("appends and resumes an exact backfill page checkpoint", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+    const cursorAfter = JSON.stringify({
+      v: 1,
+      cycle: 7,
+      window_start: "1998-01-01",
+      window_end: "1998-07-18",
+      last_key: "1998-07-17T12:00:00Z\u001fsynthetic",
+      complete: false,
+    });
+    const checkpoint = {
+      authorityId: "synthetic-backfill-cycle",
+      sourceCycle: 7,
+      pageOrdinal: 0,
+      requestedOldest: "1998-01-01",
+      requestedNewest: "1998-07-18",
+      calendarTimeZone: "Asia/Almaty",
+      cursorAfter,
+      droppedSourceRestricted: 2,
+      droppedOther: 1,
+      terminal: false,
+    } as const;
+
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, checkpoint),
+    ).resolves.toEqual({ kind: "inserted", checkpointId: 1 });
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, checkpoint),
+    ).resolves.toEqual({ kind: "already-recorded", checkpointId: 1 });
+    await expect(
+      repository.readBackfillCheckpoint(store, { sourceCycle: 7, cursorAfter }),
+    ).resolves.toEqual({ checkpointId: 1, ...checkpoint });
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, {
+        ...checkpoint,
+        droppedOther: 2,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+  });
+
   it("enforces append-only commit and checkpoint rows", async () => {
     const store = openStore();
     await createTrainingCoverageRepository().appendCommitInTransaction(store, commit);

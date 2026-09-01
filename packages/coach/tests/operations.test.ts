@@ -111,6 +111,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       readTranscriptPage,
       applyRuntimeConfig: async () => {},
     });
@@ -156,6 +157,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
     };
     const operations = createCoachOperations({
@@ -241,6 +243,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       });
       const paths = ["brick-cycling.fit", "fallback-cycling.tcx", "fallback-cycling.gpx"].map(
@@ -276,6 +279,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       });
       await expect(relaunchedOperations.getSetupStatus?.({})).resolves.toEqual({
@@ -310,6 +314,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       });
       await expect(
@@ -433,6 +438,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       {
@@ -465,6 +471,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       {
@@ -503,6 +510,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(runWindowAfter),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       { importFiles },
@@ -575,6 +583,7 @@ describe("coach operations", () => {
         },
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       { importFiles },
@@ -624,6 +633,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(runWindowAfter),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       { importFiles },
@@ -654,6 +664,7 @@ describe("coach operations", () => {
         intervalsCredentials: intervalsCredentials(),
         intervalsVerificationPending: () => pending.value,
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       { backfill },
@@ -722,6 +733,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(runWindowAfter),
         intervalsCredentials: credentials,
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       { backfill },
@@ -744,6 +756,7 @@ describe("coach operations", () => {
       apiKey: String.fromCharCode(116, 101, 115, 116),
       athleteId: "synthetic-athlete",
       historyNewestDate: "1998-07-18",
+      calendarTimeZone: "UTC",
       signal: expect.any(AbortSignal),
     });
     expect(result).toEqual({
@@ -822,6 +835,7 @@ describe("coach operations", () => {
           runtime,
           intervalsCredentials: runtime.credentials,
           historyNewestDate: () => "1998-07-18",
+          calendarTimeZone: () => "UTC",
           applyRuntimeConfig: async () => {},
         },
         { backfill },
@@ -882,6 +896,7 @@ describe("coach operations", () => {
           runtime,
           intervalsCredentials: runtime.intervals,
           historyNewestDate: () => "1998-07-18",
+          calendarTimeZone: () => "UTC",
           applyRuntimeConfig: async () => {},
         },
         { backfill },
@@ -945,6 +960,7 @@ describe("coach operations", () => {
           runtime,
           intervalsCredentials: runtime.intervals,
           historyNewestDate: () => "1998-07-18",
+          calendarTimeZone: () => "UTC",
           applyRuntimeConfig: async () => {},
         },
         { backfill },
@@ -982,6 +998,7 @@ describe("coach operations", () => {
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {
         trace.push("configure");
       },
@@ -1014,6 +1031,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async (_request, signal) => {
         observedSignal = signal;
         started.release();
@@ -1043,6 +1061,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
       verifyIntervalsCredential,
     });
@@ -1068,6 +1087,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
       verifyIntervalsCredential: async () => ({ reason: "credential-rejected" }),
     });
@@ -1081,6 +1101,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
       verifyIntervalsCredential: async () => ({ approval: "A".repeat(64) }),
     });
@@ -1094,6 +1115,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
     });
     expect(() =>
@@ -1110,6 +1132,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
       verifyIntervalsCredential: async (_request, signal): Promise<never> => {
         observedSignal = signal;
@@ -1147,6 +1170,7 @@ describe("coach operations", () => {
         runtime: operationRuntime(),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => reason,
       });
 
@@ -1183,6 +1207,7 @@ describe("coach operations", () => {
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async () => {},
       readRuntimeConfig: () => {
         trace.push("read");
@@ -1247,6 +1272,7 @@ describe("coach operations", () => {
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async (request) => {
         if (request.intervals !== undefined) trace.push("intervals");
         if (request.llm !== undefined) {
@@ -1353,6 +1379,7 @@ describe("coach operations", () => {
         }),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig,
       },
       { runtimeConfigurationDeadlineMs: 5 },
@@ -1390,6 +1417,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async (request) => {
         const model = request.llm?.model ?? "intervals-only";
         trace.push(`configure-${model}-start`);
@@ -1487,6 +1515,7 @@ describe("coach operations", () => {
       }),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig: async (request) => {
         if (request.intervals !== undefined) {
           trace.push("intervals-reject");
@@ -1564,6 +1593,7 @@ describe("coach operations", () => {
       runtime: operationRuntime(),
       intervalsCredentials: intervalsCredentials(),
       historyNewestDate: () => "1998-07-18",
+      calendarTimeZone: () => "UTC",
       applyRuntimeConfig,
       readRuntimeConfig: () => ({
         schemaVersion: 3,
@@ -1702,6 +1732,7 @@ describe("coach operations", () => {
         }),
         intervalsCredentials: intervalsCredentials(),
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       });
       const sync = operations.sync({});

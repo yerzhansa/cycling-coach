@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AthleteStateSchema } from "@enduragent/coach-contract";
+import {
+  AthleteStateSchema,
+  type TrainingHistoryComputed,
+  type TrainingHistoryProjection,
+} from "@enduragent/coach-contract";
 import {
   ERROR_STATE_SCHEMA_VERSION,
   LATEST_SCHEMA_VERSION,
@@ -92,6 +96,78 @@ const resolver: CyclingFtpAnchorResolver = {
   resolve: async () => ({ kind: "missing", refusal: "missing-cycling-ftp-anchor" }),
 };
 
+function trainingHistoryRide(id: string, localDate: string, startEpochSeconds: number) {
+  return {
+    id: id.repeat(64),
+    title: "Synthetic ride",
+    subSport: "road",
+    startEpochSeconds,
+    timezoneOffsetSeconds: 21_600,
+    localDate,
+    ridingSeconds: 3_600,
+    ridingTimeBasis: "moving" as const,
+    elapsedSeconds: 3_700,
+    distanceMeters: 40_000,
+    load: 70,
+    averagePowerWatts: 200,
+    averageHeartRateBpm: 140,
+    perceivedExertion: 5,
+    energyKilojoules: 720,
+  };
+}
+
+function computedTrainingHistory(): TrainingHistoryComputed {
+  const anchorRide = trainingHistoryRide("a", "1998-07-17", 900_000_000);
+  const previousRide = trainingHistoryRide("b", "1998-07-10", 899_400_000);
+  const week = (
+    id: "anchor" | "previous",
+    window: { readonly start: string; readonly end: string },
+    ride: ReturnType<typeof trainingHistoryRide>,
+  ) => ({
+    id,
+    window,
+    calendarState: id === "anchor" ? ("open" as const) : ("closed" as const),
+    coverage: { kind: "complete" as const },
+    totals: {
+      rideCount: { kind: "computed" as const, value: 1 },
+      ridingSeconds: { kind: "computed" as const, value: 3_600 },
+      distanceMeters: { kind: "computed" as const, value: 40_000 },
+      load: { kind: "computed" as const, value: 70 },
+    },
+    rides: {
+      count: { kind: "exact" as const, value: 1 },
+      items: [ride],
+      truncated: false,
+    },
+    trend: { kind: "unavailable" as const, reason: "limited-history" as const },
+    callout: {
+      kind: "longest-ride-28d" as const,
+      rideId: ride.id,
+      durationSeconds: ride.ridingSeconds,
+      window: { start: "1998-06-21", end: "1998-07-18" },
+      comparisonRideCount: 4,
+    },
+  });
+  return {
+    kind: "computed",
+    asOf: T1,
+    calendarTimeZone: "UTC",
+    displayMode: "current",
+    coverage: {
+      kind: "contiguous",
+      start: "1998-01-01",
+      through: "1998-07-18",
+      committedAt: T0,
+    },
+    anchorWeek: week("anchor", { start: "1998-07-13", end: "1998-07-19" }, anchorRide),
+    previousWeek: week(
+      "previous",
+      { start: "1998-07-06", end: "1998-07-12" },
+      previousRide,
+    ),
+  };
+}
+
 function source(dataDir: string) {
   return createPersistedAthleteStateSource({ dataDir, cyclingFtpAnchorResolver: resolver });
 }
@@ -104,6 +180,139 @@ afterEach(async () => {
 });
 
 describe("persisted athlete state source", () => {
+  it("returns a stale last-good panel for thrown and malformed section reads", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    let response: TrainingHistoryProjection | "throw" | "malformed" =
+      computedTrainingHistory();
+    const readTrainingHistory = vi.fn(async (): Promise<TrainingHistoryProjection> => {
+      if (response === "throw") throw new Error("private training history failure");
+      if (response === "malformed") return { kind: "computed" } as never;
+      return response;
+    });
+    const reader = createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    });
+
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory.kind).toBe(
+      "computed",
+    );
+    response = "throw";
+    const thrown = (await reader.getAthleteState()).trainingContext?.trainingHistory;
+    expect(thrown).toMatchObject({
+      kind: "stale",
+      failedAt: T1,
+      reason: "temporary-failure",
+      lastGood: { anchorWeek: { callout: null }, previousWeek: { callout: null } },
+    });
+    expect(JSON.stringify(thrown)).not.toContain("private training history failure");
+
+    response = "malformed";
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toMatchObject({
+      kind: "stale",
+      lastGood: { anchorWeek: { callout: null }, previousWeek: { callout: null } },
+    });
+  });
+
+  it("drops last-good history when the source owner or calendar timezone changes", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    let sourceOwner = "synthetic-athlete-a";
+    let calendarTimeZone = "UTC";
+    let fail = false;
+    const reader = createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      trainingHistorySource: {
+        readTrainingHistory: async () => {
+          if (fail) throw new Error("synthetic");
+          return computedTrainingHistory();
+        },
+      },
+      sourceOwner: () => sourceOwner,
+      calendarTimeZone: () => calendarTimeZone,
+    });
+
+    await reader.getAthleteState();
+    fail = true;
+    sourceOwner = "synthetic-athlete-b";
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual({
+      kind: "unavailable",
+      reason: "temporary-failure",
+    });
+    sourceOwner = "synthetic-athlete-a";
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual({
+      kind: "unavailable",
+      reason: "temporary-failure",
+    });
+
+    fail = false;
+    await reader.getAthleteState();
+    fail = true;
+    calendarTimeZone = "Asia/Almaty";
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual({
+      kind: "unavailable",
+      reason: "temporary-failure",
+    });
+    calendarTimeZone = "UTC";
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual({
+      kind: "unavailable",
+      reason: "temporary-failure",
+    });
+  });
+
+  it("passes domain unavailable projections through without consuming last-good history", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    let response: TrainingHistoryProjection | "throw" = computedTrainingHistory();
+    const reader = createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      trainingHistorySource: {
+        readTrainingHistory: async () => {
+          if (response === "throw") throw new Error("synthetic");
+          return response;
+        },
+      },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    });
+
+    await reader.getAthleteState();
+    for (const reason of [
+      "coverage-unavailable",
+      "temporary-failure",
+      "invalid-data",
+    ] as const) {
+      response = { kind: "unavailable", reason };
+      expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual(
+        response,
+      );
+    }
+    response = "throw";
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory.kind).toBe(
+      "stale",
+    );
+
+    const withoutCache = createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      trainingHistorySource: {
+        readTrainingHistory: async () => ({ kind: "computed" }) as never,
+      },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    });
+    expect((await withoutCache.getAthleteState()).trainingContext?.trainingHistory).toEqual({
+      kind: "unavailable",
+      reason: "temporary-failure",
+    });
+  });
+
   it("returns canonical recent rides without a Reference snapshot", async () => {
     const root = await home();
     const now = new Date("1998-07-18T12:00:00.000Z");

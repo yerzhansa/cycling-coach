@@ -78,6 +78,7 @@ export interface CreateCoachOperationsInput {
   }>;
   readonly intervalsVerificationPending?: () => boolean;
   readonly historyNewestDate: () => string;
+  readonly calendarTimeZone: () => string;
   readonly readTranscriptPage?: (
     request: GetTranscriptPageRpcParams,
   ) => Promise<GetTranscriptPageRpcResult>;
@@ -242,6 +243,7 @@ export function createCoachOperations(
             apiKey: credentials.apiKey,
             athleteId: credentials.athleteId === "" ? "0" : credentials.athleteId,
             historyNewestDate: input.historyNewestDate(),
+            calendarTimeZone: input.calendarTimeZone(),
             signal,
           });
         })

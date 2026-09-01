@@ -157,6 +157,7 @@ describe("Power Progress state projection", () => {
         sourceContext: "mixed",
       },
     });
+    if (result.kind !== "computed") throw new TypeError("power progress projection is unavailable");
     expect(result.anchors.map((anchor) => anchor.durationSeconds)).toEqual([
       5, 60, 300, 1_200, 3_600,
     ]);
