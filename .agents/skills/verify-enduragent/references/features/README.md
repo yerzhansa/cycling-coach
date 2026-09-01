@@ -4,3 +4,4 @@
 |---|---|
 | Chat and past chats | [`chat-history.md`](chat-history.md) |
 | Setup | [`setup.md`](setup.md) |
+| Training | [`training.md`](training.md) — deterministic Training scenarios use isolated `ready()` renderer state with renderer/desktop `vitest`; native Windows rows are `vm-only`. |
