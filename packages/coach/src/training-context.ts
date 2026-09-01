@@ -4,6 +4,7 @@ import type {
   DroppedActivities,
   PowerProgressPanel,
   RecentRidesPanel,
+  TrainingHistoryPanel,
   WellnessSeries,
 } from "@enduragent/coach-contract";
 import type { CyclingFtpAnchorResult } from "@enduragent/kernel/anchors";
@@ -23,6 +24,7 @@ export interface ProjectCyclingTrainingContextInput {
   readonly wellness: unknown;
   readonly performanceProgress?: PowerProgressPanel;
   readonly recentRides?: RecentRidesPanel;
+  readonly trainingHistory: TrainingHistoryPanel;
   readonly droppedActivities?: DroppedActivities;
 }
 
@@ -231,6 +233,7 @@ export function projectCyclingTrainingContext(
     recentRides: overallRestricted
       ? { kind: "unknown", reason: "source-restricted" }
       : (input.recentRides ?? { kind: "unknown", reason: "not-synced" }),
+    trainingHistory: input.trainingHistory,
     anchorZones: projectAnchorZones(input),
     cyclingLoad: projectCyclingLoad(input),
     plan: projectPlan(input),

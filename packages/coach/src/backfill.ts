@@ -1,6 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { ArchiveInstant, ArchiveWriteResult } from "@enduragent/kernel/archive";
 import type { ImportArtifact, ImportReport, ImportReportDeps, PairDiagnostic, PlatformImportArtifact } from "@enduragent/kernel/ingest";
-import { createSyncStateRepository, dumpStore, type SourceArtifactDraft, type SqlStore, type SyncBudget } from "@enduragent/kernel/store";
+import {
+  createSyncStateRepository,
+  createTrainingCoverageRepository,
+  dumpStore,
+  type SourceArtifactDraft,
+  type SqlStore,
+  type SyncBudget,
+} from "@enduragent/kernel/store";
 import { createNodeImportRuntime, type NodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import {
@@ -48,6 +56,7 @@ export type { BackfillClock } from "./intervals-source.js";
 
 export const DEFAULT_BACKFILL_BATCH_SIZE = 400;
 export const DEFAULT_BACKFILL_PAGE_DEADLINE_MS = 21_600_000;
+export const TRAINING_HISTORY_BACKFILL_OLDEST = "1900-01-01";
 
 function configured(value: unknown, fallback: number, minimum: number, maximum: number, name: string): number {
   const selected = value === undefined ? fallback : value;
@@ -93,6 +102,13 @@ export interface RunBackfillPagesOptions {
   readonly onPageCommitted?: (input: { readonly pages: number; readonly artifacts: number; readonly report: ImportReport | null }) => void;
 }
 
+export interface RunActivityAuditPagesOptions extends RunBackfillPagesOptions {
+  readonly historyOldestDate: string;
+  readonly historyNewestDate: string;
+  readonly calendarTimeZone: string;
+  readonly cycleId?: () => string;
+}
+
 export interface BackfillRunResult { readonly pages: number; readonly artifacts: number; readonly reports: readonly ImportReport[];
   readonly droppedActivityRows: DroppedActivityRowCounts; }
 
@@ -101,15 +117,27 @@ function addDropped(total: DroppedActivityRowCounts, page: DroppedActivityRowCou
   return { sourceRestricted: total.sourceRestricted + page.sourceRestricted, other: total.other + page.other };
 }
 
-export async function runActivityAuditPages(options: RunBackfillPagesOptions): Promise<BackfillRunResult> {
+interface AuthoritativeBackfillCycle {
+  readonly authorityId: string;
+  readonly sourceCycle: number;
+  readonly nextPageOrdinal: number;
+}
+
+export async function runActivityAuditPages(
+  options: RunActivityAuditPagesOptions,
+): Promise<BackfillRunResult> {
   const batchSize = configured(options.batchSize, DEFAULT_BACKFILL_BATCH_SIZE, 1, 1_000, "batch size");
   const perRequestTimeoutMs = configured(options.perRequestTimeoutMs, DEFAULT_PER_REQUEST_TIMEOUT_MS, 1_000, 300_000, "request timeout");
   const pageDeadlineMs = configured(options.backfillPageDeadlineMs, DEFAULT_BACKFILL_PAGE_DEADLINE_MS, 60_000, 86_400_000, "page deadline");
   let pages = 0, artifacts = 0;
   let droppedActivityRows: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
   const reports: ImportReport[] = [];
+  const coverage = createTrainingCoverageRepository();
+  let authoritativeCycle: AuthoritativeBackfillCycle | null | undefined;
   for (;;) {
     const before = await createSyncStateRepository(options.store).readWatermark("intervals-icu", "activities");
+    const beforeValue = before.value;
+    const beforeCursor = beforeValue === null ? null : cursor(beforeValue);
     const controller = new AbortController();
     const abort = (): void => controller.abort(options.signal?.reason);
     if (options.signal?.aborted) abort(); else options.signal?.addEventListener("abort", abort, { once: true });
@@ -138,26 +166,114 @@ export async function runActivityAuditPages(options: RunBackfillPagesOptions): P
     if (checkpoint === null || checkpoint.watermark.source !== "intervals-icu" || checkpoint.watermark.lane !== "activities") {
       throw new Error("invalid source checkpoint");
     }
-    droppedActivityRows = addDropped(droppedActivityRows, checkpoint.droppedActivityRows);
     const checkpointValue = checkpoint.watermark.value;
+    if (checkpointValue === null) throw new Error("invalid source checkpoint");
     const parsed = cursor(checkpointValue);
+    if (authoritativeCycle === undefined) {
+      if (beforeValue === null || beforeCursor === null || beforeCursor.complete) {
+        authoritativeCycle = {
+          authorityId: (options.cycleId ?? randomUUID)(),
+          sourceCycle: parsed.cycle,
+          nextPageOrdinal: 0,
+        };
+      } else {
+        const previous = await coverage.readBackfillCheckpoint(options.store, {
+          sourceCycle: beforeCursor.cycle,
+          cursorAfter: beforeValue,
+        });
+        if (
+          previous === undefined ||
+          previous.terminal ||
+          previous.requestedOldest !== options.historyOldestDate ||
+          previous.requestedNewest !== options.historyNewestDate ||
+          previous.calendarTimeZone !== options.calendarTimeZone
+        ) {
+          authoritativeCycle = null;
+        } else {
+          authoritativeCycle = {
+            authorityId: previous.authorityId,
+            sourceCycle: previous.sourceCycle,
+            nextPageOrdinal: previous.pageOrdinal + 1,
+          };
+          droppedActivityRows = {
+            sourceRestricted: previous.droppedSourceRestricted,
+            other: previous.droppedOther,
+          };
+        }
+      }
+    }
+    if (
+      authoritativeCycle !== null &&
+      authoritativeCycle.sourceCycle !== parsed.cycle
+    ) {
+      throw new Error("activity backfill cycle changed unexpectedly");
+    }
+    droppedActivityRows = addDropped(droppedActivityRows, checkpoint.droppedActivityRows);
+    const terminalCommitEpochSeconds = parsed.complete
+      ? Math.floor(options.clock.now() / 1_000)
+      : null;
+    if (
+      terminalCommitEpochSeconds !== null &&
+      (!Number.isSafeInteger(terminalCommitEpochSeconds) || terminalCommitEpochSeconds < 0)
+    ) {
+      throw new TypeError("activity backfill clock is invalid");
+    }
+    const appendCoverage = async (transactionStore: SqlStore): Promise<void> => {
+      if (authoritativeCycle === null || authoritativeCycle === undefined) return;
+      await coverage.appendBackfillCheckpointInTransaction(transactionStore, {
+        authorityId: authoritativeCycle.authorityId,
+        sourceCycle: authoritativeCycle.sourceCycle,
+        pageOrdinal: authoritativeCycle.nextPageOrdinal,
+        requestedOldest: options.historyOldestDate,
+        requestedNewest: options.historyNewestDate,
+        calendarTimeZone: options.calendarTimeZone,
+        cursorAfter: checkpointValue,
+        droppedSourceRestricted: droppedActivityRows.sourceRestricted,
+        droppedOther: droppedActivityRows.other,
+        terminal: parsed.complete,
+      });
+      if (terminalCommitEpochSeconds !== null) {
+        await coverage.appendCommitInTransaction(transactionStore, {
+          source: "intervals-icu",
+          lane: "activities",
+          authorityKind: "activity-backfill",
+          authorityId: authoritativeCycle.authorityId,
+          calendarTimeZone: options.calendarTimeZone,
+          coveredOldest: options.historyOldestDate,
+          coveredNewest: options.historyNewestDate,
+          committedEpochSeconds: terminalCommitEpochSeconds,
+          gapState:
+            droppedActivityRows.sourceRestricted > 0 || droppedActivityRows.other > 0
+              ? "undated-dropped-rows"
+              : "none",
+        });
+      }
+    };
     let report: ImportReport | null = null;
     if (platformRecords.length === 0) {
       await options.store.transaction(async () => {
         await createSyncStateRepository(options.store).recordCompletionInTransaction({ source: "intervals-icu", lane: "activities",
           watermarkBefore: before.value, watermarkAfter: checkpointValue, artifactsSeen: 0, sourceChanges: 0 });
+        await appendCoverage(options.store);
       });
     } else {
       report = await options.node.importBatchWithReport({ files: [], platform_records: platformRecords }, {
         ...(options.measurePhase === undefined ? {} : { measurePhase: options.measurePhase }),
-        finalizeBatchInTransaction: async (_store, result) => {
+        finalizeBatchInTransaction: async (transactionStore, result) => {
           const sourceChanges = result.source_artifact_inserted + result.raw_file_inserted
             + result.source_record_inserted + result.source_record_updated;
-          await createSyncStateRepository(options.store).recordCompletionInTransaction({ source: "intervals-icu", lane: "activities",
+          await createSyncStateRepository(transactionStore).recordCompletionInTransaction({ source: "intervals-icu", lane: "activities",
             watermarkBefore: before.value, watermarkAfter: checkpointValue, artifactsSeen: platformRecords.length, sourceChanges });
+          await appendCoverage(transactionStore);
         },
       });
       reports.push(report);
+    }
+    if (authoritativeCycle !== null) {
+      authoritativeCycle = {
+        ...authoritativeCycle,
+        nextPageOrdinal: authoritativeCycle.nextPageOrdinal + 1,
+      };
     }
     pages += 1; artifacts += platformRecords.length;
     options.onPageCommitted?.({ pages, artifacts, report });
@@ -244,6 +360,7 @@ export interface RunIntervalsBackfillOptions {
   readonly apiKey: string;
   readonly athleteId: string;
   readonly historyNewestDate: string;
+  readonly calendarTimeZone: string;
   readonly requestIntervalMs?: number;
   readonly batchSize?: number;
   readonly perRequestTimeoutMs?: number;
@@ -317,6 +434,9 @@ export function runIntervalsDualPresentationAudit(options: RunIntervalsBackfillO
       historyNewestDate: options.historyNewestDate, minRequestIntervalMs: requestIntervalMs, archive: node.archive,
       clock, sleep, ...(options.baseFetch === undefined ? {} : { baseFetch: options.baseFetch }) });
     const shared = { store, node, source, clock,
+      historyOldestDate: TRAINING_HISTORY_BACKFILL_OLDEST,
+      historyNewestDate: options.historyNewestDate,
+      calendarTimeZone: options.calendarTimeZone,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
       ...(options.perRequestTimeoutMs === undefined ? {} : { perRequestTimeoutMs: options.perRequestTimeoutMs }),

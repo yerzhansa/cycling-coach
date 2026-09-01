@@ -71,6 +71,7 @@ const state: AthleteState = {
   trainingContext: {
     performanceProgress: { kind: "unavailable", reason: "not-synced" },
     recentRides: { kind: "unknown", reason: "no-recent-rides" },
+    trainingHistory: { kind: "unavailable", reason: "not-synced" },
     anchorZones: { kind: "unknown", reason: "missing-anchor" },
     cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
     plan: { kind: "unknown", reason: "no-plan" },
@@ -1224,8 +1225,27 @@ describe("local coach composition", () => {
       }),
       createResolver: () => missingResolver(),
     });
-    await expect(received!.ports.stateReader.getAthleteState()).resolves.toEqual(state);
-    await expect(lifecycle.engine.getAthleteState()).resolves.toEqual(state);
+    const projectedState = await received!.ports.stateReader.getAthleteState();
+    const projectedTrainingContext = projectedState.trainingContext;
+    const expectedTrainingContext = state.trainingContext;
+    if (projectedTrainingContext === undefined || expectedTrainingContext === undefined) {
+      throw new TypeError("training context is missing");
+    }
+    expect({
+      ...projectedState,
+      trainingContext: {
+        ...projectedTrainingContext,
+        trainingHistory: expectedTrainingContext.trainingHistory,
+      },
+    }).toEqual(state);
+    expect(projectedTrainingContext.trainingHistory).toMatchObject({
+      kind: "computed",
+      calendarTimeZone: "UTC",
+      coverage: { kind: "incomplete", reason: "source-degraded" },
+      anchorWeek: { coverage: { kind: "incomplete", reason: "source-degraded" } },
+      previousWeek: { coverage: { kind: "incomplete", reason: "source-degraded" } },
+    });
+    await expect(lifecycle.engine.getAthleteState()).resolves.toEqual(projectedState);
     expect(received!.ports.platform.athleteData).toBe(selectedRuntime.athleteData);
     expect(received!.ports.readReferenceState).not.toBe(
       received!.ports.stateReader.getAthleteState,
@@ -5554,7 +5574,7 @@ describe("local coach composition", () => {
     },
   );
 
-  it("passes the live intervals authority and one deterministic UTC history date into sync", async () => {
+  it("passes the live intervals authority and calendar plan into sync", async () => {
     const home = await freshHome();
     const context = fakeContext(home);
     const selectedRuntime = runtime();
@@ -5583,6 +5603,7 @@ describe("local coach composition", () => {
     );
     await lifecycle.operations.configureRuntime({
       intervals: { api_key: String.fromCharCode(110, 101, 119), athlete_id: "live-athlete" },
+      session: { timezone: "Asia/Almaty" },
     });
     await expect(lifecycle.operations.sync({})).resolves.toMatchObject({
       published: true,
@@ -5594,7 +5615,8 @@ describe("local coach composition", () => {
       store: context.store,
       apiKey: String.fromCharCode(110, 101, 119),
       athleteId: "live-athlete",
-      historyNewestDate: "1998-07-18",
+      historyNewestDate: "1998-07-19",
+      calendarTimeZone: "Asia/Almaty",
       signal: expect.any(AbortSignal),
     });
     expect(backfill).not.toHaveBeenCalledWith(

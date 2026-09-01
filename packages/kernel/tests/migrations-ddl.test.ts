@@ -88,6 +88,8 @@ const EXPECTED_FULL_TABLES = [
   "chat_attachment_draft",
   "chat_attachment_draft_ref",
   "chat_message_attachment",
+  "training_history_coverage_commit",
+  "training_history_backfill_checkpoint",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -226,6 +228,7 @@ describe("001_init migration", () => {
       { version: 27, name: "027_chat_plan_outbox" },
       { version: 28, name: "028_plan_workout_additions" },
       { version: 29, name: "029_planning_domain" },
+      { version: 30, name: "030_training_history_coverage" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -317,7 +320,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies all migrations with exactly seventy-nine tables and no foreign-key violations", () => {
+  it("applies all migrations with exactly eighty-one tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -327,7 +330,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(79);
+    expect(names).toHaveLength(81);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -607,6 +610,10 @@ describe("001_init migration", () => {
         "chat_plan_outbox_no_delete",
         "chat_plan_outbox_cancelled_no_update",
         "chat_plan_outbox_detached_delivered_no_update",
+        "training_history_coverage_commit_no_update",
+        "training_history_coverage_commit_no_delete",
+        "training_history_backfill_checkpoint_no_update",
+        "training_history_backfill_checkpoint_no_delete",
       ]),
     );
 
@@ -1248,5 +1255,75 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
       "hlc_physical_ms",
       "hlc_counter",
     ]);
+  });
+
+  it("creates exact strict append-only training history coverage evidence", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[29]!.sql).digest("hex")).toBe(
+      "dd4521e15d135335fdc2b119390a90767d85ad6211660c639ef4dbfe78cf6818",
+    );
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+    }>;
+    for (const name of [
+      "training_history_coverage_commit",
+      "training_history_backfill_checkpoint",
+    ]) {
+      expect(tables.find((row) => row.name === name)?.strict).toBe(1);
+      expect(db.prepare(`PRAGMA foreign_key_list(${name})`).all()).toEqual([]);
+      expect(PURE_AUTHORED_TABLES).not.toContain(name as never);
+      expect(MIXED_AUTHORED_TABLES).not.toContain(name as never);
+      expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain(name);
+    }
+    db.prepare(
+      `INSERT INTO training_history_coverage_commit (
+  source, lane, authority_kind, authority_id, calendar_timezone,
+  covered_oldest_date_key, covered_newest_date_key, committed_epoch_seconds, gap_state
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "intervals-icu",
+      "activities",
+      "reference-capture",
+      "12345678-1234-4123-8123-123456789abc",
+      "Asia/Almaty",
+      19980413,
+      19980706,
+      899_712_000,
+      "none",
+    );
+    db.prepare(
+      `INSERT INTO training_history_backfill_checkpoint (
+  authority_id, source_cycle, page_ordinal, requested_oldest_key, requested_newest_key,
+  calendar_timezone, cursor_after, dropped_source_restricted, dropped_other, terminal
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "12345678-1234-4123-8123-123456789abc",
+      12345,
+      0,
+      19980413,
+      19980706,
+      "Asia/Almaty",
+      "cursor:12345",
+      0,
+      0,
+      0,
+    );
+    expect(() =>
+      db!
+        .prepare("UPDATE training_history_coverage_commit SET gap_state='undated-dropped-rows'")
+        .run(),
+    ).toThrow(/append-only/);
+    expect(() => db!.prepare("DELETE FROM training_history_coverage_commit").run()).toThrow(
+      /append-only/,
+    );
+    expect(() =>
+      db!.prepare("UPDATE training_history_backfill_checkpoint SET terminal=1").run(),
+    ).toThrow(/append-only/);
+    expect(() => db!.prepare("DELETE FROM training_history_backfill_checkpoint").run()).toThrow(
+      /append-only/,
+    );
+    expect(DUMP_TABLES).toHaveLength(69);
+    expect(DERIVED_TABLES).toHaveLength(12);
   });
 });

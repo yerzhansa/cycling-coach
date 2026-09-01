@@ -72,7 +72,8 @@ export async function runCaptureReferenceCommand(
   }
   try {
     const manifest = await (dependencies.runCapture ?? runReferenceCapture)({ env, apiKey: credentials.apiKey,
-      athleteId: credentials.athleteId, reviewedOn: options.reviewedOn, reason: options.reason,
+      athleteId: credentials.athleteId, calendarTimeZone: "UTC", reviewedOn: options.reviewedOn,
+      reason: options.reason,
       ...(options.replacesCaptureId === undefined ? {} : { replacesCaptureId: options.replacesCaptureId }) }, {
       uuid: dependencies.uuid ?? randomUUID,
       wallClock: dependencies.wallClock ?? (() => new Date()),

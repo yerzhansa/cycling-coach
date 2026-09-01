@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { CanonicalActivityIdSchema } from "./activity-analysis.js";
+import { CivilDateSchema } from "./training-export.js";
+
+export { CivilDateSchema } from "./training-export.js";
 
 export const FreshnessSchema = z.enum(["fresh", "flag", "stale", "critical"]);
 export type Freshness = z.infer<typeof FreshnessSchema>;
@@ -6,30 +10,80 @@ export type Freshness = z.infer<typeof FreshnessSchema>;
 const POWER_PROGRESS_DURATIONS = [5, 60, 300, 1_200, 3_600] as const;
 const POWER_PROGRESS_HR_DURATIONS = [60, 300, 1_200, 3_600] as const;
 
-function isCivilDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-  return (
-    parsed.getUTCFullYear() === year &&
-    parsed.getUTCMonth() === month - 1 &&
-    parsed.getUTCDate() === day
-  );
-}
-
 function civilEpochDay(value: string): number {
   return Date.parse(`${value}T00:00:00.000Z`) / 86_400_000;
 }
 
-const PowerProgressDateSchema = z.string().length(10).refine(isCivilDate, "invalid civil date");
+const ISO_INSTANT_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|([+-])(\d{2}):(\d{2}))$/u;
 
-const CivilDateWindowSchema = z
+function isFiniteIsoInstant(value: string): boolean {
+  const match = ISO_INSTANT_PATTERN.exec(value);
+  if (match === null) return false;
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) return false;
+  const offsetHours = Number(match[9] ?? 0);
+  const offsetMinutes = Number(match[10] ?? 0);
+  if (offsetHours > 23 || offsetMinutes > 59) return false;
+  const offsetSign = match[8] === "-" ? -1 : 1;
+  const local = new Date(milliseconds + offsetSign * (offsetHours * 60 + offsetMinutes) * 60_000);
+  return (
+    local.getUTCFullYear() === Number(match[1]) &&
+    local.getUTCMonth() + 1 === Number(match[2]) &&
+    local.getUTCDate() === Number(match[3]) &&
+    local.getUTCHours() === Number(match[4]) &&
+    local.getUTCMinutes() === Number(match[5]) &&
+    local.getUTCSeconds() === Number(match[6])
+  );
+}
+
+function isActiveIanaZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function utf8LenAtMost(maximumBytes: number): (value: string) => boolean {
+  const encoder = new TextEncoder();
+  return (value) => encoder.encode(value).byteLength <= maximumBytes;
+}
+
+function isMondayWeek(value: { readonly start: string; readonly end: string }): boolean {
+  return (
+    ((civilEpochDay(value.start) % 7) + 7) % 7 === 4 &&
+    civilEpochDay(value.end) - civilEpochDay(value.start) === 6
+  );
+}
+
+const PowerProgressDateSchema = z
+  .string()
+  .length(10)
+  .refine((value) => CivilDateSchema.safeParse(value).success, "invalid civil date");
+
+export const CivilDateWindowSchema = z
   .object({
     start: PowerProgressDateSchema,
     end: PowerProgressDateSchema,
   })
   .strict()
   .refine((value) => value.start <= value.end, "date window start must not follow its end");
+
+export const IsoInstantSchema = z
+  .string()
+  .max(64)
+  .datetime({ offset: true })
+  .refine(isFiniteIsoInstant);
+
+export const CanonicalSessionIdSchema = CanonicalActivityIdSchema;
+
+const CalendarTimeZoneSchema = z
+  .string()
+  .min(1)
+  .refine(isActiveIanaZone)
+  .refine(utf8LenAtMost(255));
 
 export const PowerProgressDateWindowSchema = CivilDateWindowSchema.refine(
   (value) => civilEpochDay(value.end) - civilEpochDay(value.start) === 27,
@@ -420,10 +474,431 @@ export const RecentRidesPanelSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+type MetricValueOutput =
+  | { kind: "computed"; value: number }
+  | { kind: "partial"; value: number; reason: "incomplete-coverage" }
+  | {
+      kind: "unavailable";
+      reason: "no-recorded-value" | "incomplete-coverage" | "invalid-recorded-value";
+    };
+
+type MissingRecordedMetricValueOutput = {
+  kind: "partial";
+  value: number;
+  reason: "missing-recorded-value";
+  knownRideMissingValueCount: number;
+};
+
+function metricValueSchema(
+  value: z.ZodNumber,
+  options: { readonly countsMissingRides: false },
+): z.ZodType<MetricValueOutput>;
+function metricValueSchema(
+  value: z.ZodNumber,
+  options: { readonly countsMissingRides: true },
+): z.ZodType<MetricValueOutput | MissingRecordedMetricValueOutput>;
+function metricValueSchema(
+  value: z.ZodNumber,
+  options: { readonly countsMissingRides: boolean },
+): z.ZodType<MetricValueOutput | MissingRecordedMetricValueOutput> {
+  const computed = z.object({ kind: z.literal("computed"), value }).strict();
+  const incomplete = z
+    .object({
+      kind: z.literal("partial"),
+      value,
+      reason: z.literal("incomplete-coverage"),
+    })
+    .strict();
+  const unavailable = z
+    .object({
+      kind: z.literal("unavailable"),
+      reason: z.enum([
+        "no-recorded-value",
+        "incomplete-coverage",
+        "invalid-recorded-value",
+      ]),
+    })
+    .strict();
+  if (!options.countsMissingRides) {
+    return z.union([computed, incomplete, unavailable]);
+  }
+  const missing = z
+    .object({
+      kind: z.literal("partial"),
+      value,
+      reason: z.literal("missing-recorded-value"),
+      knownRideMissingValueCount: z.number().int().min(1).max(1_000),
+    })
+    .strict();
+  return z.union([computed, missing, incomplete, unavailable]);
+}
+
+export const RideCountMetricValueSchema = metricValueSchema(
+  z.number().int().min(0).max(1_000),
+  { countsMissingRides: false },
+);
+export const DurationMetricValueSchema = metricValueSchema(
+  z.number().int().safe().nonnegative(),
+  { countsMissingRides: true },
+);
+export const DistanceMetricValueSchema = metricValueSchema(
+  z.number().finite().min(0).max(100_000_000),
+  { countsMissingRides: true },
+);
+export const LoadMetricValueSchema = metricValueSchema(
+  z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER),
+  { countsMissingRides: true },
+);
+
+export const TrainingHistoryRideSchema = z
+  .object({
+    id: CanonicalSessionIdSchema,
+    title: z.string().refine(utf8LenAtMost(512)).nullable(),
+    subSport: z.string().min(1).max(128).nullable(),
+    startEpochSeconds: z.number().int().safe().nonnegative(),
+    timezoneOffsetSeconds: z.number().int().min(-86_400).max(86_400).nullable(),
+    localDate: CivilDateSchema,
+    ridingSeconds: z.number().int().safe().nonnegative().nullable(),
+    ridingTimeBasis: z.enum(["moving", "elapsed"]).nullable(),
+    elapsedSeconds: z.number().int().safe().nonnegative().nullable(),
+    distanceMeters: z.number().finite().min(0).max(100_000_000).nullable(),
+    load: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+    averagePowerWatts: z.number().finite().min(0).max(20_000).nullable(),
+    averageHeartRateBpm: z.number().finite().positive().max(500).nullable(),
+    perceivedExertion: z.number().finite().min(0).max(10).nullable(),
+    energyKilojoules: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.ridingSeconds === null) !== (value.ridingTimeBasis === null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["ridingTimeBasis"],
+        message: "riding seconds and riding time basis must be present together",
+      });
+    }
+  });
+
+export const WeekCoverageSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("complete") }).strict(),
+  z
+    .object({
+      kind: z.literal("incomplete"),
+      recordedThrough: CivilDateSchema.nullable(),
+      reason: z.enum([
+        "backfill-incomplete",
+        "source-degraded",
+        "sparse-imports",
+        "coverage-timezone-changed",
+        "coverage-lag",
+        "scan-limit",
+        "invalid-core-record",
+      ]),
+    })
+    .strict(),
+]);
+
+export const TrendBucketSchema = z
+  .object({
+    window: CivilDateWindowSchema,
+    rideCount: z.number().int().min(0).max(1_000),
+    ridingSeconds: z.number().int().safe().nonnegative(),
+  })
+  .strict();
+
+export const RidingTimeTrendSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      buckets: z.array(TrendBucketSchema).length(6),
+    })
+    .strict()
+    .superRefine((value, context) => {
+      for (let index = 0; index < value.buckets.length; index += 1) {
+        const bucket = value.buckets[index]!;
+        if (!isMondayWeek(bucket.window)) {
+          context.addIssue({
+            code: "custom",
+            path: ["buckets", index, "window"],
+            message: "trend buckets must be closed Monday weeks",
+          });
+        }
+        if (
+          index > 0 &&
+          civilEpochDay(bucket.window.start) -
+            civilEpochDay(value.buckets[index - 1]!.window.end) !==
+            1
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["buckets", index, "window"],
+            message: "trend buckets must be contiguous and ascending",
+          });
+        }
+      }
+    }),
+  z
+    .object({
+      kind: z.literal("unavailable"),
+      reason: z.enum(["limited-history", "incomplete-source", "missing-duration"]),
+    })
+    .strict(),
+]);
+
+export const TrainingRideCalloutSchema = z
+  .object({
+    kind: z.literal("longest-ride-28d"),
+    rideId: CanonicalSessionIdSchema,
+    durationSeconds: z.number().int().safe().positive(),
+    window: CivilDateWindowSchema,
+    comparisonRideCount: z.number().int().min(4).max(1_000),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (civilEpochDay(value.window.end) - civilEpochDay(value.window.start) !== 27) {
+      context.addIssue({
+        code: "custom",
+        path: ["window"],
+        message: "callout window must contain 28 civil dates",
+      });
+    }
+  });
+
+export const CompletedActivityWeekSchema = z
+  .object({
+    id: z.enum(["anchor", "previous"]),
+    window: CivilDateWindowSchema,
+    calendarState: z.enum(["open", "closed"]),
+    coverage: WeekCoverageSchema,
+    totals: z
+      .object({
+        rideCount: RideCountMetricValueSchema,
+        ridingSeconds: DurationMetricValueSchema,
+        distanceMeters: DistanceMetricValueSchema,
+        load: LoadMetricValueSchema,
+      })
+      .strict(),
+    rides: z
+      .object({
+        count: z.union([
+          z
+            .object({
+              kind: z.literal("exact"),
+              value: z.number().int().min(0).max(1_000),
+            })
+            .strict(),
+          z
+            .object({
+              kind: z.literal("at-least"),
+              value: z.number().int().min(0).max(1_000),
+            })
+            .strict(),
+        ]),
+        items: z.array(TrainingHistoryRideSchema).max(50),
+        truncated: z.boolean(),
+      })
+      .strict(),
+    trend: RidingTimeTrendSchema,
+    callout: TrainingRideCalloutSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!isMondayWeek(value.window)) {
+      context.addIssue({
+        code: "custom",
+        path: ["window"],
+        message: "completed activity week must run from Monday through Sunday",
+      });
+    }
+    const ids = new Set<string>();
+    for (let index = 0; index < value.rides.items.length; index += 1) {
+      const ride = value.rides.items[index]!;
+      if (ride.localDate < value.window.start || ride.localDate > value.window.end) {
+        context.addIssue({
+          code: "custom",
+          path: ["rides", "items", index, "localDate"],
+          message: "ride local date must fall inside the week",
+        });
+      }
+      if (ids.has(ride.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["rides", "items", index, "id"],
+          message: "ride ids must be unique within a week",
+        });
+      }
+      ids.add(ride.id);
+      if (index > 0) {
+        const previous = value.rides.items[index - 1]!;
+        if (
+          previous.startEpochSeconds < ride.startEpochSeconds ||
+          (previous.startEpochSeconds === ride.startEpochSeconds && previous.id > ride.id)
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["rides", "items", index],
+            message: "rides must be sorted by start time descending and id ascending",
+          });
+        }
+      }
+    }
+    if (value.rides.count.value < value.rides.items.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["rides", "count", "value"],
+        message: "ride count must include every returned ride",
+      });
+    }
+    const shouldBeTruncated =
+      value.rides.count.kind === "at-least" ||
+      value.rides.count.value > value.rides.items.length;
+    if (value.rides.truncated !== shouldBeTruncated) {
+      context.addIssue({
+        code: "custom",
+        path: ["rides", "truncated"],
+        message: "ride truncation must match the count envelope",
+      });
+    }
+    if (value.callout !== null) {
+      const ride = value.rides.items.find((item) => item.id === value.callout?.rideId);
+      if (ride === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["callout", "rideId"],
+          message: "callout ride must be returned in the week",
+        });
+      } else if (ride.ridingSeconds !== value.callout.durationSeconds) {
+        context.addIssue({
+          code: "custom",
+          path: ["callout", "durationSeconds"],
+          message: "callout duration must match the returned ride",
+        });
+      }
+    }
+  });
+
+export const TrainingHistoryCoverageSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("contiguous"),
+      start: CivilDateSchema,
+      through: CivilDateSchema,
+      committedAt: IsoInstantSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("incomplete"),
+      provenStart: CivilDateSchema.nullable(),
+      provenThrough: CivilDateSchema.nullable(),
+      observedThrough: CivilDateSchema.nullable(),
+      committedAt: IsoInstantSchema.nullable(),
+      reason: z.enum([
+        "backfill-incomplete",
+        "source-degraded",
+        "undated-dropped-rows",
+        "coverage-timezone-changed",
+      ]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sparse"),
+      latestKnownRideDate: CivilDateSchema,
+      latestImportAt: IsoInstantSchema.nullable(),
+    })
+    .strict(),
+]);
+
+export const TrainingHistoryComputedSchema = z
+  .object({
+    kind: z.literal("computed"),
+    asOf: IsoInstantSchema,
+    calendarTimeZone: CalendarTimeZoneSchema,
+    displayMode: z.enum(["current", "last-recorded"]),
+    coverage: TrainingHistoryCoverageSchema,
+    anchorWeek: CompletedActivityWeekSchema,
+    previousWeek: CompletedActivityWeekSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.anchorWeek.id !== "anchor") {
+      context.addIssue({
+        code: "custom",
+        path: ["anchorWeek", "id"],
+        message: "anchor week must carry the anchor id",
+      });
+    }
+    if (value.previousWeek !== null) {
+      if (value.previousWeek.id !== "previous") {
+        context.addIssue({
+          code: "custom",
+          path: ["previousWeek", "id"],
+          message: "previous week must carry the previous id",
+        });
+      }
+      if (
+        civilEpochDay(value.anchorWeek.window.start) -
+          civilEpochDay(value.previousWeek.window.end) !==
+        1
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["previousWeek", "window"],
+          message: "previous week must end before the anchor week starts",
+        });
+      }
+    }
+  });
+
+const TrainingHistoryUnavailableSchema = z
+  .object({
+    kind: z.literal("unavailable"),
+    reason: z.enum([
+      "not-synced",
+      "coverage-unavailable",
+      "temporary-failure",
+      "invalid-data",
+    ]),
+  })
+  .strict();
+
+export const TrainingHistoryProjectionSchema = z.discriminatedUnion("kind", [
+  TrainingHistoryComputedSchema,
+  TrainingHistoryUnavailableSchema,
+]);
+
+const TrainingHistoryStaleSchema = z
+  .object({
+    kind: z.literal("stale"),
+    failedAt: IsoInstantSchema,
+    reason: z.literal("temporary-failure"),
+    lastGood: TrainingHistoryComputedSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.lastGood.anchorWeek.callout !== null ||
+      (value.lastGood.previousWeek !== null && value.lastGood.previousWeek.callout !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["lastGood"],
+        message: "last-good training history cannot carry callouts",
+      });
+    }
+  });
+
+export const TrainingHistoryPanelSchema = z.discriminatedUnion("kind", [
+  ...TrainingHistoryProjectionSchema.options,
+  TrainingHistoryStaleSchema,
+]);
+
 export const CyclingTrainingContextSchema = z
   .object({
     performanceProgress: PowerProgressPanelSchema,
     recentRides: RecentRidesPanelSchema.default({ kind: "unknown", reason: "not-synced" }),
+    trainingHistory: TrainingHistoryPanelSchema,
     anchorZones: AnchorZonesPanelSchema,
     cyclingLoad: CyclingLoadPanelSchema,
     plan: PlanPanelSchema,
@@ -445,11 +920,30 @@ export type WellnessSeries = z.infer<typeof WellnessSeriesSchema>;
 export type WellnessTrendPanel = z.infer<typeof WellnessTrendPanelSchema>;
 export type RecentRide = z.infer<typeof RecentRideSchema>;
 export type RecentRidesPanel = z.infer<typeof RecentRidesPanelSchema>;
+export type IsoInstant = z.infer<typeof IsoInstantSchema>;
+export type CivilDate = z.infer<typeof CivilDateSchema>;
+export type CivilDateWindow = z.infer<typeof CivilDateWindowSchema>;
+export type CanonicalSessionId = z.infer<typeof CanonicalSessionIdSchema>;
+export type RideCountMetricValue = z.infer<typeof RideCountMetricValueSchema>;
+export type DurationMetricValue = z.infer<typeof DurationMetricValueSchema>;
+export type DistanceMetricValue = z.infer<typeof DistanceMetricValueSchema>;
+export type LoadMetricValue = z.infer<typeof LoadMetricValueSchema>;
+export type TrainingHistoryRide = z.infer<typeof TrainingHistoryRideSchema>;
+export type WeekCoverage = z.infer<typeof WeekCoverageSchema>;
+export type TrendBucket = z.infer<typeof TrendBucketSchema>;
+export type RidingTimeTrend = z.infer<typeof RidingTimeTrendSchema>;
+export type TrainingRideCallout = z.infer<typeof TrainingRideCalloutSchema>;
+export type CompletedActivityWeek = z.infer<typeof CompletedActivityWeekSchema>;
+export type TrainingHistoryCoverage = z.infer<typeof TrainingHistoryCoverageSchema>;
+export type TrainingHistoryComputed = z.infer<typeof TrainingHistoryComputedSchema>;
+export type TrainingHistoryProjection = z.infer<typeof TrainingHistoryProjectionSchema>;
+export type TrainingHistoryPanel = z.infer<typeof TrainingHistoryPanelSchema>;
 export type CyclingTrainingContext = z.infer<typeof CyclingTrainingContextSchema>;
 
 export const UNKNOWN_CYCLING_TRAINING_CONTEXT: CyclingTrainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
   recentRides: { kind: "unknown", reason: "not-synced" },
+  trainingHistory: { kind: "unavailable", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "not-synced" },
   cyclingLoad: { kind: "unknown", reason: "not-synced" },
   plan: { kind: "unknown", reason: "not-synced" },

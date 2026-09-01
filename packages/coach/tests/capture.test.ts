@@ -33,7 +33,8 @@ describe("runReferenceCapture", () => {
     };
     let monotonic = 0;
     const manifest = await runReferenceCapture({ env: { ENDURAGENT_HOME: root }, apiKey: "synthetic-key",
-      athleteId: "synthetic-athlete", reviewedOn: "1998-07-18", reason: "initial", baseFetch }, {
+      athleteId: "synthetic-athlete", calendarTimeZone: "UTC", reviewedOn: "1998-07-18",
+      reason: "initial", baseFetch }, {
       wallClock: () => NOW, uuid: () => CAPTURE_ID, monotonicNow: () => (monotonic += 250), sleep: async () => {},
     });
     expect(requests).toHaveLength(4);
@@ -52,6 +53,76 @@ describe("runReferenceCapture", () => {
     expect((await store.get("SELECT count(*) AS n FROM anchor_history"))?.n).toBeGreaterThan(0);
     expect((await store.get("SELECT count(*) AS n FROM zone_set_history"))?.n).toBeGreaterThan(0);
     expect((await store.get("SELECT count(*) AS n FROM raw_file"))?.n).toBe(0);
+    expect(
+      await store.get(
+        `SELECT authority_kind, authority_id, calendar_timezone, covered_oldest_date_key,
+  covered_newest_date_key, gap_state
+FROM training_history_coverage_commit`,
+      ),
+    ).toEqual({
+      authority_kind: "reference-capture",
+      authority_id: CAPTURE_ID,
+      calendar_timezone: "UTC",
+      covered_oldest_date_key: 19980425,
+      covered_newest_date_key: 19980718,
+      gap_state: "none",
+    });
+    await store.close();
+  });
+
+  it("rolls back an activity landing when the in-transaction coverage commit conflicts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "reference-capture-home-"));
+    const fetchFor = (activityId: number): typeof globalThis.fetch => async (input) => {
+      const url = String(input);
+      if (url.includes("/streams.json")) return json(streams);
+      if (url.includes("/activities?")) return json([{ ...activities[0], id: activityId }]);
+      if (url.includes("/wellness?")) return json(wellness);
+      return json(profile);
+    };
+    let monotonic = 0;
+    const dependencies = {
+      wallClock: () => NOW,
+      uuid: () => CAPTURE_ID,
+      monotonicNow: () => (monotonic += 250),
+      sleep: async () => {},
+    };
+    await runReferenceCapture(
+      {
+        env: { ENDURAGENT_HOME: root },
+        apiKey: "synthetic-key",
+        athleteId: "synthetic-athlete",
+        calendarTimeZone: "UTC",
+        reviewedOn: "1998-07-18",
+        reason: "initial",
+        baseFetch: fetchFor(42),
+      },
+      dependencies,
+    );
+
+    await expect(
+      runReferenceCapture(
+        {
+          env: { ENDURAGENT_HOME: root },
+          apiKey: "synthetic-key",
+          athleteId: "synthetic-athlete",
+          calendarTimeZone: "Asia/Almaty",
+          reviewedOn: "1998-07-18",
+          reason: "initial",
+          baseFetch: fetchFor(43),
+        },
+        dependencies,
+      ),
+    ).rejects.toMatchObject({ cause: { category: "persistence" } });
+
+    const store = openSqliteStorage(join(root, "store", "store.db"));
+    expect(
+      await store.get(
+        "SELECT count(*) AS n FROM source_record WHERE source='intervals-icu' AND external_id='43'",
+      ),
+    ).toEqual({ n: 0 });
+    expect(
+      await store.get("SELECT count(*) AS n FROM training_history_coverage_commit"),
+    ).toEqual({ n: 1 });
     await store.close();
   });
 
@@ -66,7 +137,8 @@ describe("runReferenceCapture", () => {
     };
     let monotonic = 0;
     const manifest = await runReferenceCapture({ env: { ENDURAGENT_HOME: root }, apiKey: "synthetic-key",
-      athleteId: "synthetic-athlete", reviewedOn: "1998-07-18", reason: "initial", baseFetch }, {
+      athleteId: "synthetic-athlete", calendarTimeZone: "UTC", reviewedOn: "1998-07-18",
+      reason: "initial", baseFetch }, {
       wallClock: () => NOW, uuid: () => CAPTURE_ID, monotonicNow: () => (monotonic += 250), sleep: async () => {},
     });
     expect(requests).toHaveLength(3);
@@ -76,5 +148,12 @@ describe("runReferenceCapture", () => {
     expect(manifest.deterministic_order.activities).toEqual([]);
     expect(JSON.parse(await readFile(join(root, "captures", CAPTURE_ID, "manifest.json"), "utf8")))
       .toMatchObject({ records: { activities: [] } });
+    const store = openSqliteStorage(join(root, "store", "store.db"));
+    expect(
+      await store.get(
+        "SELECT authority_kind, authority_id FROM training_history_coverage_commit",
+      ),
+    ).toEqual({ authority_kind: "reference-capture", authority_id: CAPTURE_ID });
+    await store.close();
   });
 });

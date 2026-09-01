@@ -6,6 +6,7 @@ import type {
   SubsystemLogger,
 } from "@enduragent/core";
 import { createStoreAthleteDataReader, createSubsystemLogger } from "@enduragent/core";
+import { resolveUserTimezone } from "@enduragent/engine/sport";
 import {
   createCanonicalActivityReader,
   createPhysicalRequestLedger,
@@ -382,6 +383,7 @@ LIMIT 1`,
   private async runWindowInternal(admissionSignal: AbortSignal): Promise<StoreWindowResult> {
     admissionSignal.throwIfAborted();
     const config = this.options.readConfig?.() ?? this.options.config;
+    const calendarTimeZone = resolveUserTimezone(config.session.timezone);
     if (config.intervals.apiKey.length === 0) {
       return Object.freeze({
         published: false,
@@ -420,6 +422,7 @@ LIMIT 1`,
           : { writerContext: this.options.writerContext }),
         apiKey: config.intervals.apiKey,
         athleteId: config.intervals.athleteId,
+        calendarTimeZone,
         reviewedOn: now.toISOString().slice(0, 10),
         reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
         ...(this.snapshotValue === undefined

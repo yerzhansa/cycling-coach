@@ -17,6 +17,7 @@ import {
 const context: CyclingTrainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
   recentRides: { kind: "unknown", reason: "no-recent-rides" },
+  trainingHistory: { kind: "unavailable", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
   cyclingLoad: {
     kind: "computed",

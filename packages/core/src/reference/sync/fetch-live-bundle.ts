@@ -201,7 +201,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const { client, signal, now } = deps;
   const log = deps.log ?? ((m: string) => console.warn(m));
   const throttleMs = deps.throttleMs ?? STREAM_THROTTLE_MS;
-  const plan = createReferenceCapturePlan(now);
+  const plan = createReferenceCapturePlan({ now, calendarTimeZone: "UTC" });
   const frozenNow = plan.frozenNow;
   const { oldest, newest } = plan.window;
   const cyclingSportTypes = new Set(

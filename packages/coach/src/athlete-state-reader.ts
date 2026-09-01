@@ -5,11 +5,15 @@ import {
   EMPTY_DROPPED_ACTIVITIES,
   PowerProgressPanelSchema,
   RecentRidesPanelSchema,
+  TrainingHistoryPanelSchema,
+  TrainingHistoryProjectionSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
   type AthleteState,
   type DroppedActivities,
   type PowerProgressPanel,
   type RecentRidesPanel,
+  type TrainingHistoryComputed,
+  type TrainingHistoryPanel,
 } from "@enduragent/coach-contract";
 import type { AthleteStateReaderPort } from "@enduragent/engine";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
@@ -22,6 +26,7 @@ import {
   SchedulerStateSchema,
 } from "@enduragent/kernel/reference/schemas";
 import { projectCyclingTrainingContext } from "./training-context.js";
+import type { TrainingHistorySource } from "./training-history.js";
 
 export interface PersistedAthleteStateSource extends AthleteStateReaderPort {}
 
@@ -54,7 +59,7 @@ function isFiniteInstant(value: string): boolean {
   );
 }
 
-export interface CreatePersistedAthleteStateSourceOptions {
+interface PersistedAthleteStateSourceBaseOptions {
   readonly dataDir: string;
   readonly cyclingFtpAnchorResolver: CyclingFtpAnchorResolver;
   readonly now?: () => Date;
@@ -68,6 +73,56 @@ export interface CreatePersistedAthleteStateSourceOptions {
     }): Promise<RecentRidesPanel>;
   };
   readonly droppedActivitiesSource?: () => DroppedActivities;
+}
+
+type TrainingHistorySourceOptions =
+  | {
+      readonly trainingHistorySource: TrainingHistorySource;
+      readonly sourceOwner: () => string;
+      readonly calendarTimeZone: () => string;
+    }
+  | {
+      readonly trainingHistorySource?: undefined;
+      readonly sourceOwner?: never;
+      readonly calendarTimeZone?: never;
+    };
+
+export type CreatePersistedAthleteStateSourceOptions =
+  PersistedAthleteStateSourceBaseOptions & TrainingHistorySourceOptions;
+
+interface TrainingHistoryCacheIdentity {
+  readonly athleteHomeRoot: string;
+  readonly sourceOwner: string;
+  readonly calendarTimeZone: string;
+}
+
+interface TrainingHistoryLastGood {
+  readonly identity: TrainingHistoryCacheIdentity;
+  readonly panel: TrainingHistoryComputed;
+}
+
+function sameTrainingHistoryIdentity(
+  left: TrainingHistoryCacheIdentity,
+  right: TrainingHistoryCacheIdentity,
+): boolean {
+  return (
+    left.athleteHomeRoot === right.athleteHomeRoot &&
+    left.sourceOwner === right.sourceOwner &&
+    left.calendarTimeZone === right.calendarTimeZone
+  );
+}
+
+function withoutTrainingHistoryCallouts(
+  panel: TrainingHistoryComputed,
+): TrainingHistoryComputed {
+  return {
+    ...panel,
+    anchorWeek: { ...panel.anchorWeek, callout: null },
+    previousWeek:
+      panel.previousWeek === null
+        ? null
+        : { ...panel.previousWeek, callout: null },
+  };
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -104,8 +159,55 @@ export function createPersistedAthleteStateSource(
   const latestPath = join(input.dataDir, "data", "latest.json");
   const errorPath = join(input.dataDir, "data", "error_state.json");
   const schedulerPath = join(input.dataDir, "data", ".scheduler.json");
+  let lastGoodTrainingHistory: TrainingHistoryLastGood | null = null;
+  const readTrainingHistory = async (
+    identity: TrainingHistoryCacheIdentity | null,
+    request: Parameters<TrainingHistorySource["readTrainingHistory"]>[0],
+  ): Promise<TrainingHistoryPanel> => {
+    if (input.trainingHistorySource === undefined || identity === null) {
+      return { kind: "unavailable", reason: "not-synced" };
+    }
+    try {
+      const projection = await input.trainingHistorySource.readTrainingHistory(request);
+      const parsed = TrainingHistoryProjectionSchema.safeParse(projection);
+      if (!parsed.success) throw new TypeError("training history projection is invalid");
+      if (parsed.data.kind === "computed") {
+        lastGoodTrainingHistory = { identity, panel: parsed.data };
+      }
+      return parsed.data;
+    } catch {
+      const cached = lastGoodTrainingHistory;
+      if (cached === null || !sameTrainingHistoryIdentity(cached.identity, identity)) {
+        return { kind: "unavailable", reason: "temporary-failure" };
+      }
+      return TrainingHistoryPanelSchema.parse({
+        kind: "stale",
+        failedAt: request.asOf,
+        reason: "temporary-failure",
+        lastGood: withoutTrainingHistoryCallouts(cached.panel),
+      });
+    }
+  };
   return {
     async getAthleteState(): Promise<AthleteState> {
+      const trainingHistoryIdentity: TrainingHistoryCacheIdentity | null =
+        input.trainingHistorySource === undefined
+          ? null
+          : {
+              athleteHomeRoot: input.dataDir,
+              sourceOwner: input.sourceOwner(),
+              calendarTimeZone: input.calendarTimeZone(),
+            };
+      if (
+        lastGoodTrainingHistory !== null &&
+        (trainingHistoryIdentity === null ||
+          !sameTrainingHistoryIdentity(
+            lastGoodTrainingHistory.identity,
+            trainingHistoryIdentity,
+          ))
+      ) {
+        lastGoodTrainingHistory = null;
+      }
       const [schedulerResult] = await Promise.allSettled([readJson(schedulerPath)]);
       const [latestResult, errorResult] = await Promise.allSettled([
         readJson(latestPath),
@@ -173,7 +275,7 @@ export function createPersistedAthleteStateSource(
       const parsedAsOf = Date.parse(latest.metadata.last_updated);
       const asOfEpochS =
         Number.isFinite(parsedAsOf) && parsedAsOf >= 0 ? Math.floor(parsedAsOf / 1_000) : null;
-      const [anchor, performanceProgress, recentRides] = await Promise.all([
+      const [anchor, performanceProgress, recentRides, trainingHistory] = await Promise.all([
         asOfEpochS === null
           ? Promise.resolve(null)
           : input.cyclingFtpAnchorResolver
@@ -202,6 +304,15 @@ export function createPersistedAthleteStateSource(
               latest.metadata.last_updated,
               asOfEpochS,
             ),
+        asOfEpochS === null || trainingHistoryIdentity === null
+          ? Promise.resolve({ kind: "unavailable", reason: "not-synced" } as const)
+          : readTrainingHistory(trainingHistoryIdentity, {
+              asOf: latest.metadata.last_updated,
+              asOfEpochSeconds: asOfEpochS,
+              calendarTimeZone: trainingHistoryIdentity.calendarTimeZone,
+              freshness: latest.metadata.freshness,
+              sourceRestricted: errorState?.mitigation === "block_coaching",
+            }),
       ]);
       const trainingContext = projectCyclingTrainingContext({
         asOf: latest.metadata.last_updated,
@@ -212,6 +323,7 @@ export function createPersistedAthleteStateSource(
         wellness: latest.wellness_data,
         performanceProgress,
         recentRides,
+        trainingHistory,
         droppedActivities:
           input.droppedActivitiesSource?.() ?? EMPTY_DROPPED_ACTIVITIES,
       });

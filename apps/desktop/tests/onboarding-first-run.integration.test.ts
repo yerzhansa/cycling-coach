@@ -154,6 +154,7 @@ function makeScript(): DesktopFixtureScript {
                 },
               ],
             },
+            trainingHistory: { kind: "unavailable", reason: "not-synced" },
             anchorZones: { kind: "unknown", reason: "not-synced" },
             cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
             plan: { kind: "unknown", reason: "no-plan" },
