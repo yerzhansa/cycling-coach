@@ -3,7 +3,7 @@
 ## Sub-features
 
 - Owned user route: **Training** in Main navigation (`activeView: "training"`). Manifest surfaces: `training-setup`, `first-sync`, `training-import`, `training`, `ride-review`, `power-progress`, `wellness`, `training-export`, and `training-sync`.
-- Setup and first sync: `training.setup.intervals-clipboard-connect`, `training.setup.file-import-fallback`, `training.first-sync.provider-backfill`, and `training.first-sync.failure-recovery`.
+- Setup and first sync: [`setup.md`](setup.md) owns the Setup scenarios; Training owns `training.first-sync.provider-backfill` and `training.first-sync.failure-recovery`.
 - Resident overview and recovery: `training.view.panel-inventory`, `training.view.readiness-states`, `training.view.context-recovery`, `training.view.anchor-load-plan-adherence`, `training.power-progress.comparison`, and `training.wellness.trend`.
 - Ride review, import, export, and sync: `training.ride-review.navigation`, `training.ride-review.local-analysis`, `training.import.progress-results`, `training.export.activity-formats`, `training.export.workout-formats`, `training.sync.lifecycle`, and `training.sync.protocol-failure`.
 
