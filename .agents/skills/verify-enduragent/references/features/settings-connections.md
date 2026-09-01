@@ -1,6 +1,6 @@
 # Settings connections
 
-## What it covers
+## Sub-features
 
 - Owned surface and user route: **Settings** in Main navigation (`activeView: "settings"`). `SettingsView` renders the embedded **Setup**, **Telegram**, **Coach**, and **Training account** connection surfaces; this page is not a complete Settings inventory.
 - Coach and training scenario-map rows: `settings.providers.coach-route`, `settings.providers.credential-management`, `settings.intervals.connect`, `settings.intervals.delete-only`, and `settings.training-account.identity`.

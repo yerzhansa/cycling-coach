@@ -1,6 +1,6 @@
 # Shell lifecycle
 
-## What it covers
+## Sub-features
 
 - Owned scenario surfaces: `shell-bootstrap`, `shell-activation`, `shell-tray`, `shell-login`, `shell-power`, and `daemon-shutdown`, plus main-window creation, renderer shell settlement, and lifecycle error copy.
 - Frozen Windows scenario-map rows: `shell.bootstrap.user-data`, `shell.bootstrap.app-identity`, `shell.single-instance.activation`, `shell.tray.window-residency`, `shell.tray.native-menu`, `shell.login.registration`, `shell.login.background-launch`, and `daemon.shutdown.quit-drain`.

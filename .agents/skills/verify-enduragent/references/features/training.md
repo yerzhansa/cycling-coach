@@ -1,6 +1,6 @@
 # Training
 
-## What it covers
+## Sub-features
 
 - Owned user route: **Training** in Main navigation (`activeView: "training"`). Manifest surfaces: `training-setup`, `first-sync`, `training-import`, `training`, `ride-review`, `power-progress`, `wellness`, `training-export`, and `training-sync`.
 - Setup and first sync: `training.setup.intervals-clipboard-connect`, `training.setup.file-import-fallback`, `training.first-sync.provider-backfill`, and `training.first-sync.failure-recovery`.
