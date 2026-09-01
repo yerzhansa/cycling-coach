@@ -319,6 +319,36 @@ describe("persisted athlete state source", () => {
     });
   });
 
+  it("projects training history without a Reference snapshot", async () => {
+    const root = await home();
+    const now = new Date("1998-07-18T12:00:00.000Z");
+    const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
+    const readRecentRides = vi.fn(async () => ({
+      kind: "unknown" as const,
+      reason: "not-synced" as const,
+    }));
+
+    const state = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      recentRidesSource: { readRecentRides },
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    }).getAthleteState();
+
+    expect(AthleteStateSchema.parse(state)).toEqual(state);
+    expect(readTrainingHistory).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+      calendarTimeZone: "UTC",
+      freshness: "fresh",
+      sourceRestricted: false,
+    });
+    expect(state.trainingContext?.trainingHistory).toMatchObject({ kind: "computed" });
+  });
+
   it("returns canonical recent rides without a Reference snapshot", async () => {
     const root = await home();
     const now = new Date("1998-07-18T12:00:00.000Z");
