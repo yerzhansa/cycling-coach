@@ -271,9 +271,10 @@ Jonny Pinhorn and Indian Type Foundry. The full OFL text ships inside the packag
 
 ## Cursor pstack verification skills (MIT)
 
-The project-local `create-verification-skill` and `maintain-verification-skill` Codex skills
-adapt the corresponding pstack skills from
-[`cursor/plugins`](https://github.com/cursor/plugins/tree/main/pstack/skills) by Lauren Tan.
+The project-local `create-verification-skill` and `maintain-verification-skill`
+skills are unmodified copies of the corresponding pstack skills from
+[`cursor/plugins`](https://github.com/cursor/plugins/tree/main/pstack/skills) by Lauren Tan,
+at commit [`b9ddc83c32972210b8a94d389130713e8eed346e`](https://github.com/cursor/plugins/tree/b9ddc83c32972210b8a94d389130713e8eed346e/pstack/skills).
 They are distributed under the MIT License.
 
 ### Original license (verbatim)
@@ -304,7 +305,6 @@ SOFTWARE.
 
 ### Modifications introduced
 
-The Cursor paths and slash-command vocabulary were replaced with Codex project-skill paths,
-`$skill-name` invocation, and `agents/openai.yaml` policy. The workflows also preserve existing
-executor ownership, enforce isolated Enduragent data and process cleanup, retain privacy-scanned
-evidence, and follow this repository's verification and delivery boundaries.
+None. These files are unmodified copies of the pstack originals at
+`cursor/plugins` commit `b9ddc83c32972210b8a94d389130713e8eed346e`, vendored at
+`.agents/skills/{create,maintain}-verification-skill/`.

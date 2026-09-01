@@ -1,7 +1,0 @@
-interface:
-  display_name: "Maintain Verification Skill"
-  short_description: "Audit one repository verification skill"
-  default_prompt: "Use $maintain-verification-skill to audit and repair exactly one project-local verification skill without changing product behavior."
-
-policy:
-  allow_implicit_invocation: false
