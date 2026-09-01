@@ -1195,7 +1195,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     }
     await visibleQaCheckpoint("scr-02-scrolled-up");
 
-    const trainingView = await fixture.evaluate<string | null>(`
+    const trainingView = await fixture.evaluate<{
+      readonly view: string | null;
+      readonly weeklySummary: string;
+      readonly recentRides: string;
+      readonly historyStatus: string;
+    }>(`
       const navigation = document.querySelector('nav[aria-label="Main navigation"]');
       const training = Array.from(navigation?.querySelectorAll("button") ?? []).find(
         (entry) => entry.textContent?.trim() === "Training",
@@ -1203,12 +1208,27 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       if (!(training instanceof HTMLButtonElement)) throw new Error("Training navigation missing");
       training.click();
       const deadline = Date.now() + 5000;
-      while (!document.querySelector('[data-view="training"]') && Date.now() < deadline) {
+      while (!document.querySelector('[data-panel="weekly-summary"]') && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
-      return document.querySelector("[data-view]")?.getAttribute("data-view") ?? null;
+      const weeklySummary = document.querySelector('[data-panel="weekly-summary"]');
+      const recentRides = document.querySelector('[data-panel="recent-rides"]');
+      if (!(weeklySummary instanceof HTMLElement) || !(recentRides instanceof HTMLElement)) {
+        throw new Error("week-first Training surface missing");
+      }
+      return {
+        view: document.querySelector("[data-view]")?.getAttribute("data-view") ?? null,
+        weeklySummary: weeklySummary.querySelector("h2")?.textContent ?? "",
+        recentRides: recentRides.querySelector("h2")?.textContent ?? "",
+        historyStatus: weeklySummary.querySelector("p")?.textContent ?? "",
+      };
     `);
-    expect(trainingView).toBe("training");
+    expect(trainingView).toEqual({
+      view: "training",
+      weeklySummary: "Weekly summary",
+      recentRides: "Recent rides",
+      historyStatus: "Training history is not available yet.",
+    });
     liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: thirdStreamDelta });
     const hiddenUpdate = await fixture.evaluate<{
       readonly view: string | null;

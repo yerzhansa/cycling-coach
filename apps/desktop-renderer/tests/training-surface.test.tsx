@@ -2,6 +2,7 @@ import type {
   CompletedActivityWeek,
   CyclingTrainingContext,
   ImportFilesRpcResult,
+  PowerProgressComputed,
   TrainingHistoryComputed,
   TrainingHistoryPanel,
   TrainingHistoryRide,
@@ -199,6 +200,82 @@ function ready(
     ...overrides,
   };
 }
+
+const computedPowerProgress = {
+  kind: "computed",
+  currentWindow: { start: "1998-06-22", end: "1998-07-19" },
+  previousWindow: { start: "1998-05-25", end: "1998-06-21" },
+  anchors: [
+    {
+      durationSeconds: 5,
+      current: { kind: "computed", watts: 1_120 },
+      previous: { kind: "computed", watts: 1_050 },
+      change: { kind: "computed", percent: 6.7 },
+    },
+    {
+      durationSeconds: 60,
+      current: { kind: "computed", watts: 620 },
+      previous: { kind: "computed", watts: 600 },
+      change: { kind: "computed", percent: 3.3 },
+    },
+    {
+      durationSeconds: 300,
+      current: { kind: "computed", watts: 390 },
+      previous: { kind: "computed", watts: 400 },
+      change: { kind: "computed", percent: -2.5 },
+    },
+    {
+      durationSeconds: 1_200,
+      current: { kind: "computed", watts: 310 },
+      previous: { kind: "computed", watts: 310 },
+      change: { kind: "computed", percent: 0 },
+    },
+    {
+      durationSeconds: 3_600,
+      current: { kind: "unavailable" },
+      previous: { kind: "unavailable" },
+      change: { kind: "unavailable" },
+    },
+  ],
+  rotation: "sprint",
+  heartRateContext: {
+    kind: "computed",
+    anchors: [
+      {
+        durationSeconds: 60,
+        current: { kind: "computed", bpm: 181 },
+        previous: { kind: "computed", bpm: 178 },
+        change: { kind: "computed", percent: 1.7 },
+      },
+      {
+        durationSeconds: 300,
+        current: { kind: "computed", bpm: 176 },
+        previous: { kind: "computed", bpm: 175 },
+        change: { kind: "computed", percent: 0.6 },
+      },
+      {
+        durationSeconds: 1_200,
+        current: { kind: "computed", bpm: 165 },
+        previous: { kind: "computed", bpm: 166 },
+        change: { kind: "computed", percent: -0.6 },
+      },
+      {
+        durationSeconds: 3_600,
+        current: { kind: "computed", bpm: 151 },
+        previous: { kind: "computed", bpm: 150 },
+        change: { kind: "computed", percent: 0.7 },
+      },
+    ],
+  },
+  sustainabilityContext: {
+    kind: "computed",
+    window: { start: "1998-06-08", end: "1998-07-19" },
+    coverageRatio: 0.83,
+    sourceContext: "mixed",
+  },
+  freshness: "fresh",
+  asOf: "1998-07-19T08:00:00.000Z",
+} as const satisfies PowerProgressComputed;
 
 function importResult(imported: number, quarantined: number): ImportFilesRpcResult {
   return {
@@ -569,6 +646,81 @@ describe("ride review", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "Training" })).toHaveFocus();
     expect(useEnduragentStore.getState().selectedRide).toBeNull();
+  });
+});
+
+describe("power progress", () => {
+  it("renders an accessible five-effort Power Progress comparison with secondary context", async () => {
+    const user = userEvent.setup();
+    setTraining(
+      ready(history(), {
+        trainingContext: { ...context(), performanceProgress: computedPowerProgress },
+      }),
+    );
+    render(<TrainingView />);
+
+    const progress = screen.getByRole("region", { name: "Power progress" });
+    expect(
+      within(progress).getByText("Short efforts changed more favorably than long efforts."),
+    ).toBeInTheDocument();
+    expect(
+      within(progress).getByText("1998-06-22–1998-07-19 · compared with the prior 28 days"),
+    ).toBeInTheDocument();
+    expect(within(progress).getByText("Fresh")).toBeInTheDocument();
+    const powerTable = within(progress).getByRole("table", {
+      name: "Power curve for the current 28 days compared with the previous 28 days",
+    });
+    expect(within(powerTable).getAllByRole("row")).toHaveLength(6);
+    expect(within(powerTable).getByText("1120 W")).toBeInTheDocument();
+    expect(within(powerTable).getByLabelText("Increased, 6.7%")).toHaveTextContent("↑ +6.7%");
+    expect(within(powerTable).getByLabelText("Decreased, 2.5%")).toHaveTextContent("↓ -2.5%");
+    expect(within(powerTable).getAllByLabelText("Unavailable")).toHaveLength(3);
+    await user.click(within(progress).getByText("Heart-rate response · 4 efforts"));
+    expect(
+      within(progress).getByRole("table", {
+        name: "Heart-rate curve for the current 28 days compared with the previous 28 days",
+      }),
+    ).toBeVisible();
+    expect(within(progress).getByText("181 bpm")).toBeInTheDocument();
+    expect(
+      within(progress).getByText(
+        "42-day durability context · 83% curve coverage · indoor and outdoor rides",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("explains unavailable data and clearly labels a stale last-good comparison", () => {
+    setTraining(
+      ready(history(), {
+        trainingContext: {
+          ...context(),
+          performanceProgress: { kind: "unavailable", reason: "invalid-data" },
+        },
+      }),
+    );
+    render(<TrainingView />);
+    expect(
+      screen.getByText("Power progress data could not be verified. Sync again."),
+    ).toBeInTheDocument();
+
+    setTraining(
+      ready(history(), {
+        trainingContext: {
+          ...context(),
+          performanceProgress: {
+            kind: "stale",
+            lastGood: { ...computedPowerProgress, freshness: "stale" },
+            refreshFailure: { code: "timeout", failedAt: "1998-07-20T08:00:00.000Z" },
+          },
+        },
+      }),
+    );
+    const progress = screen.getByRole("region", { name: "Power progress" });
+    expect(within(progress).getByText(/latest refresh timed out/i)).toHaveTextContent(
+      "The latest refresh timed out. Showing the last complete comparison. Failed 1998-07-20 08:00:00 UTC.",
+    );
+    expect(within(progress).getByText("Stale")).toBeInTheDocument();
+    expect(within(progress).getByText("1120 W")).toBeInTheDocument();
   });
 });
 
