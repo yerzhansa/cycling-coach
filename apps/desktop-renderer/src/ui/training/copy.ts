@@ -10,8 +10,6 @@ import type {
 import { PLATFORM_COPY } from "../../platform-copy";
 import type { TrainingContextStatus } from "../../training-context/controller";
 
-export const MAX_VISIBLE_PLAN_ITEMS = 7;
-
 export const TRAINING_UNKNOWN_COPY: Readonly<Record<TrainingContextUnknownReason, string>> = {
   "not-synced": "Not synced yet",
   "missing-anchor": "No cycling FTP anchor is available",

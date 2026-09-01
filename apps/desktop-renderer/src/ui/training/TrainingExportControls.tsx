@@ -109,7 +109,7 @@ export function WorkoutArchiveExportControl(props: {
   const actions = useEnduragentStore((store) => store.trainingExportActions);
   const busy = state.status === "running";
   return (
-    <div className={styles.planExport}>
+    <div>
       <p className={styles.support}>
         Save the visible planned workouts as a ZIP. Exporting does not change your plan.
       </p>

@@ -302,8 +302,6 @@ describe("training page", () => {
       "Recent rides",
       "Current cycling anchor",
       "Cycling Load",
-      "Plan",
-      "Adherence",
       "Wellness trend",
       "Import ride files",
     ]);
@@ -313,8 +311,6 @@ describe("training page", () => {
     expect(screen.getByText("412")).toBeInTheDocument();
     expect(screen.getByText("5 cycling activities")).toBeInTheDocument();
     expect(screen.getByText("2 cycling activities have no platform Load")).toBeInTheDocument();
-    expect(screen.getByText("80%")).toBeInTheDocument();
-    expect(screen.getByText("4/5 planned days matched")).toBeInTheDocument();
     expect(
       screen.getByText(
         "Add FIT, TCX or GPX files from this Mac. You can also drop them onto the window.",
@@ -872,43 +868,15 @@ describe("training page", () => {
     expect(within(progress).getByText("1120 W")).toBeInTheDocument();
   });
 
-  it("renders the power zones and caps the plan at seven upcoming workouts", () => {
+  it("renders the power zones while keeping Plan and Adherence panels off Training", () => {
     render(<TrainingView />);
 
     const zones = within(screen.getByRole("region", { name: "Current cycling anchor" }));
     expect(zones.getByText("Recovery")).toBeInTheDocument();
     expect(zones.getByText("148–201 W")).toBeInTheDocument();
     expect(zones.getByText("Endurance")).toHaveAttribute("data-overlaps", "true");
-
-    const plan = within(screen.getByRole("region", { name: "Plan" }));
-    expect(plan.getAllByRole("listitem")).toHaveLength(7);
-    expect(plan.getByText("Endurance ride 1")).toBeInTheDocument();
-    expect(plan.queryByText("Endurance ride 8")).toBeNull();
-  });
-
-  it("offers every workout format and exports exactly the visible planned-workout date range", async () => {
-    const user = userEvent.setup();
-    const exportWorkoutArchive = vi.fn(async () => {});
-    useEnduragentStore.setState({
-      trainingExportActions: { exportActivity: vi.fn(async () => {}), exportWorkoutArchive },
-    });
-    render(<TrainingView />);
-
-    const plan = screen.getByRole("region", { name: "Plan" });
-    await user.click(within(plan).getByRole("combobox", { name: "Workout format" }));
-    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
-      "ZWO",
-      "MRC",
-      "ERG",
-      "FIT",
-    ]);
-    await user.click(screen.getByRole("option", { name: "FIT" }));
-    await user.click(within(plan).getByRole("button", { name: "Export workouts" }));
-    expect(exportWorkoutArchive).toHaveBeenCalledWith({
-      oldest: "1998-07-11",
-      newest: "1998-07-17",
-      format: "fit",
-    });
+    expect(document.querySelector('[data-panel="plan"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-panel="adherence"]')).not.toBeInTheDocument();
   });
 
   it("draws a sparkline per wellness series from the athlete-state readings", () => {
@@ -937,8 +905,6 @@ describe("training page", () => {
       "Sync or import a cycling ride to review it here.",
       "No cycling FTP anchor is available",
       "No platform Load is available for the last 7 days",
-      "No planned cycling workouts are available",
-      "Not enough persisted data to show this yet",
       "No wellness readings are available",
     ]) {
       expect(screen.getByText(copy)).toBeInTheDocument();

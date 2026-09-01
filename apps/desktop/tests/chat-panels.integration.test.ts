@@ -2091,7 +2091,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         anchorValue: panel("anchor").querySelector("p").textContent,
         wellnessValue: panel("wellness").querySelector("span").textContent,
       };
-      const dataPanels = ["anchor", "load", "plan", "adherence", "wellness"];
+      const dataPanels = ["anchor", "load", "wellness"];
       const syncButton = page.querySelector(".training-sync-action");
       const syncStatus = page.querySelector(".training-sync-message");
       const metadataText = () => [...page.querySelectorAll(".training-metadata-item")].map((node) => node.textContent ?? "");
@@ -2184,8 +2184,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "Recent rides",
         "Current cycling anchor",
         "Cycling Load",
-        "Plan",
-        "Adherence",
         "Wellness trend",
         "Import ride files",
       ],

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanActiveProjectionDataSchema } from "@enduragent/coach-contract";
 import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
 import { useEnduragentStore } from "../src/state/store";
+import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller";
 import { PlanView } from "../src/ui/plan/PlanView";
 import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures";
 
@@ -87,8 +88,42 @@ function actions(): PlanActions {
   };
 }
 
+function activePlanState(
+  workouts: ReturnType<typeof PlanActiveProjectionDataSchema.parse>["workouts"],
+) {
+  return planReadModel({
+    lifecycle: "active",
+    scenarioId: "PL-S004",
+    projection: "active",
+    planId: "00000000000000000000000003",
+    data: {
+      plan: {
+        id: "00000000000000000000000003",
+        name: "Gran Fondo Almaty",
+        primaryGoal: "Finish in the front half",
+        startDate: "1998-07-06",
+        targetDate: "1998-10-04",
+        kind: "full-plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 58,
+        plannedDurationS: 309_600,
+      },
+      today: "1998-07-13",
+      weekIndex: 2,
+      todayWorkout: null,
+      workouts,
+    },
+  });
+}
+
 beforeEach(() => {
-  useEnduragentStore.setState({ plan: EMPTY_PLAN_SURFACE, planActions: actions() });
+  useEnduragentStore.setState({
+    plan: EMPTY_PLAN_SURFACE,
+    planActions: actions(),
+    trainingExport: IDLE_TRAINING_EXPORT,
+    trainingExportActions: null,
+  });
 });
 
 afterEach(() => {
@@ -98,6 +133,8 @@ afterEach(() => {
     plan: EMPTY_PLAN_SURFACE,
     planActions: null,
     planningReadActions: null,
+    trainingExport: IDLE_TRAINING_EXPORT,
+    trainingExportActions: null,
   });
 });
 
@@ -1098,6 +1135,150 @@ describe("Plan surface", () => {
     expect(container.querySelector('[id^="workout-row-"]')).toHaveClass(
       "min-[760px]:grid-cols-[minmax(6rem,0.8fr)_minmax(0,2fr)_minmax(4rem,0.6fr)_minmax(8rem,1fr)_auto]",
     );
+  });
+
+  it("offers every workout format and exports exactly the visible WorkoutMatch date range without changing the Plan", async () => {
+    const user = userEvent.setup();
+    const exportWorkoutArchive = vi.fn(async () => {});
+    const state = activePlanState([
+      {
+        id: "00000000000000000000000005",
+        date: "1998-07-17",
+        sport: "cycling",
+        name: "Long endurance",
+        durationS: 7_200,
+      },
+      {
+        id: "00000000000000000000000006",
+        date: "1998-07-11",
+        sport: "cycling",
+        name: "Tempo intervals",
+        durationS: 3_600,
+      },
+      {
+        id: "00000000000000000000000007",
+        date: "1998-07-14",
+        sport: "cycling",
+        name: "Recovery spin",
+        durationS: 2_700,
+      },
+    ]);
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+      trainingExportActions: {
+        exportActivity: vi.fn(async () => {}),
+        exportWorkoutArchive,
+      },
+    });
+    render(<PlanView />);
+
+    const matchSection = screen
+      .getByRole("heading", { name: "WorkoutMatch · this week" })
+      .closest("section");
+    if (matchSection === null) throw new Error("WorkoutMatch section is missing");
+    const match = within(matchSection);
+    expect(
+      match.getByText(
+        "Save the visible planned workouts as a ZIP. Exporting does not change your plan.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(match.getByRole("combobox", { name: "Workout format" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "ZWO",
+      "MRC",
+      "ERG",
+      "FIT",
+    ]);
+    await user.click(screen.getByRole("option", { name: "FIT" }));
+    const planBeforeExport = useEnduragentStore.getState().plan;
+    await user.click(match.getByRole("button", { name: "Export workouts" }));
+
+    expect(exportWorkoutArchive).toHaveBeenCalledWith({
+      oldest: "1998-07-11",
+      newest: "1998-07-17",
+      format: "fit",
+    });
+    expect(useEnduragentStore.getState().plan).toBe(planBeforeExport);
+  });
+
+  it("disables the export controls and reports status while a workout archive runs", () => {
+    const state = activePlanState([
+      {
+        id: "00000000000000000000000005",
+        date: "1998-07-17",
+        sport: "cycling",
+        name: "Long endurance",
+        durationS: 7_200,
+      },
+    ]);
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+      trainingExport: { status: "running", target: "workout-archive" },
+      trainingExportActions: {
+        exportActivity: vi.fn(async () => {}),
+        exportWorkoutArchive: vi.fn(async () => {}),
+      },
+    });
+    render(<PlanView />);
+
+    const matchSection = screen
+      .getByRole("heading", { name: "WorkoutMatch · this week" })
+      .closest("section");
+    if (matchSection === null) throw new Error("WorkoutMatch section is missing");
+    const match = within(matchSection);
+    expect(match.getByRole("combobox", { name: "Workout format" })).toBeDisabled();
+    const exportButton = match.getByRole("button", { name: "Export workouts" });
+    expect(exportButton).toBeDisabled();
+    expect(exportButton).toHaveAttribute("aria-busy", "true");
+    expect(match.getByRole("status")).toHaveTextContent("Choose where to save the file.");
+  });
+
+  it("shows the workout-archive outcome in the Plan status region", () => {
+    const state = activePlanState([
+      {
+        id: "00000000000000000000000005",
+        date: "1998-07-17",
+        sport: "cycling",
+        name: "Long endurance",
+        durationS: 7_200,
+      },
+    ]);
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+      trainingExport: { status: "cancelled", target: "workout-archive" },
+      trainingExportActions: {
+        exportActivity: vi.fn(async () => {}),
+        exportWorkoutArchive: vi.fn(async () => {}),
+      },
+    });
+    render(<PlanView />);
+
+    const matchSection = screen
+      .getByRole("heading", { name: "WorkoutMatch · this week" })
+      .closest("section");
+    if (matchSection === null) throw new Error("WorkoutMatch section is missing");
+    expect(within(matchSection).getByRole("status")).toHaveTextContent(
+      "Export cancelled. No file was changed.",
+    );
+  });
+
+  it("does not render Workout archive export when WorkoutMatch has no workouts", () => {
+    const state = activePlanState([]);
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+      trainingExportActions: {
+        exportActivity: vi.fn(async () => {}),
+        exportWorkoutArchive: vi.fn(async () => {}),
+      },
+    });
+    render(<PlanView />);
+
+    expect(screen.getByRole("heading", { name: "WorkoutMatch · this week" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export workouts" })).not.toBeInTheDocument();
   });
 
   it("confirms End Plan with Cancel focused and keeps failed cleanup recoverable", async () => {

@@ -1,8 +1,6 @@
 import type {
-  AdherencePanel,
   AnchorZonesPanel,
   CyclingLoadPanel,
-  PlanPanel,
   PowerProgressPanel,
   RecentRide,
   WellnessTrendPanel,
@@ -18,14 +16,12 @@ import {
 import { useEnduragentStore } from "../../state/store";
 import {
   formatDateLabel,
-  formatPercentage,
   formatSleepDuration,
   formatUtcTimestamp,
   formatWholeNumber,
 } from "../../training-context/format";
 import { Page } from "../shared/Page";
 import {
-  MAX_VISIBLE_PLAN_ITEMS,
   RIDE_IMPORT_DESCRIPTION,
   TRAINING_UNKNOWN_COPY,
   WELLNESS_LABELS,
@@ -36,7 +32,6 @@ import { overviewStyles as styles } from "./overviewStyles";
 import { PowerProgressContent } from "./PowerProgressPanel";
 import { RecentRidesStatePanel, RideDetailView } from "./RideReview";
 import { WellnessSparkline } from "./WellnessSparkline";
-import { WorkoutArchiveExportControl } from "./TrainingExportControls";
 
 function Panel(props: {
   readonly name: string;
@@ -192,60 +187,6 @@ function LoadPanel(props: { readonly panel: CyclingLoadPanel }): ReactElement {
   );
 }
 
-function UpcomingPlanPanel(props: { readonly panel: PlanPanel }): ReactElement {
-  if (props.panel.kind === "unknown") {
-    return (
-      <Panel name="plan" title="Plan">
-        <Unknown reason={props.panel.reason} />
-      </Panel>
-    );
-  }
-  const dates = props.panel.items
-    .slice(0, MAX_VISIBLE_PLAN_ITEMS)
-    .map((item) => item.date)
-    .sort();
-  const oldest = dates[0];
-  const newest = dates.at(-1);
-  return (
-    <Panel name="plan" title="Plan">
-      <ol className={styles.plan}>
-        {props.panel.items.slice(0, MAX_VISIBLE_PLAN_ITEMS).map((item) => (
-          <li className={styles.planItem} key={item.id}>
-            <strong>{item.name ?? "Cycling workout"}</strong>
-            <span>
-              {formatDateLabel(item.date)} · {item.workoutType}
-            </span>
-          </li>
-        ))}
-      </ol>
-      {oldest === undefined || newest === undefined ? null : (
-        <WorkoutArchiveExportControl oldest={oldest} newest={newest} />
-      )}
-    </Panel>
-  );
-}
-
-function AdherenceStatePanel(props: { readonly panel: AdherencePanel }): ReactElement {
-  if (props.panel.kind === "unknown") {
-    return (
-      <Panel name="adherence" title="Adherence">
-        <Unknown reason={props.panel.reason} />
-      </Panel>
-    );
-  }
-  return (
-    <Panel name="adherence" title="Adherence">
-      <p className={styles.value}>{formatPercentage(props.panel.ratio)}</p>
-      <p className={styles.support}>
-        {props.panel.matchedDays}/{props.panel.plannedDays} planned days matched
-      </p>
-      <p className={styles.meta}>
-        {props.panel.completedDays} completed days · As of {formatDateLabel(props.panel.asOf)}
-      </p>
-    </Panel>
-  );
-}
-
 function WellnessPanel(props: { readonly panel: WellnessTrendPanel }): ReactElement {
   if (props.panel.kind === "unknown") {
     return (
@@ -387,8 +328,6 @@ export function TrainingView(): ReactElement {
       />
       <AnchorPanel panel={training.trainingContext.anchorZones} />
       <LoadPanel panel={training.trainingContext.cyclingLoad} />
-      <UpcomingPlanPanel panel={training.trainingContext.plan} />
-      <AdherenceStatePanel panel={training.trainingContext.adherence} />
       <WellnessPanel panel={training.trainingContext.wellnessTrend} />
       <RideImportPanel />
     </Page>
