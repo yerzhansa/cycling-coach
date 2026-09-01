@@ -158,8 +158,15 @@ export async function importExport(
   ) {
     throw new ExportFormatError("The export file is not a recognized enduragent export document.");
   }
-  const storeUserVersion = storeRecord.userVersion as number;
+  const storeUserVersion = storeRecord.userVersion;
   const authored = storeRecord.authored as Record<string, readonly AuthoredRow[]>;
+  if (
+    typeof storeUserVersion !== "number" ||
+    !Number.isSafeInteger(storeUserVersion) ||
+    storeUserVersion < 0
+  ) {
+    throw new ExportFormatError("The export file is not a recognized enduragent export document.");
+  }
   if (storeUserVersion > deps.targetUserVersion) {
     throw new ExportSchemaMismatchError(
       "This backup was created by a newer version of the app; update before restoring.",
@@ -168,7 +175,11 @@ export async function importExport(
   const restored: RestoreTableResult[] = [];
   for (const t of ALL_AUTHORED_TABLES) {
     const rows = authored[t] ?? [];
-    restored.push(await deps.sink.restoreAuthoredTable(t, rows));
+    restored.push(
+      await deps.sink.restoreAuthoredTable(t, rows, {
+        sourceUserVersion: storeUserVersion,
+      }),
+    );
   }
   const manifestArtifacts = archiveManifest as readonly ArchiveArtifact[];
   const missing: ArchiveArtifact[] = [];

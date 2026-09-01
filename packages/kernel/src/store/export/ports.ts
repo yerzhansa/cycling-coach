@@ -65,10 +65,18 @@ export interface RestoreTableResult {
   readonly skipped: number;
 }
 
+export interface RestoreTableOptions {
+  readonly sourceUserVersion: number;
+}
+
 export interface ImportSink {
   /** Idempotent insert-if-absent by the table's primary key. Re-importing
    *  the same container inserts zero duplicate rows (skipped counts them). */
-  restoreAuthoredTable(table: string, rows: readonly AuthoredRow[]): Promise<RestoreTableResult>;
+  restoreAuthoredTable(
+    table: string,
+    rows: readonly AuthoredRow[],
+    options: RestoreTableOptions,
+  ): Promise<RestoreTableResult>;
 }
 
 export interface ArchivePresenceChecker {
@@ -87,6 +95,7 @@ export const PURE_AUTHORED_TABLES = [
   "dedup_confirmation",
   "chat_plan_outbox",
   "plan",
+  "plan_reconciliation_job",
   "planning_plan",
   "plan_revision",
   "plan_creation",

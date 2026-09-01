@@ -124,11 +124,20 @@ function makeManifest(data: Populated): ArchiveManifestReader {
   };
 }
 
-function makeSink(): ImportSink & { stored: Map<string, Set<string>> } {
+function makeSink(): ImportSink & {
+  stored: Map<string, Set<string>>;
+  sourceUserVersions: number[];
+} {
   const stored = new Map<string, Set<string>>();
-  const sink: ImportSink & { stored: Map<string, Set<string>> } = {
+  const sourceUserVersions: number[] = [];
+  const sink: ImportSink & {
+    stored: Map<string, Set<string>>;
+    sourceUserVersions: number[];
+  } = {
     stored,
-    async restoreAuthoredTable(table, rows): Promise<RestoreTableResult> {
+    sourceUserVersions,
+    async restoreAuthoredTable(table, rows, options): Promise<RestoreTableResult> {
+      sourceUserVersions.push(options.sourceUserVersion);
       let set = stored.get(table);
       if (!set) {
         set = new Set<string>();
@@ -166,7 +175,7 @@ function makePresence(
 }
 
 describe("store export op", () => {
-  it("(enumerate) exports every authored key with correct manualOnly flags and no source/derived tables", async () => {
+  it("(enumerate) exports every portable key with correct manualOnly flags", async () => {
     const data = populated();
     const { source, calls } = makeSource(data);
     const crypto = new FakeCrypto();
@@ -184,6 +193,9 @@ describe("store export op", () => {
     for (const t of MIXED_AUTHORED_TABLES) {
       expect(calls.find((c) => c.table === t)?.manualOnly).toBe(true);
     }
+    expect(PURE_AUTHORED_TABLES.indexOf("plan_reconciliation_job")).toBeLessThan(
+      PURE_AUTHORED_TABLES.indexOf("plan_replacement"),
+    );
     for (const forbidden of [
       "workout",
       "session",
@@ -238,6 +250,12 @@ describe("store export op", () => {
     for (const t of MIXED_AUTHORED_TABLES) {
       expect(imported.restored.find((r) => r.table === t)?.inserted).toBe(1);
     }
+    expect(sink.sourceUserVersions).toEqual(
+      Array.from(
+        { length: PURE_AUTHORED_TABLES.length + MIXED_AUTHORED_TABLES.length },
+        () => data.userVersion,
+      ),
+    );
     expect(imported.manifest.total).toBe(data.artifacts.length);
   });
 
