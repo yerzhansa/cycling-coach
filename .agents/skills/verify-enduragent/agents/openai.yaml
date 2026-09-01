@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Enduragent"
+  short_description: "Verify Enduragent desktop behavior"
+  default_prompt: "Use $verify-enduragent to verify the affected Enduragent desktop feature through its existing isolated executor."
