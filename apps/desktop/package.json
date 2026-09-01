@@ -9,7 +9,7 @@
     "dev:isolated": "node scripts/interactive-development.mjs",
     "build": "electron-vite build",
     "check": "tsc --noEmit",
-    "check:verification-catalog": "vitest run tests/verification-feature-selection.test.ts tests/windows-parity-scenarios.test.ts",
+    "check:verification-catalog": "pnpm --dir ../.. exec vitest run --project workspace apps/desktop/tests/verification-feature-selection.test.ts apps/desktop/tests/windows-parity-scenarios.test.ts",
     "package:dir": "pnpm build:self-test-resources && electron-vite build && node scripts/development-package-plan.mjs",
     "package:win-dir": "pnpm build:self-test-resources && electron-vite build && node scripts/windows-development-package-plan.mjs",
     "package:win": "pnpm build:self-test-resources && electron-vite build && node scripts/windows-package-plan.mjs",
