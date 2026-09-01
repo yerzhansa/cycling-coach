@@ -138,4 +138,94 @@ describe("training history reader with real SQLite", () => {
     expect(Object.keys(result.rows[0]!)).not.toContain("payloadJson");
     expect(Object.keys(result.rows[0]!)).not.toContain("providerActivityId");
   });
+
+  it("excludes non-cycling, transition, and out-of-window sessions and caps oversized titles", async () => {
+    const runWorkout = "1".repeat(64);
+    const transitionWorkout = "2".repeat(64);
+    const lateWorkout = "3".repeat(64);
+    const longTitleWorkout = "4".repeat(64);
+    const runSession = "5".repeat(64);
+    const transitionSession = "6".repeat(64);
+    const lateSession = "7".repeat(64);
+    const longTitleSession = "8".repeat(64);
+    const insertWorkout = async (key: string, name: string): Promise<void> => {
+      await store.run(
+        "INSERT INTO workout(workout_key,start_utc,tz_offset_s,name,notes,is_multisport,dedup_cluster_id) VALUES(?,?,?,?,?,?,?)",
+        [key, 899_712_000, 21_600, name, null, 0, `cluster-${key.slice(0, 8)}`],
+      );
+    };
+    const insertSession = async (input: {
+      readonly session: string;
+      readonly workout: string;
+      readonly sport: string;
+      readonly localDateKey: number;
+      readonly isTransition: number;
+      readonly startUtc: number;
+    }): Promise<void> => {
+      await store.run(
+        "INSERT INTO session(session_key,workout_key,session_seq,sport,sub_sport,start_utc,tz_offset_s,local_date_key,elapsed_s,timer_s,moving_s,distance_m,is_transition,summary_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+          input.session,
+          input.workout,
+          0,
+          input.sport,
+          null,
+          input.startUtc,
+          21_600,
+          input.localDateKey,
+          1_800,
+          1_800,
+          1_800,
+          10_000,
+          input.isTransition,
+          null,
+        ],
+      );
+    };
+    await insertWorkout(runWorkout, "Morning run");
+    await insertSession({
+      session: runSession,
+      workout: runWorkout,
+      sport: "running",
+      localDateKey: 19980706,
+      isTransition: 0,
+      startUtc: 899_713_000,
+    });
+    await insertWorkout(transitionWorkout, "T1");
+    await insertSession({
+      session: transitionSession,
+      workout: transitionWorkout,
+      sport: "cycling",
+      localDateKey: 19980706,
+      isTransition: 1,
+      startUtc: 899_714_000,
+    });
+    await insertWorkout(lateWorkout, "Next week ride");
+    await insertSession({
+      session: lateSession,
+      workout: lateWorkout,
+      sport: "cycling",
+      localDateKey: 19980713,
+      isTransition: 0,
+      startUtc: 900_316_800,
+    });
+    await insertWorkout(longTitleWorkout, "x".repeat(513));
+    await insertSession({
+      session: longTitleSession,
+      workout: longTitleWorkout,
+      sport: "cycling",
+      localDateKey: 19980707,
+      isTransition: 0,
+      startUtc: 899_798_400,
+    });
+
+    const result = await createTrainingHistoryReader(store).readWindow({
+      start: "1998-07-06",
+      end: "1998-07-12",
+    });
+
+    expect(result.rows.map(({ id }) => id)).toEqual([longTitleSession, SESSION]);
+    expect(result.rows[0]!.title).toBeNull();
+    expect(result.scanTruncated).toBe(false);
+  });
 });

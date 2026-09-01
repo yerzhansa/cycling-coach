@@ -53,7 +53,7 @@ function utf8LenAtMost(maximumBytes: number): (value: string) => boolean {
 
 function isMondayWeek(value: { readonly start: string; readonly end: string }): boolean {
   return (
-    civilEpochDay(value.start) % 7 === 4 &&
+    ((civilEpochDay(value.start) % 7) + 7) % 7 === 4 &&
     civilEpochDay(value.end) - civilEpochDay(value.start) === 6
   );
 }

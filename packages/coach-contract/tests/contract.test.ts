@@ -21,6 +21,7 @@ import {
   PowerProgressPanelSchema,
   RecentRidesPanelSchema,
   RideCountMetricValueSchema,
+  RidingTimeTrendSchema,
   TrainingHistoryPanelSchema,
   TrainingHistoryProjectionSchema,
   TrainingHistoryRideSchema,
@@ -516,6 +517,8 @@ describe("AthleteState", () => {
         adherence: { ...computed.adherence, ratio: 1.1 },
       }).success,
     ).toBe(false);
+    const { trainingHistory: _trainingHistory, ...withoutTrainingHistory } = computed;
+    expect(CyclingTrainingContextSchema.safeParse(withoutTrainingHistory).success).toBe(false);
   });
 
   it("round trips a computed training-history panel", () => {
@@ -540,6 +543,54 @@ describe("AthleteState", () => {
     } as const;
     expect(TrainingHistoryPanelSchema.parse(stale)).toEqual(stale);
     expect(TrainingHistoryProjectionSchema.safeParse(stale).success).toBe(false);
+  });
+
+  it("accepts pre-1970 Monday weeks and rejects pre-1970 non-Monday starts", () => {
+    const emptyWeek = computedTrainingHistory.previousWeek;
+    const preEpochMonday = {
+      ...emptyWeek,
+      window: { start: "1969-12-29", end: "1970-01-04" },
+    };
+    expect(CompletedActivityWeekSchema.safeParse(preEpochMonday).success).toBe(true);
+    const preEpochTuesday = {
+      ...emptyWeek,
+      window: { start: "1969-12-30", end: "1970-01-05" },
+    };
+    expect(CompletedActivityWeekSchema.safeParse(preEpochTuesday).success).toBe(false);
+  });
+
+  it("rejects non-adjacent previous weeks and non-contiguous trend buckets", () => {
+    const detachedPrevious = {
+      ...computedTrainingHistory,
+      previousWeek: {
+        ...computedTrainingHistory.previousWeek,
+        window: { start: "1998-06-22", end: "1998-06-28" },
+      },
+    };
+    expect(TrainingHistoryProjectionSchema.safeParse(detachedPrevious).success).toBe(false);
+    const buckets = computedTrainingHistory.anchorWeek.trend.buckets;
+    const gappedTrend = {
+      kind: "computed",
+      buckets: [
+        ...buckets.slice(0, 5),
+        { ...buckets[5], window: { start: "1998-07-06", end: "1998-07-12" } },
+      ],
+    };
+    expect(RidingTimeTrendSchema.safeParse(gappedTrend).success).toBe(false);
+    const descendingTrend = {
+      kind: "computed",
+      buckets: [...buckets].reverse(),
+    };
+    expect(RidingTimeTrendSchema.safeParse(descendingTrend).success).toBe(false);
+    const offMondayTrend = {
+      kind: "computed",
+      buckets: buckets.map((bucket, index) =>
+        index === 2
+          ? { ...bucket, window: { start: "1998-06-02", end: "1998-06-08" } }
+          : bucket,
+      ),
+    };
+    expect(RidingTimeTrendSchema.safeParse(offMondayTrend).success).toBe(false);
   });
 
   it("rejects invalid completed-week windows, rides, ordering, and truncation", () => {
