@@ -30,4 +30,6 @@ If a build fails, stop with the failed command. Do not drive stale `dist/` or `o
 
 Follow the exact commands and proof requirements on the selected feature page. For Playwright, retain its failure screenshot, trace, and log under `apps/desktop/test-results/e2e/`; a passing run is supported by its visible-state assertions and command result.
 
+Treat proofs from the `fresh` and `ready` profiles as renderer-only: both run against a scripted engine RPC backend and do not prove engine side effects. Cover engine side effects with a future `real` profile that boots the actual coach engine over a seeded athlete home, uses fakes only at the LLM-provider and intervals.icu boundaries, and reuses the `tools/s8a` provider machinery.
+
 Finish with `pnpm check:fixture-privacy`. Confirm the Electron fixture closed and report any retained evidence path. Do not upload evidence.
