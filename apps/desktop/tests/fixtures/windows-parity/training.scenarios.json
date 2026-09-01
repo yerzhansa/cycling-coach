@@ -139,7 +139,7 @@
     {
       "id": "training.view.panel-inventory",
       "surface": "training",
-      "expected": "Training renders Sync, Power progress, Recent rides, Current cycling anchor, Cycling Load, Plan, Adherence, Wellness trend, and Import ride files in the shipped order with each panel's own known or unknown state.",
+      "expected": "Training renders Sync, Power progress, Recent rides, Current cycling anchor, Cycling Load, Wellness trend, and Import ride files in the shipped order with each panel's own known or unknown state.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-surface.test.tsx > training page > renders every panel in the pinned order with the training data as of its own timestamps",
@@ -230,11 +230,11 @@
     {
       "id": "training.view.anchor-load-plan-adherence",
       "surface": "training",
-      "expected": "Training shows the current cycling anchor and power zones, seven-day Cycling Load and missing-Load count, at most seven upcoming workouts, and matched-versus-planned adherence using plain-English metrics.",
+      "expected": "Training shows the current cycling anchor and power zones plus seven-day Cycling Load and its missing-Load count, while the retired Plan and aggregate Adherence panels remain absent.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-surface.test.tsx > training page > renders every panel in the pinned order with the training data as of its own timestamps",
-        "apps/desktop-renderer/tests/training-surface.test.tsx > training page > renders the power zones and caps the plan at seven upcoming workouts"
+        "apps/desktop-renderer/tests/training-surface.test.tsx > training page > renders the power zones while keeping Plan and Adherence panels off Training"
       ]
     },
     {
@@ -251,10 +251,10 @@
     {
       "id": "training.export.workout-formats",
       "surface": "training-export",
-      "expected": "Plan export offers ZWO, MRC, ERG, and FIT in a ZIP and exports exactly the date range of the seven visible planned workouts without changing the plan.",
+      "expected": "The Workout archive export control lives on Plan beside the WorkoutMatch list, offers ZWO, MRC, ERG, and FIT in a ZIP, and exports exactly the visible Workout date range without changing the Plan.",
       "automation": "deterministic",
       "tests": [
-        "apps/desktop-renderer/tests/training-surface.test.tsx > training page > offers every workout format and exports exactly the visible planned-workout date range",
+        "apps/desktop-renderer/tests/plan-surface.test.tsx > Plan surface > offers every workout format and exports exactly the visible WorkoutMatch date range without changing the Plan",
         "apps/desktop-renderer/tests/training-export.test.ts > routes workout archives and preserves cancellations and refusal reasons",
         "apps/desktop/tests/training-export-ipc.test.ts > routes a closed workout archive request and handles cancellation without daemon work"
       ]

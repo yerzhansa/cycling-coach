@@ -53,6 +53,7 @@ import { CoachDecisionPanel } from "../chat/CoachDecisionPanel";
 import { Composer, type ComposerHandle } from "../chat/Composer";
 import { ConversationTranscript } from "../chat/Transcript";
 import { Page } from "../shared/Page";
+import { WorkoutArchiveExportControl } from "../training/TrainingExportControls";
 
 const SUPPORT_PAIR = "grid gap-[calc(var(--inset)/2)]";
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -3617,6 +3618,9 @@ function ActiveProjection(): ReactElement {
   if (["PL-S032", "PL-S033", "PL-S034", "PL-S035", "PL-S036"].includes(model.scenarioId)) {
     return <WorkoutDriftProjection data={data} scenarioId={model.scenarioId} />;
   }
+  const workoutDates = data.workouts.map((workout) => workout.date).sort();
+  const oldestWorkoutDate = workoutDates.at(0);
+  const newestWorkoutDate = workoutDates.at(-1);
   return (
     <div className="grid gap-6" data-plan-scenario={model.scenarioId}>
       {model.scenarioId === "PL-S097" ? (
@@ -3817,6 +3821,11 @@ function ActiveProjection(): ReactElement {
             );
           })}
         </div>
+        {oldestWorkoutDate === undefined || newestWorkoutDate === undefined ? null : (
+          <div className="border-t border-line px-5 py-row">
+            <WorkoutArchiveExportControl oldest={oldestWorkoutDate} newest={newestWorkoutDate} />
+          </div>
+        )}
       </section>
 
       <section className="flex flex-col gap-row rounded-card bg-surface p-5 shadow-elev-1 sm:flex-row sm:items-center sm:justify-between">

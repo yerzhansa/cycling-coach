@@ -37,10 +37,6 @@ export const overviewStyles = {
   zoneName:
     "m-0 min-w-0 [overflow-wrap:anywhere] data-[overlaps=true]:after:text-ink-3 data-[overlaps=true]:after:content-['_·_overlaps']",
   zoneRange: "m-0 shrink-0 tabular-nums",
-  plan: "m-0 grid list-none gap-2.5 p-0",
-  planItem:
-    "grid min-w-0 gap-[3px] rounded-ctl bg-sunk px-3 py-2.5 [&_strong]:[overflow-wrap:anywhere] [&_strong]:text-sm [&_strong]:font-semibold [&_span]:text-xs [&_span]:leading-5 [&_span]:text-ink-2",
-  planExport: "mt-3.5 border-t border-line pt-3.5",
   exportControls: "mt-3 flex flex-wrap items-center gap-[9px] [&_label]:text-xs [&_label]:font-semibold [&_label]:text-ink-2",
   exportStatus: "mt-2.5 text-xs leading-[1.45] text-ink-2",
   wellness: "mt-3 grid gap-2.5",
