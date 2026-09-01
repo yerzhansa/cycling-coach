@@ -53,6 +53,7 @@ export interface RideAnalysisController {
   select(activityId: string | null): Promise<void>;
   start(): Promise<void>;
   load(sections: readonly ActivityAnalysisSection[], refresh?: boolean): Promise<void>;
+  invalidate(): void;
   dispose(): void;
 }
 
@@ -199,6 +200,9 @@ export function createRideAnalysisController(input: {
       await load(DEFAULT_RIDE_ANALYSIS_SECTIONS);
     },
     load,
+    invalidate() {
+      cache.clear();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

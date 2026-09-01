@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_RIDE_ANALYSIS } from "../src/activity-analysis/controller";
 import type { RideImportState } from "../src/ride-import";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice";
 import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice";
 import { useEnduragentStore } from "../src/state/store";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
@@ -299,6 +300,19 @@ function setRideImport(next: RideImportState): void {
   act(() => useEnduragentStore.getState().setRideImport(next));
 }
 
+async function openFirstRide(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(
+    screen.getByRole("button", {
+      name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+    }),
+  );
+}
+
+async function openFirstRideAnalysis(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await openFirstRide(user);
+  await user.click(screen.getByText("Recorded analysis and export"));
+}
+
 beforeEach(() => {
   useEnduragentStore.setState({
     activeView: "training",
@@ -311,6 +325,7 @@ beforeEach(() => {
     rideImport: IDLE_RIDE_IMPORT,
     rideImportSuppressed: false,
     rideImportActions: null,
+    onboarding: READY_ONBOARDING,
     trainingExport: IDLE_TRAINING_EXPORT,
     trainingExportActions: null,
   });
@@ -328,6 +343,7 @@ afterEach(() => {
     rideImport: IDLE_RIDE_IMPORT,
     rideImportSuppressed: false,
     rideImportActions: null,
+    onboarding: READY_ONBOARDING,
     trainingExport: IDLE_TRAINING_EXPORT,
     trainingExportActions: null,
   });
@@ -352,6 +368,19 @@ describe("training landing page", () => {
 
   it("uses adjacent pressed period buttons and announces the selected period with one warning", async () => {
     const user = userEvent.setup();
+    setTraining(
+      ready(
+        history({
+          previousWeek: week("previous", {
+            coverage: {
+              kind: "incomplete",
+              recordedThrough: "1998-07-04",
+              reason: "source-degraded",
+            },
+          }),
+        }),
+      ),
+    );
     render(<TrainingView />);
 
     const group = screen.getByRole("group", {
@@ -368,7 +397,11 @@ describe("training landing page", () => {
 
     expect(current).toHaveAttribute("aria-pressed", "false");
     expect(previous).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("status")).toHaveTextContent("Previous week");
+    const periodStatus = screen
+      .getAllByRole("status")
+      .find((element) => element.id !== "ride-import-status");
+    expect(periodStatus).toHaveTextContent("Previous week. Some rides may be missing.");
+    expect(periodStatus?.textContent?.match(/Some rides may be missing\./gu)).toHaveLength(1);
     expect(
       screen.getByText("Power progress needs rides with recorded power in both 28-day windows."),
     ).toBeInTheDocument();
@@ -484,11 +517,32 @@ describe("training landing page", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses the units preference across the weekly summary, ride row, and Ride review", async () => {
+    const user = userEvent.setup();
+    setTraining(
+      ready(history(), {
+        unitsPreference: { status: "ready", value: "imperial", source: "athlete" },
+      }),
+    );
+    render(<TrainingView />);
+
+    expect(document.querySelector('[data-summary-metric="distance"]')).toHaveTextContent("41.4 mi");
+    expect(
+      within(screen.getByRole("region", { name: "Recent rides" })).getByText("26.2 mi"),
+    ).toBeInTheDocument();
+
+    await openFirstRide(user);
+
+    expect(
+      within(screen.getByRole("region", { name: "River tempo" })).getByText("26.2 mi"),
+    ).toBeInTheDocument();
+  });
+
   it.each([
-    ["exact", "Showing 50 of 57 recorded rides."],
-    ["at-least", "Showing 50 of at least 1000 recorded rides."],
-  ] as const)("renders %s truncation copy", (kind, expected) => {
-    const items = Array.from({ length: 50 }, (_, index) =>
+    ["exact", 50, "Showing 50 of 57 recorded rides."],
+    ["at-least", 50, "Showing 50 of at least 1000 recorded rides."],
+  ] as const)("renders %s truncation copy", (kind, shown, expected) => {
+    const items = Array.from({ length: shown }, (_, index) =>
       ride({
         id: index.toString(16).padStart(64, "0"),
         title: `Ride ${index + 1}`,
@@ -507,6 +561,41 @@ describe("training landing page", () => {
     render(<TrainingView />);
 
     expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it("uses the actual shown count and hides truncation copy when no rides are shown", () => {
+    const items = Array.from({ length: 7 }, (_, index) =>
+      ride({
+        id: index.toString(16).padStart(64, "0"),
+        title: `Ride ${index + 1}`,
+        startEpochSeconds: 900_000_000 - index,
+        localDate: "1998-07-09",
+      }),
+    );
+    const truncated = week("anchor", {
+      rides: { count: { kind: "exact", value: 57 }, items, truncated: true },
+      callout: null,
+    });
+    const { unmount } = render(<TrainingView />);
+    setTraining(ready(history({ anchorWeek: truncated })));
+
+    expect(screen.getByText("Showing 7 of 57 recorded rides.")).toBeInTheDocument();
+
+    unmount();
+    useEnduragentStore.setState({
+      training: ready(
+        history({
+          anchorWeek: week("anchor", {
+            rides: { count: { kind: "at-least", value: 57 }, items: [], truncated: true },
+            callout: null,
+          }),
+        }),
+      ),
+    });
+    render(<TrainingView />);
+
+    expect(screen.getByText("No recorded rides this week.")).toBeInTheDocument();
+    expect(screen.queryByText(/Showing .* recorded rides\./u)).not.toBeInTheDocument();
   });
 });
 
@@ -573,6 +662,40 @@ describe("ride review", () => {
     expect(screen.getByRole("region", { name: "Export ride" })).toBeInTheDocument();
   });
 
+  it("offers FIT and GPX and exports a ride without rendering its canonical ID", async () => {
+    const user = userEvent.setup();
+    const exportActivity = vi.fn(async () => {});
+    const exportWorkoutArchive = vi.fn(async () => {});
+    useEnduragentStore.setState({
+      trainingExportActions: { exportActivity, exportWorkoutArchive },
+    });
+    render(<TrainingView />);
+
+    await openFirstRideAnalysis(user);
+
+    const panel = screen.getByRole("region", { name: "Export ride" });
+    await user.click(within(panel).getByRole("combobox", { name: "File format" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "FIT",
+      "GPX",
+    ]);
+    await user.click(screen.getByRole("option", { name: "GPX" }));
+    await user.click(within(panel).getByRole("button", { name: "Export ride" }));
+    expect(exportActivity).toHaveBeenCalledWith({
+      canonicalActivityId: FIRST_ID,
+      localDate: "1998-07-09",
+      format: "gpx",
+    });
+    expect(document.body).not.toHaveTextContent(FIRST_ID);
+
+    act(() => {
+      useEnduragentStore.setState({
+        trainingExport: { status: "saved", target: "activity", byteLength: 4_096 },
+      });
+    });
+    expect(within(panel).getByRole("status")).toHaveTextContent("Export saved locally.");
+  });
+
   it("shows elapsed fallback as secondary metadata", async () => {
     const user = userEvent.setup();
     render(<TrainingView />);
@@ -585,6 +708,311 @@ describe("ride review", () => {
     expect(
       screen.getByText("Elapsed time used because moving time was not recorded."),
     ).toBeInTheDocument();
+  });
+
+  it("shows a neutral, time-weighted local aerobic drift estimate with its limitations", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: FIRST_ID,
+        status: "refresh-unavailable",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        failedSections: ["aerobic-drift"],
+        sections: {
+          aerobicDrift: {
+            kind: "computed",
+            data: {
+              method: "local-time-weighted-efficiency-factor",
+              firstHalf: {
+                durationSeconds: 1_650,
+                sampleCount: 1_650,
+                averagePowerWatts: 205,
+                averageHeartRateBpm: 140,
+                efficiencyFactor: 1.46,
+              },
+              secondHalf: {
+                durationSeconds: 1_650,
+                sampleCount: 1_650,
+                averagePowerWatts: 202,
+                averageHeartRateBpm: 145,
+                efficiencyFactor: 1.39,
+              },
+              decouplingPercent: 4.8,
+              coverage: {
+                totalSamples: 3_600,
+                validSamples: 3_300,
+                includedDurationSeconds: 3_300,
+                windowDurationSeconds: 3_600,
+                fraction: 3_300 / 3_600,
+              },
+              evidence: "limited",
+              limitations: ["duration-under-60-minutes", "moving-status-unavailable"],
+            },
+            provenance: {
+              source: "local-canonical",
+              delivery: "live",
+              observedAt: "1998-07-12T08:00:00.000Z",
+            },
+          },
+        },
+      },
+    });
+    render(<TrainingView />);
+
+    await openFirstRideAnalysis(user);
+
+    const panel = screen.getByRole("region", { name: "Local aerobic drift estimate" });
+    expect(within(panel).getByText("+4.8%")).toHaveAccessibleName(
+      "Observed efficiency-factor change +4.8%",
+    );
+    expect(within(panel).getByText("1.46 EF")).toBeInTheDocument();
+    expect(within(panel).getByText("1.39 EF")).toBeInTheDocument();
+    expect(within(panel).getByText(/92% usable time/u)).toBeInTheDocument();
+    expect(within(panel).getByText("Limited context")).toBeInTheDocument();
+    expect(
+      within(panel).getByText(
+        "No moving-status stream was available, so stopped time may be included.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText("Showing the previous result. The latest refresh did not finish."),
+    ).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("good");
+    expect(panel).not.toHaveTextContent("bad");
+    expect(document.body).not.toHaveTextContent(FIRST_ID);
+  });
+
+  it("shows ordered intervals and explicitly scoped five-minute best efforts", async () => {
+    const user = userEvent.setup();
+    const emptyMetrics = {
+      movingSeconds: null,
+      elapsedSeconds: null,
+      distanceMeters: null,
+      averagePowerWatts: null,
+      maximumPowerWatts: null,
+      averageHeartRateBpm: null,
+      maximumHeartRateBpm: null,
+      averageCadenceRpm: null,
+      maximumCadenceRpm: null,
+      zone: null,
+      intensityPercent: null,
+      trainingLoad: null,
+    } as const;
+    const provenance = {
+      source: "provider" as const,
+      delivery: "live" as const,
+      observedAt: "1998-07-12T08:00:00.000Z",
+    };
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: FIRST_ID,
+        status: "ready",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        failedSections: [],
+        sections: {
+          intervals: {
+            kind: "computed",
+            data: {
+              source: "provider",
+              intervals: [
+                {
+                  ...emptyMetrics,
+                  ordinal: 1,
+                  groupOrdinal: null,
+                  kind: "work",
+                  label: "Threshold",
+                  startIndex: 0,
+                  endIndex: 299,
+                  startSeconds: 0,
+                  endSeconds: 300,
+                  movingSeconds: 300,
+                  elapsedSeconds: 300,
+                  distanceMeters: 2_500,
+                  averagePowerWatts: 250,
+                  maximumPowerWatts: 310,
+                  averageHeartRateBpm: 155,
+                  maximumHeartRateBpm: 170,
+                },
+                {
+                  ...emptyMetrics,
+                  ordinal: 2,
+                  groupOrdinal: null,
+                  kind: "recovery",
+                  label: null,
+                  startIndex: 300,
+                  endIndex: 419,
+                  startSeconds: 300,
+                  endSeconds: 420,
+                  movingSeconds: 120,
+                  elapsedSeconds: 120,
+                },
+              ],
+              groups: [],
+            },
+            provenance,
+          },
+          bestEfforts: {
+            kind: "computed",
+            data: {
+              scope: {
+                kind: "selected-activity",
+                stream: "power",
+                durationSeconds: 300,
+                tieRule: "earliest-start",
+              },
+              efforts: [
+                {
+                  rank: 1,
+                  startIndex: 900,
+                  endIndex: 1_199,
+                  durationSeconds: 300,
+                  distanceMeters: 2_600,
+                  averageWatts: 310,
+                },
+                {
+                  rank: 2,
+                  startIndex: 300,
+                  endIndex: 599,
+                  durationSeconds: 300,
+                  distanceMeters: null,
+                  averageWatts: 300,
+                },
+              ],
+            },
+            provenance,
+          },
+        },
+      },
+    });
+    render(<TrainingView />);
+
+    await openFirstRideAnalysis(user);
+
+    const intervals = screen.getByRole("region", { name: "Intervals and laps" });
+    expect(within(intervals).getByText("Threshold")).toBeInTheDocument();
+    expect(within(intervals).getByText("Recovery")).toBeInTheDocument();
+    expect(within(intervals).getByText("250 avg · 310 max W")).toBeInTheDocument();
+    expect(within(intervals).getAllByLabelText("Unavailable").length).toBeGreaterThan(0);
+    expect(intervals).toHaveTextContent("no planned workout targets are inferred");
+
+    const efforts = screen.getByRole("region", { name: "Five-minute best efforts" });
+    expect(within(efforts).getByText("#1")).toBeInTheDocument();
+    expect(within(efforts).getByText("310 W")).toBeInTheDocument();
+    expect(within(efforts).getByText(/This ride · power · 5 min/u)).toBeInTheDocument();
+    expect(efforts).toHaveTextContent("does not compare against other rides");
+    expect(efforts).not.toHaveTextContent(/\bPR\b/u);
+    expect(document.body).not.toHaveTextContent(FIRST_ID);
+  });
+
+  it("shows independent accessible distributions and a distinct server power/HR response", async () => {
+    const user = userEvent.setup();
+    const provenance = {
+      source: "provider" as const,
+      delivery: "live" as const,
+      observedAt: "1998-07-12T08:00:00.000Z",
+    };
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: FIRST_ID,
+        status: "ready",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        failedSections: [],
+        sections: {
+          powerDistribution: {
+            kind: "computed",
+            data: {
+              unit: "watts",
+              buckets: [
+                { lower: 0, upper: 100, seconds: 300 },
+                { lower: 100, upper: 200, seconds: 600 },
+                { lower: 225, upper: 300, seconds: 120 },
+              ],
+              totalSeconds: 1_020,
+            },
+            provenance,
+          },
+          heartRateDistribution: {
+            kind: "computed",
+            data: {
+              unit: "bpm",
+              buckets: [
+                { lower: 110, upper: 130, seconds: 420 },
+                { lower: 130, upper: 150, seconds: 600 },
+              ],
+              totalSeconds: 1_020,
+            },
+            provenance,
+          },
+          powerHeartRate: {
+            kind: "computed",
+            data: {
+              source: "provider",
+              rows: Array.from({ length: 6 }, (_, index) => ({
+                startSeconds: index * 60,
+                watts: 150 + index * 10,
+                heartRateBpm: 120 + index * 2,
+                cadenceRpm: index === 0 ? null : 85 + index,
+                movingSeconds: 60,
+                seconds: 60,
+              })),
+              curves: [{ kind: "all", coefficients: [100, 0.1], rSquared: 0.9 }],
+              coverageFraction: 0.6,
+              heartRateLagSeconds: 15,
+              warmupSeconds: 60,
+              cooldownSeconds: 30,
+            },
+            provenance,
+          },
+        },
+      },
+    });
+    render(<TrainingView />);
+
+    await openFirstRideAnalysis(user);
+
+    const power = screen.getByRole("region", { name: "Power distribution" });
+    expect(power).toHaveTextContent("17 min of measured ride time · 3 recorded buckets");
+    expect(power).toHaveTextContent("Gaps are left as recorded");
+    await user.click(within(power).getByText("Read power distribution as a table"));
+    const powerTable = within(power).getByRole("table", {
+      name: "Power distribution measured ride time by recorded range",
+    });
+    expect(within(powerTable).getByText("0 W–100 W")).toBeInTheDocument();
+    expect(within(powerTable).getAllByRole("row")).toHaveLength(4);
+
+    const heartRate = screen.getByRole("region", { name: "Heart-rate distribution" });
+    expect(heartRate).toHaveTextContent("can load even when power data is unavailable");
+    await user.click(within(heartRate).getByText("Read heart-rate distribution as a table"));
+    const heartRateTable = within(heartRate).getByRole("table", {
+      name: "Heart-rate distribution measured ride time by recorded range",
+    });
+    expect(within(heartRateTable).getByText("110 bpm–130 bpm")).toBeInTheDocument();
+
+    const response = screen.getByRole("region", { name: "Power and heart-rate response" });
+    expect(response).toHaveTextContent("server-cleaned ride segment");
+    expect(response).toHaveTextContent("No missing points or lines are interpolated");
+    expect(response).toHaveTextContent("60%");
+    expect(response).toHaveTextContent("Limited coverage");
+    expect(response).toHaveTextContent("separate from the local aerobic drift estimate");
+    const fittedCurves = within(response).getByRole("list", { name: "Provider fitted curves" });
+    expect(fittedCurves).toHaveTextContent("All retained segments");
+    expect(fittedCurves).toHaveTextContent("R² 0.90");
+    expect(fittedCurves.querySelector('[data-curve-kind="all"]')).not.toBeNull();
+    await user.click(within(response).getByText("Read provider fit details"));
+    const fitTable = within(response).getByRole("table", {
+      name: "Provider-fitted power and heart-rate curve details",
+    });
+    expect(fitTable).toHaveTextContent("Model terms in provider order");
+    expect(fitTable).toHaveTextContent("100, 0.1");
+    await user.click(within(response).getByText("Read all power and heart-rate points as a table"));
+    expect(
+      within(response).getByRole("table", { name: "Retained power and heart-rate ride segments" }),
+    ).toHaveTextContent("150 W");
+    expect(document.body).not.toHaveTextContent("provider-");
+    expect(document.body).not.toHaveTextContent(FIRST_ID);
   });
 
   it("keeps factual summary visible when every requested analysis section fails", async () => {
@@ -725,6 +1153,20 @@ describe("power progress", () => {
 });
 
 describe("training history states and import status", () => {
+  it("sets Page busy only while training status is loading", () => {
+    setTraining(ready(history(), { status: "loading" }));
+    render(<TrainingView />);
+
+    const page = screen.getByRole("region", { name: "Training" });
+    expect(page).toHaveAttribute("aria-busy", "true");
+
+    setTraining(ready(history(), { status: "unavailable" }));
+    expect(page).not.toHaveAttribute("aria-busy");
+
+    setTraining(ready(history(), { status: "refresh-unavailable" }));
+    expect(page).not.toHaveAttribute("aria-busy");
+  });
+
   it("renders a retained stale wrapper as last-recorded with one refresh-failure warning", () => {
     const lastGood = history({
       displayMode: "current",
@@ -817,11 +1259,29 @@ describe("training history states and import status", () => {
     expect(screen.queryByText("9,999")).not.toBeInTheDocument();
   });
 
-  it("shows only non-idle import status in a polite live region", () => {
+  it("reports the picker, progress, success and failure stages", () => {
     const choose = vi.fn();
     useEnduragentStore.setState({ rideImportActions: { choose } });
     render(<TrainingView />);
     expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
+    const status = document.querySelector("#ride-import-status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveClass("sr-only");
+    expect(status).toBeEmptyDOMElement();
+
+    setRideImport({
+      status: "running",
+      owner: "resident",
+      stage: "choosing",
+      progress: null,
+      result: null,
+    });
+    expect(status).toHaveTextContent("Waiting for ride file selection…");
+    expect(screen.getByRole("button", { name: "Import ride files" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import ride files" })).toHaveAttribute(
+      "aria-describedby",
+      "ride-import-status",
+    );
 
     setRideImport({
       status: "running",
@@ -838,7 +1298,6 @@ describe("training history states and import status", () => {
       },
       result: null,
     });
-    const status = document.querySelector("#ride-import-status");
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveTextContent("Importing ride files…");
     expect(screen.getByText("2 of 4 files processed")).toBeInTheDocument();
@@ -847,8 +1306,46 @@ describe("training history states and import status", () => {
       status: "succeeded",
       owner: "resident",
       progress: null,
-      result: importResult(2, 0),
+      result: importResult(2, 1),
     });
-    expect(screen.getByText(/2 ride files imported/u)).toBeInTheDocument();
+    expect(status).toHaveTextContent(
+      "Local library import: 2 ride files imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
+    );
+    expect(status).toHaveAttribute("data-state", "succeeded");
+
+    setRideImport({ status: "failed", owner: "resident", progress: null, result: null });
+    expect(status).toHaveTextContent(
+      "Local library import failed. The result could not be confirmed; check the library before trying again.",
+    );
+    expect(status).toHaveAttribute("data-state", "failed");
+  });
+
+  it("suppresses the resident status while onboarding presents the import flow", () => {
+    render(<TrainingView />);
+    setRideImport({
+      status: "running",
+      owner: "onboarding",
+      stage: "importing",
+      progress: null,
+      result: null,
+    });
+    act(() => {
+      useEnduragentStore.setState({
+        rideImportSuppressed: true,
+        onboarding: { ...READY_ONBOARDING, completionRequired: true },
+      });
+    });
+
+    const status = document.querySelector("#ride-import-status");
+    expect(status).toHaveClass("sr-only");
+    expect(status).toBeEmptyDOMElement();
+    expect(status).toHaveAttribute("data-state", "idle");
+    expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
+
+    act(() => {
+      useEnduragentStore.setState({ rideImportSuppressed: false });
+    });
+    expect(status).toHaveTextContent("Importing ride files…");
+    expect(screen.getByRole("region", { name: "Import ride files" })).toBeInTheDocument();
   });
 });

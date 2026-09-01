@@ -228,4 +228,24 @@ describe("ride analysis controller", () => {
     await controller.start();
     expect(call).toHaveBeenCalledTimes(1);
   });
+
+  it("invalidates cached analysis after sync success so reopening reloads the ride", async () => {
+    const call = vi.fn(async () => result()) as unknown as CoachClient["call"];
+    const { controller, states } = setup(call);
+
+    await controller.select(FIRST);
+    await controller.start();
+    await controller.select(null);
+
+    controller.invalidate();
+    await controller.select(FIRST);
+
+    expect(states.at(-1)).toMatchObject({
+      activityId: FIRST,
+      status: "idle",
+      revision: null,
+    });
+    await controller.start();
+    expect(call).toHaveBeenCalledTimes(2);
+  });
 });

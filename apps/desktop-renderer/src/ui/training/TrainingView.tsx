@@ -286,11 +286,12 @@ function RecentRides(props: {
   readonly onOpen: (ride: TrainingHistoryRide) => void;
   readonly registerButton: (id: string, node: HTMLButtonElement | null) => void;
 }): ReactElement {
-  const truncation = props.week.rides.truncated
-    ? props.week.rides.count.kind === "at-least"
-      ? `Showing 50 of at least ${props.week.rides.count.value} recorded rides.`
-      : `Showing 50 of ${props.week.rides.count.value} recorded rides.`
-    : null;
+  const truncation =
+    props.week.rides.truncated && props.week.rides.items.length > 0
+      ? props.week.rides.count.kind === "at-least"
+        ? `Showing ${props.week.rides.items.length} of at least ${props.week.rides.count.value} recorded rides.`
+        : `Showing ${props.week.rides.items.length} of ${props.week.rides.count.value} recorded rides.`
+      : null;
   return (
     <section
       className={styles.ridesSection}
@@ -350,34 +351,42 @@ function RideImportAction(): ReactElement {
   );
 }
 
-function RideImportStatus(): ReactElement | null {
+function RideImportStatus(): ReactElement {
   const state = useEnduragentStore((store) => store.rideImport);
   const suppressed = useEnduragentStore(rideImportStatusSuppressed);
-  if (state.status === "idle" || suppressed) return null;
-  const progress = state.status === "running" ? state.progress : null;
+  const visible = state.status !== "idle" && !suppressed;
+  const progress = visible && state.status === "running" ? state.progress : null;
+  const copy = visible ? rideImportStatusCopy(state) : "";
   return (
-    <section
-      className={styles.importStatus}
-      data-panel="ride-import"
-      aria-label="Import ride files"
-    >
-      <h2>Import ride files</h2>
-      {progress === null ? null : (
-        <p className={styles.meta}>
-          {progress.params.event.completed} of {progress.params.event.total} files processed
-        </p>
-      )}
+    <>
+      {visible ? (
+        <section
+          className={styles.importStatus}
+          data-panel="ride-import"
+          aria-label="Import ride files"
+        >
+          <h2>Import ride files</h2>
+          {progress === null ? null : (
+            <p className={styles.meta}>
+              {progress.params.event.completed} of {progress.params.event.total} files processed
+            </p>
+          )}
+          <p className={styles.support} aria-hidden="true">
+            {copy}
+          </p>
+        </section>
+      ) : null}
       <p
         id="ride-import-status"
-        className={`${styles.support} ride-import-status`}
-        data-state={state.status}
+        className={`${styles.srOnly} ride-import-status`}
+        data-state={visible ? state.status : "idle"}
         role="status"
         aria-live="polite"
         aria-atomic="true"
       >
-        {rideImportStatusCopy(state)}
+        {copy}
       </p>
-    </section>
+    </>
   );
 }
 

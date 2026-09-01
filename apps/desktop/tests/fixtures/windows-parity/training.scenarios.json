@@ -127,10 +127,11 @@
     {
       "id": "training.import.progress-results",
       "surface": "training-import",
-      "expected": "Training announces chooser, import, and file progress, reports imported and quarantined counts, distinguishes unavailable publication from confirmed availability, and fails closed when the result cannot be confirmed.",
+      "expected": "Training keeps a polite live region mounted before import starts, announces chooser, import, and file progress, disables the import action while running, suppresses resident status during onboarding, reports imported and quarantined counts, distinguishes unavailable publication from confirmed availability, and fails closed when the result cannot be confirmed.",
       "automation": "deterministic",
       "tests": [
-        "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > shows only non-idle import status in a polite live region",
+        "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > reports the picker, progress, success and failure stages",
+        "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > suppresses the resident status while onboarding presents the import flow",
         "apps/desktop-renderer/tests/ride-import.test.ts > uses returned partial and zero-import counts, retaining prior success without stale state",
         "apps/desktop-renderer/tests/ride-import.test.ts > keeps durable ingestion across an idempotent publication retry",
         "apps/desktop-renderer/tests/ride-import-adapter.test.tsx > walks the picker, import and success stages onto the training page"
@@ -145,15 +146,16 @@
         "apps/desktop-renderer/tests/training-surface.test.tsx > training landing page > renders the week-first section order and ignores the rollback fields",
         "apps/desktop-renderer/tests/training-surface.test.tsx > training landing page > renders six bars from a visible baseline and a complete accessible data table",
         "apps/desktop-renderer/tests/training-surface.test.tsx > training landing page > renders recorded ride facts, one scoped callout, fallback title, and omitted local time",
-        "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > shows only non-idle import status in a polite live region"
+        "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > reports the picker, progress, success and failure stages"
       ]
     },
     {
       "id": "training.view.readiness-states",
       "surface": "training",
-      "expected": "Weekly summary distinguishes partial totals, missing recorded values, complete zero, stale or incomplete coverage, sparse imports, and unavailable training history without substituting legacy Training data.",
+      "expected": "Training marks the Page busy only while training status is loading, and Weekly summary distinguishes partial totals, missing recorded values, complete zero, stale or incomplete coverage, sparse imports, and unavailable training history without substituting legacy Training data.",
       "automation": "deterministic",
       "tests": [
+        "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > sets Page busy only while training status is loading",
         "apps/desktop-renderer/tests/training-surface.test.tsx > training landing page > distinguishes partial totals, missing recorded values, and complete zero",
         "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > renders a retained stale wrapper as last-recorded with one refresh-failure warning",
         "apps/desktop-renderer/tests/training-surface.test.tsx > training history states and import status > combines stale and incomplete history into one warning",
@@ -186,10 +188,12 @@
     {
       "id": "training.ride-review.local-analysis",
       "surface": "ride-review",
-      "expected": "Ride review keeps the recorded summary visible, defers local analysis until the Recorded analysis and export disclosure opens, and presents ordered interval evidence with missing values marked unavailable.",
+      "expected": "Ride review keeps the recorded summary visible, defers recorded analysis until the Recorded analysis and export disclosure opens, shows a neutral time-weighted aerobic-drift estimate with coverage and limitations, presents ordered intervals with missing values marked unavailable, and scopes five-minute efforts to the selected ride.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > shows recorded facts in order, caps key metrics at four, and lazy-starts the disclosure",
+        "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > shows a neutral, time-weighted local aerobic drift estimate with its limitations",
+        "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > shows ordered intervals and explicitly scoped five-minute best efforts",
         "apps/desktop-renderer/tests/activity-analysis-controller.test.ts > waits for the disclosure before loading the selected canonical ride",
         "apps/desktop-renderer/tests/ride-interval-evidence.test.tsx > shows complete interval and group metrics while keeping missing values unavailable"
       ]
@@ -197,9 +201,9 @@
     {
       "id": "training.ride-review.response-analysis",
       "surface": "ride-review",
-      "expected": "Inline Ride review keeps its factual summary available when every requested recorded-analysis section is unavailable, with failures contained inside the disclosure.",
+      "expected": "Inline Ride review keeps power and heart-rate distributions independently accessible and presents the server-cleaned power and heart-rate response with coverage, fitted curves, and tabular evidence distinct from local aerobic drift.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > keeps factual summary visible when every requested analysis section fails"
+      "test": "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > shows independent accessible distributions and a distinct server power/HR response"
     },
     {
       "id": "training.ride-review.analysis-recovery",
@@ -246,10 +250,11 @@
     {
       "id": "training.export.activity-formats",
       "surface": "training-export",
-      "expected": "Inline Ride review reveals Export ride only inside Recorded analysis and export, sends the selected canonical ride without rendering its identifier, and lets the trusted main process add the destination through the native save dialog.",
+      "expected": "Inline Ride review reveals Export ride only inside Recorded analysis and export, offers FIT and GPX, sends the selected canonical ride without rendering its identifier, reports a saved export, and lets the trusted main process add the destination through the native save dialog.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > shows recorded facts in order, caps key metrics at four, and lazy-starts the disclosure",
+        "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > offers FIT and GPX and exports a ride without rendering its canonical ID",
         "apps/desktop-renderer/tests/training-export.test.ts > sends a closed ride request and publishes a saved result",
         "apps/desktop/tests/training-export-ipc.test.ts > uses the native save dialog and adds the destination only in the trusted main process"
       ]
@@ -291,26 +296,28 @@
     {
       "id": "training.sync.retryable-recovery",
       "surface": "training-sync",
-      "expected": "Partial, operation, and indeterminate sync failures remain explicit and retryable; an interrupted admitted sync is never retried automatically, and a later athlete action reconnects once, submits one new call, and restores keyboard focus.",
+      "expected": "Partial, operation, and indeterminate sync failures remain explicit and retryable; an interrupted admitted sync is never retried automatically, and a later athlete action reconnects once, submits one new call, and restores keyboard focus to the activator or its sidebar wrapper when the activator is disabled.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-sync.test.ts > maps published=%s Reference-success=%s after exactly one refresh",
         "apps/desktop-renderer/tests/training-sync.test.ts > settles %s without a terminal as indeterminate and never refreshes",
         "apps/desktop-renderer/tests/training-sync.test.ts > recovers only on a later explicit retry and submits exactly one new call",
         "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > walks the loading, synced, syncing and attention states",
-        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > requests a manual sync and restores keyboard focus to the activator"
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > requests a manual sync and restores keyboard focus to the activator",
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > restores keyboard focus to the chip wrapper when the activator becomes disabled"
       ]
     },
     {
       "id": "training.sync.protocol-failure",
       "surface": "training-sync",
-      "expected": "Malformed, missing, reordered, duplicated, or miscorrelated progress and terminal envelopes fail closed without refreshing, latch Sync unavailable, move keyboard focus to the relaunch status, and cannot retry in place.",
+      "expected": "Malformed, missing, reordered, duplicated, or miscorrelated progress and terminal envelopes fail closed without refreshing, latch Sync unavailable, cannot retry in place, and preserve a keyboard focus fallback when the disabled activator cannot receive focus.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-sync.test.ts > latches %s progress as a protocol fault without observer throws",
         "apps/desktop-renderer/tests/training-sync.test.ts > requires an observed terminal even when a typed result resolves",
         "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > walks the loading, synced, syncing and attention states",
-        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > reports never-synced and unavailable training data honestly"
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > reports never-synced and unavailable training data honestly",
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > restores keyboard focus to the chip wrapper when the activator becomes disabled"
       ]
     },
     {
@@ -343,12 +350,13 @@
     {
       "id": "training.sidebar.sync-chip",
       "surface": "training-sync",
-      "expected": "The sidebar sync chip walks the loading, synced, syncing, and attention states, reports never-synced and unavailable training data honestly, and a manual sync request restores keyboard focus to the activator.",
+      "expected": "The sidebar sync chip walks the loading, synced, syncing, and attention states, reports never-synced and unavailable training data honestly, and restores keyboard focus to the activator or its wrapper when the activator becomes disabled.",
       "automation": "deterministic",
       "tests": [
-        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > walks the loading, synced, syncing and attention states",
-        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > reports never-synced and unavailable training data honestly",
-        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > requests a manual sync and restores keyboard focus to the activator"
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > walks the loading, synced, syncing and attention states",
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > reports never-synced and unavailable training data honestly",
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > requests a manual sync and restores keyboard focus to the activator",
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > sidebar sync chip > restores keyboard focus to the chip wrapper when the activator becomes disabled"
       ]
     }
   ]

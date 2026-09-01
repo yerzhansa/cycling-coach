@@ -577,6 +577,24 @@ describe("sidebar sync chip", () => {
     expect(document.activeElement).toBe(chip());
   });
 
+  it("restores keyboard focus to the chip wrapper when the activator becomes disabled", () => {
+    const request = vi.fn();
+    useEnduragentStore.setState({ syncActions: { request } });
+    render(<Sidebar />);
+
+    fireEvent.click(chip());
+    expect(request).toHaveBeenCalledWith("keyboard");
+    update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
+    act(() => {
+      chip().blur();
+      restoreManualSyncFocus();
+    });
+
+    expect(chip()).toBeDisabled();
+    expect(chipSurface()).toHaveAttribute("tabindex", "-1");
+    expect(document.activeElement).toBe(chipSurface());
+  });
+
   it("stays inert until the sync controller is bound", () => {
     render(<Sidebar />);
 
