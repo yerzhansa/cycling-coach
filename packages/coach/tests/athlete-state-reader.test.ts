@@ -140,13 +140,16 @@ function computedTrainingHistory(): TrainingHistoryComputed {
       truncated: false,
     },
     trend: { kind: "unavailable" as const, reason: "limited-history" as const },
-    callout: {
-      kind: "longest-ride-28d" as const,
-      rideId: ride.id,
-      durationSeconds: ride.ridingSeconds,
-      window: { start: "1998-06-21", end: "1998-07-18" },
-      comparisonRideCount: 4,
-    },
+    callout:
+      id === "anchor"
+        ? {
+            kind: "longest-ride-28d" as const,
+            rideId: ride.id,
+            durationSeconds: ride.ridingSeconds,
+            window: { start: "1998-06-21", end: "1998-07-18" },
+            comparisonRideCount: 4,
+          }
+        : null,
   });
   return {
     kind: "computed",
@@ -198,9 +201,12 @@ describe("persisted athlete state source", () => {
       calendarTimeZone: () => "UTC",
     });
 
-    expect((await reader.getAthleteState()).trainingContext?.trainingHistory.kind).toBe(
-      "computed",
-    );
+    const computed = (await reader.getAthleteState()).trainingContext?.trainingHistory;
+    expect(computed).toMatchObject({
+      kind: "computed",
+      anchorWeek: { callout: { kind: "longest-ride-28d" } },
+      previousWeek: { callout: null },
+    });
     response = "throw";
     const thrown = (await reader.getAthleteState()).trainingContext?.trainingHistory;
     expect(thrown).toMatchObject({
