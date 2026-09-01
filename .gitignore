@@ -15,6 +15,16 @@ CLAUDE.local.md
 AGENTS.override.md
 .tests/
 .agents/
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/create-verification-skill/
+!.agents/skills/create-verification-skill/**
+!.agents/skills/maintain-verification-skill/
+!.agents/skills/maintain-verification-skill/**
+!.agents/skills/verify-enduragent/
+!.agents/skills/verify-enduragent/**
 .ralph/
 .worktrees/
 .specify/

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Verification Skill"
+  short_description: "Create one repository verification skill"
+  default_prompt: "Use $create-verification-skill to inspect this repository and create one project-local verification skill for the requested application surface."
+
+policy:
+  allow_implicit_invocation: false

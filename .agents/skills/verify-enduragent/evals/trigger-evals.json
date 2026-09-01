@@ -1,0 +1,26 @@
+[
+  {
+    "query": "Use $verify-enduragent to verify Chat streaming order, the canonical completed response, and preservation of the draft and response across navigation to Past chats, using only the isolated desktop fixture.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run desktop UI QA on Enduragent Setup: exercise the first-run gate with isolated fixtures, confirm Start coaching becomes enabled, and prove navigation is restored after completion.",
+    "should_trigger": true
+  },
+  {
+    "query": "Verify the Enduragent desktop Training page after the sync-retry change. Check its panel order, recovery state, ride-review navigation, and export requests through the mapped executors.",
+    "should_trigger": true
+  },
+  {
+    "query": "Implement the new Settings connections recovery banner in the Enduragent desktop renderer and add its component tests; do not run broader UI verification.",
+    "should_trigger": false
+  },
+  {
+    "query": "Explain why the shell lifecycle checks use both Vitest and Playwright, and summarize what each test style can prove without running them.",
+    "should_trigger": false
+  },
+  {
+    "query": "Verify the non-desktop training export HTTP endpoint with API contract tests; do not build or launch the Enduragent Electron application.",
+    "should_trigger": false
+  }
+]

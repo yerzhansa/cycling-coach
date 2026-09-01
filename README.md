@@ -236,6 +236,10 @@ The data substrate that grounds coaching in verified athlete numerics is a port 
 [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT). Full attribution in
 [`NOTICE.md`](./NOTICE.md).
 
+The project-local verification meta-skills adapt Lauren Tan's
+[Cursor pstack verification skills](https://github.com/cursor/plugins/tree/main/pstack/skills)
+(MIT). Full attribution is in [`NOTICE.md`](./NOTICE.md).
+
 Follow [@yerzhansa](https://x.com/yerzhansa) for updates.
 
 ## License
