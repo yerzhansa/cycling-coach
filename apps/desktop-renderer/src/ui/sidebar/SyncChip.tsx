@@ -15,7 +15,7 @@ import {
   focusTrainingRestrictionIfPresent,
   requestTrainingRestrictionFocus,
   STRAVA_RESTRICTION_CARD_ID,
-} from "../training/restriction-focus";
+} from "../settings/restriction-focus";
 
 type SyncChipStatus = "loading" | "syncing" | "attention" | "synced" | "never" | "unavailable";
 
@@ -43,7 +43,6 @@ export function SyncChip(): ReactElement {
   const training = useEnduragentStore((store) => store.training);
   const sync = useEnduragentStore((store) => store.sync);
   const actions = useEnduragentStore((store) => store.syncActions);
-  const closeRide = useEnduragentStore((store) => store.closeRide);
   const setActiveView = useEnduragentStore((store) => store.setActiveView);
   const chip = useRef<HTMLButtonElement>(null);
   const status = syncChipStatus(training, sync);
@@ -109,13 +108,12 @@ export function SyncChip(): ReactElement {
                 aria-label={`${restrictionLabel}. How to fix this`}
                 className="pointer-events-auto mt-px flex w-full min-w-0 items-center gap-1 text-[11px] no-underline"
                 onClick={(event) => {
-                  setActiveView("training");
-                  if (useEnduragentStore.getState().activeView !== "training") {
+                  setActiveView("settings");
+                  if (useEnduragentStore.getState().activeView !== "settings") {
                     event.preventDefault();
                     return;
                   }
                   requestTrainingRestrictionFocus();
-                  closeRide();
                   focusTrainingRestrictionIfPresent(
                     document.getElementById(STRAVA_RESTRICTION_CARD_ID),
                   );
