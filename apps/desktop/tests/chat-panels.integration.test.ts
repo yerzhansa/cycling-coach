@@ -1276,7 +1276,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       view: "training",
       weeklySummary: "Weekly summary",
       recentRides: "Recent rides",
-      historyStatus: "Recorded through 2026-07-19",
+      historyStatus: "Recorded through Jul 19, 2026",
     });
     liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: thirdStreamDelta });
     const hiddenUpdate = await fixture.evaluate<{
@@ -2321,7 +2321,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(rideReview).toEqual({
       page: "Ride review",
       titleFocused: true,
-      overview: "Road rideRoad rideDate2026-07-18 · 12:00Riding time1h 25mDistance42.1 km",
+      overview: "Road rideRoad rideDateJul 18, 2026 · 12:00 PMRiding time1h 25mDistance42.1 km",
       canonicalIdVisible: false,
       pageOverflow: false,
       documentOverflow: false,

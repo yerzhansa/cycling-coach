@@ -20,6 +20,7 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller";
 import type { TrainingContextViewState } from "../src/training-context/controller";
 import { TrainingView } from "../src/ui/training/TrainingView";
+import { pinDefaultLocale } from "./intl";
 
 const FIRST_ID = "a".repeat(64);
 const SECOND_ID = "b".repeat(64);
@@ -303,7 +304,7 @@ function setRideImport(next: RideImportState): void {
 async function openFirstRide(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(
     screen.getByRole("button", {
-      name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+      name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
     }),
   );
 }
@@ -314,6 +315,7 @@ async function openFirstRideAnalysis(user: ReturnType<typeof userEvent.setup>): 
 }
 
 beforeEach(() => {
+  pinDefaultLocale("en-US");
   useEnduragentStore.setState({
     activeView: "training",
     training: ready(),
@@ -332,6 +334,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   useEnduragentStore.setState({
     activeView: "chat",
     training: EMPTY_TRAINING_SURFACE,
@@ -479,7 +482,8 @@ describe("training landing page", () => {
     const table = within(figure).getByRole("table", {
       name: "Six complete weeks of riding time data",
     });
-    expect(within(table).getByText("1998-06-15 to 1998-06-21")).toBeInTheDocument();
+    expect(within(figure).getByText("6/15")).toBeInTheDocument();
+    expect(within(table).getByText("Jun 15, 1998 to Jun 21, 1998")).toBeInTheDocument();
     expect(within(table).getByText("0 rides")).toBeInTheDocument();
     expect(within(table).getByText("0m")).toBeInTheDocument();
   });
@@ -507,16 +511,18 @@ describe("training landing page", () => {
 
     const recent = screen.getByRole("region", { name: "Recent rides" });
     expect(within(recent).getByText("River tempo")).toBeInTheDocument();
-    expect(within(recent).getByText("1998-07-09 · 22:00")).toBeInTheDocument();
+    const datedRide = within(recent).getByText("Jul 9, 1998 · 10:00 PM");
+    expect(datedRide).toBeInTheDocument();
+    expect(datedRide).toHaveAttribute("datetime", "1998-07-09");
     expect(within(recent).getByText("1h 25m")).toBeInTheDocument();
     expect(within(recent).getByText("42.1 km")).toBeInTheDocument();
     expect(within(recent).getByText("Load 91")).toHaveClass("max-[761px]:hidden");
     expect(within(recent).getByText("Indoor ride")).toBeInTheDocument();
-    expect(within(recent).getByText("1998-07-08")).toBeInTheDocument();
-    expect(within(recent).queryByText(/1998-07-08 ·/u)).not.toBeInTheDocument();
+    expect(within(recent).getByText("Jul 8, 1998")).toBeInTheDocument();
+    expect(within(recent).queryByText(/Jul 8, 1998 ·/u)).not.toBeInTheDocument();
     expect(within(recent).getAllByText("Worth a look")).toHaveLength(1);
     const reason = within(recent).getByText(
-      "Longest recorded ride in the 28 days ending 1998-07-09",
+      "Longest recorded ride in the 28 days ending Jul 9, 1998",
     );
     expect(reason).toHaveClass("[overflow-wrap:anywhere]", "whitespace-normal");
     expect(reason).not.toHaveClass("text-ellipsis", "whitespace-nowrap");
@@ -609,7 +615,7 @@ describe("ride review", () => {
     const user = userEvent.setup();
     render(<TrainingView />);
     const opener = screen.getByRole("button", {
-      name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+      name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
     });
     opener.focus();
 
@@ -619,7 +625,7 @@ describe("ride review", () => {
     await user.click(screen.getByRole("button", { name: "Back to training" }));
     expect(
       screen.getByRole("button", {
-        name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+        name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
       }),
     ).toHaveFocus();
   });
@@ -632,14 +638,16 @@ describe("ride review", () => {
     render(<TrainingView />);
     await user.click(
       screen.getByRole("button", {
-        name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+        name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
       }),
     );
 
     const overview = screen.getByRole("region", { name: "River tempo" });
     expect(overview).toHaveClass("[&_h2]:leading-8");
     expect(within(overview).getByText("Road ride")).toBeInTheDocument();
-    expect(within(overview).getByText("1998-07-09 · 22:00")).toBeInTheDocument();
+    const reviewDate = within(overview).getByText("Jul 9, 1998 · 10:00 PM");
+    expect(reviewDate).toBeInTheDocument();
+    expect(reviewDate).toHaveAttribute("datetime", "1998-07-09");
     expect(within(overview).getByText("1h 25m")).toBeInTheDocument();
     expect(within(overview).getByText("42.1 km")).toBeInTheDocument();
     const rideSummary = overview.querySelector("dl:first-of-type");
@@ -711,7 +719,7 @@ describe("ride review", () => {
     render(<TrainingView />);
     await user.click(
       screen.getByRole("button", {
-        name: "Open ride review: Indoor ride, 1998-07-08",
+        name: "Open ride review: Indoor ride, Jul 8, 1998",
       }),
     );
 
@@ -1048,7 +1056,7 @@ describe("ride review", () => {
     render(<TrainingView />);
     await user.click(
       screen.getByRole("button", {
-        name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+        name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
       }),
     );
     await user.click(screen.getByText("Recorded analysis and export"));
@@ -1062,7 +1070,7 @@ describe("ride review", () => {
     render(<TrainingView />);
     await user.click(
       screen.getByRole("button", {
-        name: "Open ride review: River tempo, 1998-07-09 · 22:00",
+        name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
       }),
     );
     const withoutFirst = week("anchor", {
@@ -1102,7 +1110,7 @@ describe("power progress", () => {
       within(progress).getByText("Short efforts changed more favorably than long efforts."),
     ).toBeInTheDocument();
     expect(
-      within(progress).getByText("1998-06-22–1998-07-19 · compared with the prior 28 days"),
+      within(progress).getByText("Jun 22, 1998–Jul 19, 1998 · compared with the prior 28 days"),
     ).toBeInTheDocument();
     expect(within(progress).getByText("Fresh")).toBeInTheDocument();
     const powerTable = within(progress).getByRole("table", {
@@ -1155,7 +1163,7 @@ describe("power progress", () => {
     );
     const progress = screen.getByRole("region", { name: "Power progress" });
     expect(within(progress).getByText(/latest refresh timed out/i)).toHaveTextContent(
-      "The latest refresh timed out. Showing the last complete comparison. Failed 1998-07-20 08:00:00 UTC.",
+      "The latest refresh timed out. Showing the last complete comparison. Failed Jul 20, 1998, 8:00 AM.",
     );
     expect(within(progress).getByText("Stale")).toBeInTheDocument();
     expect(within(progress).getByText("1120 W")).toBeInTheDocument();
@@ -1201,7 +1209,7 @@ describe("training history states and import status", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "This week" })).not.toBeInTheDocument();
     expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
-    expect(screen.getByText("Recorded through 1998-07-12")).toBeInTheDocument();
+    expect(screen.getByText("Recorded through Jul 12, 1998")).toBeInTheDocument();
   });
 
   it("combines stale and incomplete history into one warning", () => {
@@ -1229,7 +1237,7 @@ describe("training history states and import status", () => {
 
     expect(
       screen.getByText(
-        "Training may be out of date, and some rides may be missing. Showing recorded rides through 1998-07-09.",
+        "Training may be out of date, and some rides may be missing. Showing recorded rides through Jul 9, 1998.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("Some rides may be missing.")).not.toBeInTheDocument();

@@ -7,11 +7,9 @@ import {
   type TrainingContextViewState,
 } from "../src/training-context/controller";
 import {
-  formatDateLabel,
   formatDistance,
   formatPercentage,
   formatRidingDuration,
-  formatShortDateLabel,
   formatSleepDuration,
   formatUtcTimestamp,
   formatWholeNumber,
@@ -330,9 +328,6 @@ describe("training context controller", () => {
 
 describe("training context display formatters", () => {
   it("formats only display values without clock or locale inputs", () => {
-    expect(formatDateLabel("1998-07-18T12:00:00Z")).toBe("1998-07-18");
-    expect(formatDateLabel("1998-02-30")).toBe("Unknown date");
-    expect(formatShortDateLabel("1998-07-18")).toBe("7/18");
     expect(formatWholeNumber(12.6)).toBe("13");
     expect(formatPercentage(0.756)).toBe("76%");
     expect(formatSleepDuration(27_901)).toBe("7h 45m");
@@ -345,7 +340,6 @@ describe("training context display formatters", () => {
   it("distinguishes same-day sync seconds while mutation labels remain date-only", () => {
     expect(formatUtcTimestamp("1998-07-18T12:34:56.999Z")).toBe("1998-07-18 12:34:56 UTC");
     expect(formatUtcTimestamp("1998-07-18T12:34:57.001Z")).toBe("1998-07-18 12:34:57 UTC");
-    expect(formatDateLabel("1998-07-18T12:34:57.001Z")).toBe("1998-07-18");
   });
 
   it("normalizes valid offsets to UTC and uses fixed copy for invalid sync times", () => {

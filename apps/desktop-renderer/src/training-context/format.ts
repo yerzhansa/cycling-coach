@@ -1,20 +1,5 @@
 import type { UnitsPreference } from "@enduragent/coach-contract";
 
-export function formatDateLabel(value: string): string {
-  const match = /^(\d{4}-\d{2}-\d{2})/u.exec(value);
-  if (match === null) return "Unknown date";
-  const date = new Date(`${match[1]}T00:00:00.000Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === match[1]
-    ? match[1]
-    : "Unknown date";
-}
-
-export function formatShortDateLabel(value: string): string {
-  const label = formatDateLabel(value);
-  if (label === "Unknown date") return label;
-  return `${Number(label.slice(5, 7))}/${Number(label.slice(8, 10))}`;
-}
-
 const UTC_INSTANT_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|([+-])(\d{2}):(\d{2}))$/u;
 
