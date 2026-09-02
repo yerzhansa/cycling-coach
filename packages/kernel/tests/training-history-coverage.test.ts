@@ -366,8 +366,53 @@ describe("training history coverage", () => {
     await expect(
       repository.appendCommitInTransaction(store, {
         ...commit,
-        calendarTimeZone: "Europe/Berlin",
+        authorityId: "legacy-clean-capture",
         gaps: { datedLocalDates: [], undatedCount: 1 },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        calendarTimeZone: "Europe/Berlin",
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+  });
+
+  it("keeps exact gap comparison for version-1 rows", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+    const checkpoint = {
+      authorityId: "exact-backfill-cycle",
+      sourceCycle: 11,
+      pageOrdinal: 0,
+      requestedOldest: "1998-04-13",
+      requestedNewest: "1998-07-06",
+      calendarTimeZone: "Asia/Almaty",
+      cursorAfter: "exact-cursor",
+      droppedSourceRestricted: 2,
+      droppedOther: 1,
+      gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 1 },
+      terminal: false,
+    } as const;
+    await repository.appendCommitInTransaction(store, commit);
+    await repository.appendBackfillCheckpointInTransaction(store, checkpoint);
+
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        gaps: { datedLocalDates: [], undatedCount: 0 },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, {
+        ...checkpoint,
+        gaps: { datedLocalDates: [], undatedCount: 0 },
       }),
     ).rejects.toEqual(
       expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),

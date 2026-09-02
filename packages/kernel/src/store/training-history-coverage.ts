@@ -398,7 +398,30 @@ function commitRow(row: Row): CoverageCommitRow {
   return Object.freeze(result);
 }
 
-function sameCommit(left: CoverageCommitRow, right: CoverageCommitInput): boolean {
+function storedGapEvidenceVersion(row: Row): 0 | 1 {
+  return row.gap_evidence_version === 1 ? 1 : 0;
+}
+
+function hasGaps(gaps: CoverageGapEvidence): boolean {
+  return gaps.datedLocalDates.length + gaps.undatedCount > 0;
+}
+
+function exactGaps(left: CoverageGapEvidence, right: CoverageGapEvidence): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function legacyCommitGapsCompatible(
+  stored: CoverageGapEvidence,
+  retry: CoverageGapEvidence,
+): boolean {
+  return hasGaps(stored) || !hasGaps(retry);
+}
+
+function sameCommit(
+  left: CoverageCommitRow,
+  right: CoverageCommitInput,
+  version: 0 | 1,
+): boolean {
   return (
     left.source === right.source &&
     left.lane === right.lane &&
@@ -408,7 +431,9 @@ function sameCommit(left: CoverageCommitRow, right: CoverageCommitInput): boolea
     left.coveredOldest === right.coveredOldest &&
     left.coveredNewest === right.coveredNewest &&
     left.committedEpochSeconds === right.committedEpochSeconds &&
-    JSON.stringify(left.gaps) === JSON.stringify(right.gaps)
+    (version === 1
+      ? exactGaps(left.gaps, right.gaps)
+      : legacyCommitGapsCompatible(left.gaps, right.gaps))
   );
 }
 
@@ -461,6 +486,7 @@ function checkpointRow(row: Row): BackfillCheckpointRow {
 function sameCheckpoint(
   left: BackfillCheckpointRow,
   right: BackfillCheckpointInput,
+  version: 0 | 1,
 ): boolean {
   return (
     left.authorityId === right.authorityId &&
@@ -472,7 +498,7 @@ function sameCheckpoint(
     left.cursorAfter === right.cursorAfter &&
     left.droppedSourceRestricted === right.droppedSourceRestricted &&
     left.droppedOther === right.droppedOther &&
-    JSON.stringify(left.gaps) === JSON.stringify(right.gaps) &&
+    (version === 0 || exactGaps(left.gaps, right.gaps)) &&
     left.terminal === right.terminal
   );
 }
@@ -525,7 +551,9 @@ RETURNING coverage_commit_id`,
       const selected = await store.get(READ_COMMIT_SQL, [input.authorityKind, input.authorityId]);
       if (selected === undefined) invalidRow();
       const stored = commitRow(selected);
-      if (!sameCommit(stored, input)) throw new TrainingCoverageError("authority_conflict");
+      if (!sameCommit(stored, input, storedGapEvidenceVersion(selected))) {
+        throw new TrainingCoverageError("authority_conflict");
+      }
       return Object.freeze({
         kind: inserted === undefined ? "already-recorded" : "inserted",
         commitId: stored.coverageCommitId,
@@ -585,7 +613,7 @@ RETURNING checkpoint_id`,
         invalidRow();
       }
       const stored = checkpointRow(selected);
-      if (!sameCheckpoint(stored, input)) {
+      if (!sameCheckpoint(stored, input, storedGapEvidenceVersion(selected))) {
         throw new TrainingCoverageError("authority_conflict");
       }
       return Object.freeze({
