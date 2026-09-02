@@ -13,7 +13,12 @@ import type {
   CoachTurnEventNotificationEnvelope,
   CreatePlanningRequestRpcParams,
   CreateWorkoutPlanningRequestRpcParams,
+  PlanCreationAnswerRpcParams,
+  PlanCreationAnswerRpcResult,
   PlanningRequestDelivery,
+  PlanCreationCardModel,
+  PlanCreationStartRpcParams,
+  PlanCreationStartRpcResult,
   QueuedChatMessage,
   TurnEvent,
 } from "@enduragent/coach-contract";
@@ -237,6 +242,7 @@ function client(
     readonly clearAttachmentDraft?: () => Promise<ChatAttachmentComposerReadModel>;
     readonly listPlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
+      readonly planCreation?: PlanCreationCardModel | null;
     }>;
     readonly resumePlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
@@ -257,6 +263,12 @@ function client(
       | { readonly status: "found"; readonly delivery: PlanningRequestDelivery }
       | { readonly status: "missing" }
     >;
+    readonly startPlanCreation?: (
+      request: PlanCreationStartRpcParams,
+    ) => Promise<PlanCreationStartRpcResult>;
+    readonly answerPlanCreation?: (
+      request: PlanCreationAnswerRpcParams,
+    ) => Promise<PlanCreationAnswerRpcResult>;
   } = {},
 ): CoachClient {
   let queueRevision = 0;
@@ -314,7 +326,10 @@ function client(
     }
     if (method === "listPlanningRequests") {
       hideQueueCall();
-      return (sessions.listPlanningRequests?.() ?? Promise.resolve({ deliveries: [] })) as never;
+      return (sessions
+        .listPlanningRequests?.()
+        .then((result) => ({ planCreation: null, ...result })) ??
+        Promise.resolve({ deliveries: [], planCreation: null })) as never;
     }
     if (method === "resumePlanningRequests") {
       hideQueueCall();
@@ -331,6 +346,18 @@ function client(
     }
     if (method === "retryPlanningRequest") {
       return (sessions.retryPlanningRequest?.() ?? Promise.resolve({ status: "missing" })) as never;
+    }
+    if (method === "plan_creation.start") {
+      return (sessions.startPlanCreation?.(request as PlanCreationStartRpcParams) ??
+        Promise.resolve({ status: "rejected", reason: "command-conflict" })) as never;
+    }
+    if (method === "plan_creation.answer") {
+      return (sessions.answerPlanCreation?.(request as PlanCreationAnswerRpcParams) ??
+        Promise.resolve({
+          status: "rejected",
+          reason: "no-unfinished-creation",
+          planCreation: null,
+        })) as never;
     }
     if (method === "saveChatAttachmentDraftText") {
       hideQueueCall();
@@ -1624,6 +1651,79 @@ describe("chat controller", () => {
       error: null,
       value: [restored],
     });
+  });
+
+  it("restores an open Card and blocks coaching work", async () => {
+    const planCreation = {
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress" as const,
+      answeredSummaries: [],
+      openQuestion: { kind: "goal-question" as const, prompt: "Goal?", candidates: [] },
+    };
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation }),
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ loaded: true, value: planCreation });
+    await expect(controller.submit("blocked")).resolves.toBe(false);
+    expect(chatMessages(fake)).toEqual([]);
+  });
+
+  it("retries Card commands with stable ids, installs monotonically, and unblocks Chat", async () => {
+    const goalCard: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      answeredSummaries: [],
+      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+    };
+    const completeCard: PlanCreationCardModel = {
+      ...goalCard,
+      version: 2,
+      answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "Build power" }],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null })
+      .mockResolvedValue({ deliveries: [], planCreation: null });
+    const startPlanCreation = vi
+      .fn<(request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>>()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue({ status: "started", outcome: "created", planCreation: goalCard });
+    const answerPlanCreation = vi
+      .fn<(request: PlanCreationAnswerRpcParams) => Promise<PlanCreationAnswerRpcResult>>()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue({ status: "answered", planCreation: completeCard });
+    const fake = client(replies(), {
+      listPlanningRequests,
+      startPlanCreation,
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    await controller.startPlanCreation();
+    await controller.startPlanCreation();
+    expect(startPlanCreation.mock.calls[0]?.[0].commandId).toBe(
+      startPlanCreation.mock.calls[1]?.[0].commandId,
+    );
+    const answer = {
+      kind: "goal" as const,
+      goal: { kind: "fitness" as const, outcome: "Build power" },
+    };
+    await controller.answerPlanCreation(answer);
+    await controller.answerPlanCreation(answer);
+    expect(answerPlanCreation.mock.calls[0]?.[0].commandId).toBe(
+      answerPlanCreation.mock.calls[1]?.[0].commandId,
+    );
+    expect(controls.at(-1)?.planCreation?.value).toEqual(completeCard);
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+    expect(controls.at(-1)?.planCreation?.value).toEqual(completeCard);
+    await expect(controller.submit("Chat continues")).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual(["Chat continues"]);
   });
 
   it("keeps the last safe Plan cards when relaunch recovery cannot deliver", async () => {

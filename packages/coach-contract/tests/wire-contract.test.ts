@@ -1448,7 +1448,16 @@ describe("coach request and event projection", () => {
       getPlanningRequest: async () => ({ status: "missing" }),
       retryPlanningRequest: async () => ({ status: "missing" }),
       resumePlanningRequests: async () => ({ deliveries: [] }),
-      listPlanningRequests: async () => ({ deliveries: [] }),
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: null }),
+      "plan_creation.start": async () => ({
+        status: "rejected",
+        reason: "command-conflict",
+      }),
+      "plan_creation.answer": async () => ({
+        status: "rejected",
+        reason: "no-unfinished-creation",
+        planCreation: null,
+      }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));

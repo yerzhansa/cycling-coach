@@ -139,6 +139,13 @@ import {
   RetryPlanningRequestRpcResultSchema,
   type PlanningRequestOperations,
 } from "./planning-request.js";
+import {
+  PlanCreationAnswerRpcParamsSchema,
+  PlanCreationAnswerRpcResultSchema,
+  PlanCreationStartRpcParamsSchema,
+  PlanCreationStartRpcResultSchema,
+  type PlanCreationOperations,
+} from "./plan-creation.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -299,6 +306,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "retryPlanningRequest",
   "resumePlanningRequests",
   "listPlanningRequests",
+  "plan_creation.start",
+  "plan_creation.answer",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -1318,6 +1327,7 @@ export type CoachRpcService = CoachEngine &
   CoachOperations &
   PlanningReadOperations &
   PlanningRequestOperations &
+  PlanCreationOperations &
   SpendOperations &
   CoachSelfTestOperations &
   TelegramControlOperations &
@@ -1868,6 +1878,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: ListPlanningRequestsRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("plan_creation.start"),
+      params: PlanCreationStartRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("plan_creation.answer"),
+      params: PlanCreationAnswerRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -2386,6 +2412,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "listPlanningRequests",
     requestSchema: ListPlanningRequestsRpcParamsSchema,
     responseSchema: ListPlanningRequestsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan_creation.start": {
+    wireName: "plan_creation.start",
+    requestSchema: PlanCreationStartRpcParamsSchema,
+    responseSchema: PlanCreationStartRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan_creation.answer": {
+    wireName: "plan_creation.answer",
+    requestSchema: PlanCreationAnswerRpcParamsSchema,
+    responseSchema: PlanCreationAnswerRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;
