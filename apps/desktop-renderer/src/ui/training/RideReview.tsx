@@ -8,8 +8,8 @@ import type {
 import { useRef, type ReactElement, type ReactNode, type Ref } from "react";
 import type { RideAnalysisViewState } from "../../activity-analysis/controller";
 import { Button } from "../../components/ui/button";
+import { formatCivilDate, formatOffsetWallTime } from "../../lib/date";
 import {
-  formatDateLabel,
   formatDistance,
   formatRidingDuration,
   formatWholeNumber,
@@ -46,17 +46,14 @@ function rideDistance(ride: TrainingHistoryRide, units: UnitsPreference): string
 }
 
 export function trainingRideTime(ride: TrainingHistoryRide): string | null {
-  if (ride.timezoneOffsetSeconds === null) return null;
-  const milliseconds = (ride.startEpochSeconds + ride.timezoneOffsetSeconds) * 1_000;
-  const date = new Date(milliseconds);
-  return Number.isFinite(date.getTime()) ? date.toISOString().slice(11, 16) : null;
+  return formatOffsetWallTime(ride.startEpochSeconds, ride.timezoneOffsetSeconds);
 }
 
 export function trainingRideDateTime(ride: TrainingHistoryRide): string {
   const time = trainingRideTime(ride);
   return time === null
-    ? formatDateLabel(ride.localDate)
-    : `${formatDateLabel(ride.localDate)} · ${time}`;
+    ? formatCivilDate(ride.localDate)
+    : `${formatCivilDate(ride.localDate)} · ${time}`;
 }
 
 function RideSummary(props: {

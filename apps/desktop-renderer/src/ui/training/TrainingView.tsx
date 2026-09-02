@@ -15,14 +15,13 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "../../components/ui/button";
+import { formatCivilDate } from "../../lib/date";
 import { rideImportStatusCopy } from "../../ride-import";
 import { rideImportStatusSuppressed } from "../../state/onboarding-slice";
 import { useEnduragentStore } from "../../state/store";
 import {
-  formatDateLabel,
   formatDistance,
   formatRidingDuration,
-  formatShortDateLabel,
   formatWholeNumber,
 } from "../../training-context/format";
 import { Page } from "../shared/Page";
@@ -68,10 +67,10 @@ function dataWarning(
   const through = coverageDate(history);
   if (history.displayMode === "last-recorded" && through !== null) {
     return history.coverage.kind === "incomplete"
-      ? `Training may be out of date, and some rides may be missing. Showing recorded rides through ${formatDateLabel(
+      ? `Training may be out of date, and some rides may be missing. Showing recorded rides through ${formatCivilDate(
           through,
         )}.`
-      : `Training may be out of date. Showing recorded rides through ${formatDateLabel(through)}.`;
+      : `Training may be out of date. Showing recorded rides through ${formatCivilDate(through)}.`;
   }
   if (week.coverage.kind === "complete") return null;
   if (week.coverage.reason === "coverage-lag") return TRAINING_HISTORY_COPY.coverageLag;
@@ -124,7 +123,9 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
               className={styles.trendBar}
               style={{ height: `${(bucket.ridingSeconds / maximum) * 100}%` }}
             />
-            <span className={styles.trendLabel}>{formatShortDateLabel(bucket.window.start)}</span>
+            <span className={styles.trendLabel}>
+              {formatCivilDate(bucket.window.start, { day: "numeric", month: "numeric" })}
+            </span>
           </span>
         ))}
       </div>
@@ -141,7 +142,7 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
           {trend.buckets.map((bucket) => (
             <tr key={bucket.window.start}>
               <th scope="row">
-                {formatDateLabel(bucket.window.start)} to {formatDateLabel(bucket.window.end)}
+                {formatCivilDate(bucket.window.start)} to {formatCivilDate(bucket.window.end)}
               </th>
               <td>{rideCountCopy(bucket.rideCount)}</td>
               <td>{formatRidingDuration(bucket.ridingSeconds)}</td>
@@ -173,7 +174,7 @@ function WeeklySummary(props: {
         <h2 id="weekly-summary-title">Weekly summary</h2>
         {recordedThrough === null ? null : (
           <p>
-            {TRAINING_HISTORY_COPY.coverage} {formatDateLabel(recordedThrough)}
+            {TRAINING_HISTORY_COPY.coverage} {formatCivilDate(recordedThrough)}
           </p>
         )}
       </div>
@@ -213,7 +214,7 @@ function WeeklySummary(props: {
 function calloutReason(week: CompletedActivityWeek, rideId: string): string | null {
   const callout = week.callout;
   if (callout === null || callout.rideId !== rideId) return null;
-  return `Longest recorded ride in the 28 days ending ${formatDateLabel(callout.window.end)}`;
+  return `Longest recorded ride in the 28 days ending ${formatCivilDate(callout.window.end)}`;
 }
 
 function RideRow(props: {

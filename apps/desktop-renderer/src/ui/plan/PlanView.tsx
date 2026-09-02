@@ -47,6 +47,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog";
+import { formatCivilDate } from "../../lib/date";
 import { planReadModel } from "../../state/plan-slice";
 import { useEnduragentStore } from "../../state/store";
 import { CoachDecisionPanel } from "../chat/CoachDecisionPanel";
@@ -103,14 +104,6 @@ function civilDays(start: string, end: string): number {
 
 function weekdayIndex(value: string): number {
   return civilDate(value).getUTCDay();
-}
-
-function formatCivilDate(value: string, options?: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat(undefined, {
-    timeZone: "UTC",
-    dateStyle: options === undefined ? "medium" : undefined,
-    ...options,
-  }).format(civilDate(value));
 }
 
 function plannedTime(durationS: number): string {

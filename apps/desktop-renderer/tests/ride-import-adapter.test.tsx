@@ -14,6 +14,7 @@ import { useEnduragentStore } from "../src/state/store";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
 import { TrainingView } from "../src/ui/training/TrainingView";
+import { pinDefaultLocale } from "./intl";
 
 const PATHS = ["/rides/tuesday.fit"] as const;
 
@@ -74,6 +75,7 @@ function status(): HTMLElement {
 }
 
 beforeEach(() => {
+  pinDefaultLocale("en-US");
   useEnduragentStore.setState({
     activeView: "training",
     training: EMPTY_TRAINING_SURFACE,
@@ -86,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   useEnduragentStore.setState({
     activeView: "chat",
     rideImport: IDLE_RIDE_IMPORT,
@@ -214,7 +217,7 @@ describe("resident ride import glue", () => {
     expect(screen.queryByText("Training history is not available yet.")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "Open ride review: Road ride, 1998-07-09 · 16:00",
+        name: "Open ride review: Road ride, Jul 9, 1998 · 4:00 PM",
       }),
     ).toBeInTheDocument();
   });

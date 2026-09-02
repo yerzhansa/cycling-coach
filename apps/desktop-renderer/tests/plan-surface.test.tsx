@@ -8,6 +8,7 @@ import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
 import { useEnduragentStore } from "../src/state/store";
 import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller";
 import { PlanView } from "../src/ui/plan/PlanView";
+import { pinDefaultLocale } from "./intl";
 import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures";
 
 function actions(): PlanActions {
@@ -118,6 +119,7 @@ function activePlanState(
 }
 
 beforeEach(() => {
+  pinDefaultLocale("en-US");
   useEnduragentStore.setState({
     plan: EMPTY_PLAN_SURFACE,
     planActions: actions(),
