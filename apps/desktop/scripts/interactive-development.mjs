@@ -9,6 +9,7 @@ const canonicalDesktopRoot = resolve(scriptDirectory, "..");
 const SCRATCH_PREFIX = "enduragent-desktop-development-";
 export const DESKTOP_INSPECTION_FIXTURE_ENV = "ENDURAGENT_DESKTOP_INSPECTION_FIXTURE";
 export const PLAN_CURRENT_INSPECTION_FIXTURE = "plan-current";
+export const TRAINING_CURRENT_INSPECTION_FIXTURE = "training-current";
 
 export function selectInteractiveDevelopmentTemporaryRoot(platform, configuredRoot) {
   return configuredRoot ?? (platform === "darwin" ? "/tmp" : tmpdir());
@@ -36,10 +37,14 @@ export function createInteractiveDevelopmentPlan(input) {
   const userData = join(scratchRoot, "electron-user-data");
   const environment = { ...input.environment };
   const inspectionFixture = environment[DESKTOP_INSPECTION_FIXTURE_ENV];
-  if (inspectionFixture !== undefined && inspectionFixture !== PLAN_CURRENT_INSPECTION_FIXTURE) {
+  if (
+    inspectionFixture !== undefined &&
+    inspectionFixture !== PLAN_CURRENT_INSPECTION_FIXTURE &&
+    inspectionFixture !== TRAINING_CURRENT_INSPECTION_FIXTURE
+  ) {
     throw new TypeError("unknown desktop inspection fixture");
   }
-  if (inspectionFixture === PLAN_CURRENT_INSPECTION_FIXTURE) {
+  if (inspectionFixture !== undefined) {
     delete environment.PLAN_QA_SCENARIO;
     delete environment.PLAN_QA_OUTCOME;
   }
@@ -58,7 +63,7 @@ export function createInteractiveDevelopmentPlan(input) {
       nodeExecutable,
       packageManagerScript,
       "exec",
-      ...(inspectionFixture === PLAN_CURRENT_INSPECTION_FIXTURE
+      ...(inspectionFixture !== undefined
         ? ["tsx", "tests/helpers/plan-inspection-live.ts"]
         : ["electron-vite", "dev"]),
     ]),

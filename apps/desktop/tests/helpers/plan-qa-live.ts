@@ -2,11 +2,13 @@ import type { DesktopFixtureScript, RunningDesktopFixture } from "./desktop-fixt
 import {
   PlanCoachProjectionDataSchema,
   PlanReadModelSchema,
+  type AthleteState,
   type PlanScenarioId,
 } from "@enduragent/coach-contract";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { launchDesktopFixture } from "./desktop-fixture.js";
+import { PLAN_QA_ATHLETE_STATE } from "./inspection-athlete-states.js";
 import {
   planQaOutcomeIsRejected,
   planQaScenario,
@@ -1338,6 +1340,7 @@ function qaOutcome(): PlanQaTransitionOutcome {
 
 export function createPlanQaFixtureScript(
   initialScenarioId: string = requestedScenario.id,
+  athleteState: AthleteState = PLAN_QA_ATHLETE_STATE,
 ): DesktopFixtureScript {
   let current = createPlanQaHydratedModel(initialScenarioId);
   let intakeStatus: "incomplete" | "ready" = "ready";
@@ -1540,34 +1543,7 @@ export function createPlanQaFixtureScript(
         });
       }
       if (request.method === "getAthleteState") {
-        return response({
-          schemaVersion: "1",
-          lastUpdated: "1998-08-22T08:00:00.000Z",
-          freshness: "fresh",
-          degraded: false,
-          lastSynced: "1998-08-22T07:55:00.000Z",
-          athleteProfile: {},
-          currentStatus: {},
-          derivedMetrics: {},
-          recentActivities: [],
-          plannedWorkouts: [],
-          wellness: {},
-          trainingContext: {
-            performanceProgress: { kind: "unavailable", reason: "not-synced" },
-            recentRides: {
-              kind: "computed",
-              asOf: "1998-08-22T08:00:00.000Z",
-              windowDays: 28,
-              items: [],
-            },
-            trainingHistory: { kind: "unavailable", reason: "not-synced" },
-            anchorZones: { kind: "unavailable", reason: "not-synced" },
-            cyclingLoad: { kind: "unavailable", reason: "not-synced" },
-            plan: { kind: "computed", asOf: "1998-08-22T08:00:00.000Z", items: [] },
-            adherence: { kind: "unavailable", reason: "not-synced" },
-            wellnessTrend: { kind: "unavailable", reason: "not-synced" },
-          },
-        });
+        return response(athleteState);
       }
       if (request.method === "getRuntimeConfig") {
         return response({
