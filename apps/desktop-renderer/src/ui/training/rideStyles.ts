@@ -8,7 +8,7 @@ export const rideStyles = {
   rideOverviewEyebrow: "m-0 text-xs font-semibold text-ink-3",
   elapsedFallback: "mt-2 text-xs leading-5 text-ink-3",
   keyStats:
-    "mt-7 [&>h2]:m-0 [&>h2]:text-lg [&>h2]:font-semibold [&>h2]:tracking-normal",
+    "mt-7 [&>h2]:m-0 [&>h2]:mb-row [&>h2]:text-lg [&>h2]:font-semibold [&>h2]:tracking-normal",
   recordedMetrics:
     "my-3.5 grid grid-cols-4 gap-3.5 border-y border-line py-3.5 max-[761px]:grid-cols-2 max-[520px]:grid-cols-1 [&>div]:min-w-0 [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:mt-1 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-sm [&_dd]:font-medium [&_dd]:tabular-nums",
   calloutReason:

@@ -394,7 +394,7 @@ function PeriodNavigation(props: {
       <Button
         type="button"
         variant="outline"
-        size="icon-sm"
+        size="icon-xs"
         className={styles.periodButton}
         aria-label={TRAINING_HISTORY_COPY.previous}
         disabled={
@@ -402,7 +402,7 @@ function PeriodNavigation(props: {
         }
         onClick={() => props.onChange("previous")}
       >
-        <ChevronLeft className="size-4" aria-hidden="true" />
+        <ChevronLeft aria-hidden="true" />
       </Button>
       <Button
         type="button"
@@ -418,13 +418,13 @@ function PeriodNavigation(props: {
       <Button
         type="button"
         variant="outline"
-        size="icon-sm"
+        size="icon-xs"
         className={styles.periodButton}
         aria-label={TRAINING_HISTORY_COPY.next}
         disabled={props.retained || props.period === "anchor"}
         onClick={() => props.onChange("anchor")}
       >
-        <ChevronRight className="size-4" aria-hidden="true" />
+        <ChevronRight aria-hidden="true" />
       </Button>
     </div>
   );

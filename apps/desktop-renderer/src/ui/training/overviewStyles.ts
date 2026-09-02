@@ -45,7 +45,7 @@ export const overviewStyles = {
   historyRideStats:
     "grid grid-cols-[repeat(2,auto)] gap-x-[18px] gap-y-1 text-right text-xs leading-4 text-ink-2 tabular-nums [&>strong]:font-medium [&>strong]:text-ink max-[761px]:col-start-2 max-[761px]:row-start-2 max-[761px]:justify-start max-[761px]:text-left",
   historyRideArrow:
-    "grid place-items-center text-base leading-6 text-ink-3 transition-transform group-hover/ride:translate-x-0.5 motion-reduce:transition-none max-[761px]:col-start-3 max-[761px]:row-span-2 max-[761px]:row-start-1",
+    "grid place-items-center text-base leading-4 text-ink-3 transition-transform group-hover/ride:translate-x-0.5 motion-reduce:transition-none max-[761px]:col-start-3 max-[761px]:row-span-2 max-[761px]:row-start-1",
   historyEmpty: "m-0 py-3.5 text-sm leading-5 text-ink-2",
   truncation: "mt-3 text-xs leading-5 text-ink-3",
   importStatus: "mt-7 border-t border-line pt-3.5 [&>h2]:m-0 [&>h2]:text-sm [&>h2]:font-semibold",

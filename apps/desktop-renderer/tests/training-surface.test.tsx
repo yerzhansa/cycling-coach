@@ -403,7 +403,12 @@ describe("training landing page", () => {
       name: "Previous week",
     });
     const next = within(group).getByRole("button", { name: "Next week" });
+    expect(group).toHaveClass("gap-inset");
     expect(within(group).getAllByRole("button")).toEqual([previous, current, next]);
+    expect(previous).toHaveClass("[&_svg:not([class*='size-'])]:size-3");
+    expect(next).toHaveClass("[&_svg:not([class*='size-'])]:size-3");
+    expect(previous.querySelector("svg")).not.toHaveClass("size-4");
+    expect(next.querySelector("svg")).not.toHaveClass("size-4");
     expect(current).toHaveAttribute("aria-pressed", "true");
     expect(previous).not.toHaveAttribute("aria-pressed");
     expect(previous).toBeEnabled();
@@ -587,7 +592,7 @@ describe("training landing page", () => {
       "whitespace-nowrap",
     );
     const arrow = firstRide.lastElementChild;
-    expect(arrow).toHaveClass("text-base", "leading-6", "text-ink-3");
+    expect(arrow).toHaveClass("text-base", "leading-4", "text-ink-3");
     const indoorRide = within(recent).getByRole("button", {
       name: "Open ride review: Indoor ride, Jul 8, 1998",
     });
@@ -739,16 +744,20 @@ describe("ride review", () => {
       "mt-[calc(var(--row-inset)+var(--inset))]",
       "gap-3.5",
       "pt-3.5",
+      "max-[520px]:grid-cols-1",
     );
+    expect(rideSummary).not.toHaveClass("max-[761px]:grid-cols-1");
     expect(overview.querySelectorAll("dl")).toHaveLength(1);
     expect(within(overview).getByText(/Longest recorded ride/u)).toBeInTheDocument();
 
     const keyStats = screen.getByRole("region", { name: "Key stats" });
     expect(keyStats).toHaveAttribute("data-parity", "ride-key-stats");
-    expect(within(keyStats).getByRole("heading", { level: 2, name: "Key stats" })).toHaveAttribute(
-      "id",
-      "key-stats-title",
-    );
+    const keyStatsHeading = within(keyStats).getByRole("heading", {
+      level: 2,
+      name: "Key stats",
+    });
+    expect(keyStatsHeading).toHaveAttribute("id", "key-stats-title");
+    expect(keyStats).toHaveClass("[&>h2]:mb-row");
     expect(overview.nextElementSibling).toBe(keyStats);
     const recordedMetrics = keyStats.querySelector("dl");
     expect(recordedMetrics).toHaveClass(
@@ -793,6 +802,8 @@ describe("ride review", () => {
     await openFirstRideAnalysis(user);
 
     const panel = screen.getByRole("region", { name: "Export ride" });
+    const formatLabel = within(panel).getByText("File format");
+    expect(formatLabel.parentElement).toHaveClass("[&_label]:font-semibold");
     await user.click(within(panel).getByRole("combobox", { name: "File format" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "FIT",
