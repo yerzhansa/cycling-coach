@@ -1276,7 +1276,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       view: "training",
       weeklySummary: "Weekly summary",
       recentRides: "Recent rides",
-      historyStatus: "Recorded through Jul 19, 2026",
+      historyStatus: "This week",
     });
     liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: thirdStreamDelta });
     const hiddenUpdate = await fixture.evaluate<{

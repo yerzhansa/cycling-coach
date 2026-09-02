@@ -780,7 +780,7 @@ describe("ride review", () => {
       "gap-3.5",
       "pt-3.5",
       "max-[520px]:grid-cols-1",
-      "[&_dd]:whitespace-nowrap",
+      "[&_dd]:[overflow-wrap:anywhere]",
     );
     expect(rideSummary).not.toHaveClass("max-[761px]:grid-cols-1");
     expect(overview.querySelectorAll("dl")).toHaveLength(1);

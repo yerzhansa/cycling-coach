@@ -70,5 +70,5 @@ export const rideStyles = {
   effortRank: "row-span-2 row-start-1 text-xs text-ink-3",
   rideEyebrow: "mb-2 text-xs font-medium text-ink-3",
   rideSummary:
-    "mt-[calc(var(--row-inset)+var(--inset))] grid grid-cols-3 gap-3.5 border-t border-line pt-3.5 max-[520px]:grid-cols-1 [&>div]:min-w-0 [&_dt]:mb-[5px] [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:m-0 [&_dd]:text-xs [&_dd]:leading-[1.45] [&_dd]:text-ink [&_dd]:whitespace-nowrap [&_dd]:tabular-nums",
+    "mt-[calc(var(--row-inset)+var(--inset))] grid grid-cols-3 gap-3.5 border-t border-line pt-3.5 max-[520px]:grid-cols-1 [&>div]:min-w-0 [&_dt]:mb-[5px] [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:m-0 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-xs [&_dd]:leading-[1.45] [&_dd]:text-ink [&_dd]:tabular-nums",
 } as const;
