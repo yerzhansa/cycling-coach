@@ -30,20 +30,22 @@ export const overviewStyles = {
   moreHistory: "mt-3.5 flex justify-center",
   moreHistoryButton: "border-line-2 bg-surface text-ink-2 hover:bg-surface-2 hover:text-ink",
   historyRideList: "m-0 list-none p-0",
-  historyRideItem:
-    "border-t border-line last:border-b data-[callout=true]:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
+  historyRideItem: "group/callout border-t border-line last:border-b",
   historyRideButton:
-    "group/ride relative grid min-h-[78px] w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_18px] items-center gap-3.5 bg-transparent px-inset py-row text-left text-ink outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--ink)_5%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink motion-reduce:transition-none max-[761px]:grid-cols-[minmax(0,1fr)_auto_18px] max-[520px]:gap-2.5",
+    "group/ride relative grid min-h-[78px] w-full min-w-0 grid-cols-[58px_minmax(0,1fr)_auto_18px] items-center gap-3.5 bg-transparent px-inset py-row text-left text-ink outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--ink)_5%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink group-data-[callout=true]/callout:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)] motion-reduce:transition-none max-[761px]:grid-cols-[46px_minmax(0,1fr)_18px] max-[761px]:gap-row",
+  historyRideDate:
+    "grid gap-0.5 text-center text-xs leading-4 text-ink-3 [&>strong]:text-lg [&>strong]:leading-7 [&>strong]:font-semibold [&>strong]:text-ink [&>strong]:tabular-nums",
   historyRideMain: "grid min-w-0 gap-1",
   historyRideTitle:
-    "flex min-w-0 flex-wrap items-center gap-inset [&>strong]:overflow-hidden [&>strong]:text-sm [&>strong]:font-semibold [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>span]:inline-flex [&>span]:min-h-5 [&>span]:items-center [&>span]:rounded-chip [&>span]:bg-brand-soft [&>span]:px-1.5 [&>span]:text-xs [&>span]:font-medium [&>span]:text-brand",
+    "flex min-w-0 flex-wrap items-center gap-inset [&>strong]:overflow-hidden [&>strong]:text-sm [&>strong]:leading-5 [&>strong]:font-semibold [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>span]:inline-flex [&>span]:min-h-5 [&>span]:items-center [&>span]:rounded-chip [&>span]:bg-brand-soft [&>span]:px-1.5 [&>span]:text-xs [&>span]:leading-4 [&>span]:font-medium [&>span]:text-brand",
+  historyRideMeta:
+    "overflow-hidden text-xs leading-4 text-ink-3 text-ellipsis whitespace-nowrap max-[761px]:hidden",
   historyRideReason:
-    "[overflow-wrap:anywhere] text-xs leading-4 font-medium whitespace-normal text-brand",
+    "overflow-hidden text-xs leading-4 font-medium text-brand text-ellipsis whitespace-nowrap",
   historyRideStats:
-    "grid min-w-[76px] gap-1 text-right text-xs leading-4 text-ink-2 tabular-nums max-[761px]:col-start-1 max-[761px]:row-start-2 max-[761px]:min-w-0 max-[761px]:grid-flow-col max-[761px]:justify-start max-[761px]:gap-3 max-[761px]:text-left",
-  historyRideLoad: "text-xs leading-4 text-ink-2 tabular-nums max-[761px]:hidden",
+    "grid grid-cols-[repeat(2,auto)] gap-x-[18px] gap-y-1 text-right text-xs leading-4 text-ink-2 tabular-nums [&>strong]:font-medium [&>strong]:text-ink max-[761px]:col-start-2 max-[761px]:row-start-2 max-[761px]:justify-start max-[761px]:text-left",
   historyRideArrow:
-    "text-sm text-ink-3 transition-transform group-hover/ride:translate-x-0.5 motion-reduce:transition-none max-[761px]:col-start-3 max-[761px]:row-span-2 max-[761px]:row-start-1",
+    "grid place-items-center text-base leading-6 text-ink-3 transition-transform group-hover/ride:translate-x-0.5 motion-reduce:transition-none max-[761px]:col-start-3 max-[761px]:row-span-2 max-[761px]:row-start-1",
   historyEmpty: "m-0 py-3.5 text-sm leading-5 text-ink-2",
   truncation: "mt-3 text-xs leading-5 text-ink-3",
   importStatus: "mt-7 border-t border-line pt-3.5 [&>h2]:m-0 [&>h2]:text-sm [&>h2]:font-semibold",

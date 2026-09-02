@@ -230,6 +230,12 @@ function calloutReason(week: CompletedActivityWeek, rideId: string): string | nu
   return `Longest recorded ride in the 28 days ending ${formatCivilDate(callout.window.end)}`;
 }
 
+function historyRideMeta(ride: TrainingHistoryRide, units: UnitsPreference): string {
+  if (ride.distanceMeters === null) return trainingRideDateTime(ride);
+  const kind = trainingRideKind(ride).replace(/ ride$/u, "");
+  return `${kind} · ${formatDistance(ride.distanceMeters, units)}`;
+}
+
 function RideRow(props: {
   readonly ride: TrainingHistoryRide;
   readonly reason: string | null;
@@ -239,6 +245,8 @@ function RideRow(props: {
 }): ReactElement {
   const title = props.ride.title ?? trainingRideKind(props.ride);
   const dateTime = trainingRideDateTime(props.ride);
+  const weekday = formatCivilDate(props.ride.localDate, { weekday: "short" });
+  const day = formatCivilDate(props.ride.localDate, { day: "numeric" });
   return (
     <li
       className={styles.historyRideItem}
@@ -251,27 +259,34 @@ function RideRow(props: {
         aria-label={`Open ride review: ${title}, ${dateTime}`}
         onClick={props.onOpen}
       >
+        <time
+          className={styles.historyRideDate}
+          data-parity="ride-day"
+          dateTime={props.ride.localDate}
+        >
+          <span>{weekday}</span>
+          <strong>{day}</strong>
+        </time>
         <span className={styles.historyRideMain}>
           <span className={styles.historyRideTitle}>
             <strong>{title}</strong>
             {props.reason === null ? null : <span>Worth a look</span>}
           </span>
-          <time dateTime={props.ride.localDate}>{dateTime}</time>
+          <span className={styles.historyRideMeta} data-parity="ride-meta">
+            {historyRideMeta(props.ride, props.units)}
+          </span>
           {props.reason === null ? null : (
             <span className={styles.historyRideReason}>{props.reason}</span>
           )}
         </span>
-        <span className={styles.historyRideStats}>
+        <span className={styles.historyRideStats} data-parity="ride-stats">
           {props.ride.ridingSeconds === null ? null : (
-            <span>{formatRidingDuration(props.ride.ridingSeconds)}</span>
+            <strong>{formatRidingDuration(props.ride.ridingSeconds)}</strong>
           )}
-          {props.ride.distanceMeters === null ? null : (
-            <span>{formatDistance(props.ride.distanceMeters, props.units)}</span>
+          {props.ride.load === null ? null : (
+            <span>Load {formatWholeNumber(props.ride.load)}</span>
           )}
         </span>
-        {props.ride.load === null ? null : (
-          <span className={styles.historyRideLoad}>Load {formatWholeNumber(props.ride.load)}</span>
-        )}
         <span className={styles.historyRideArrow} aria-hidden="true">
           →
         </span>
