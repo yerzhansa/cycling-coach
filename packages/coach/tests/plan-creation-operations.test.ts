@@ -192,7 +192,11 @@ const questionKind = (result: PlanCreationCardModel): string | null =>
 describe("Plan Creation operations", () => {
   it("asks every Event Goal question in flow order and becomes ready", async () => {
     const test = harness();
-    expect(questionKind(projectPlanCreationCard(test.current(), { today }))).toBe("goal-question");
+    expect(projectPlanCreationCard(test.current(), { today }).openQuestion).toMatchObject({
+      kind: "goal-question",
+      step: { current: 1, total: 9 },
+      authoredOption: { detail: "Answer in your own words." },
+    });
     const answers = [
       eventGoal,
       fixedMode,
@@ -217,6 +221,7 @@ describe("Plan Creation operations", () => {
       const model = await answered(test.submit(answer));
       expect(questionKind(model)).toBe(expectedQuestions[index]);
       expect(model.readiness).toBe(index === answers.length - 1 ? "ready" : "incomplete");
+      if (index === 0) expect(model.openQuestion?.step.total).toBe(8);
     }
     expect(test.current().answers.map((row) => row.answerKey)).not.toContain("plan-length");
     expect(await test.host.readCard()).toMatchObject({
@@ -330,6 +335,11 @@ describe("Plan Creation operations", () => {
         expect(model.openQuestion).toMatchObject({
           mode: "flexible",
           derivedPoolNote: expect.stringContaining("3 Workouts up to 6 h"),
+          weeklyHoursOptions: [
+            { detail: "Up to about six hours of riding a week." },
+            { detail: "Up to about eight hours of riding a week." },
+            { detail: "About nine hours or more of riding a week." },
+          ],
         });
       }
     }
@@ -523,6 +533,31 @@ describe("Plan Creation operations", () => {
       },
     });
     expect(test.recordAnswer).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a Training Restriction end date before the host civil date", async () => {
+    const priorAnswers = [
+      eventGoal,
+      fixedMode,
+      fixedAvailability,
+      startTiming,
+      noCommitments,
+      regularBaseline,
+      eventSuccess,
+    ];
+    const test = harness(snapshot(priorAnswers.map((answer, index) => stored(index + 1, answer))));
+
+    await expect(
+      test.submit({
+        kind: "restriction",
+        restriction: { kind: "no-hard-training", endDate: "1998-09-01" },
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      reason: "invalid-answer",
+      planCreation: { version: 8, openQuestion: { kind: "restriction-question" } },
+    });
+    expect(test.recordAnswer).not.toHaveBeenCalled();
   });
 
   it("replays an identical answer result without appending another row", async () => {

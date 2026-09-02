@@ -1021,6 +1021,7 @@ export function createChatController(input: {
   };
 
   const installPlanCreation = (next: PlanCreationCardModel | null): void => {
+    const previous = planCreation;
     let installed = false;
     if (next === null) {
       planCreation = null;
@@ -1034,6 +1035,16 @@ export function createChatController(input: {
       installed = true;
     }
     if (installed) {
+      const modelIdentityChanged =
+        previous?.creationId !== planCreation?.creationId ||
+        previous?.version !== planCreation?.version;
+      const editedAnswerRemoved =
+        planCreationEditingKey !== null &&
+        planCreation?.answeredSummaries.some(
+          (summary) => summary.answerKey === planCreationEditingKey,
+        ) !== true;
+      const resetInteraction = modelIdentityChanged || editedAnswerRemoved;
+      if (!resetInteraction) return;
       planCreationEditingKey = null;
       planCreationEditReturnPaused = false;
       const pausedIdentity = readPlanCreationPause();

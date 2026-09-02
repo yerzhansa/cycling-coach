@@ -24,8 +24,8 @@ const PlanCreationPlanLengthWeeksSchema = z.union([
   z.literal(16),
 ]);
 const PlanCreationWeekdaySchema = z.number().int().min(1).max(7);
-const PlanCreationWeeklyHoursLimitSchema = z.number().positive();
-const PlanCreationLongestWorkoutHoursSchema = z.number().positive();
+const PlanCreationWeeklyHoursLimitSchema = z.number().positive().max(168);
+const PlanCreationLongestWorkoutHoursSchema = z.number().positive().max(24);
 const completeOptionSet = <T extends string | number>(
   values: readonly T[],
   expected: readonly T[],

@@ -211,7 +211,7 @@ export function Composer(props: {
   return (
     <form
       ref={form}
-      className="composer relative"
+      className="composer relative grid gap-[calc(var(--inset)*0.75)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2 transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20"
       data-parity="composer"
       data-chat-attachment-dropzone={
         props.surface === undefined && !inputDisabled && canChat ? "true" : undefined
@@ -237,13 +237,13 @@ export function Composer(props: {
       <label className="sr-only" htmlFor={inputId}>
         {props.surface?.label ?? "Message your coach"}
       </label>
-      <div className="chat-composer__controls grid grid-rows-[minmax(var(--ctl-h-lg),auto)_var(--ctl-h-lg)] gap-[calc(var(--inset)/2)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2 transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
+      <div className="chat-composer__controls grid grid-rows-[minmax(var(--ctl-h-lg),auto)_var(--ctl-h-lg)] gap-[calc(var(--inset)/2)]">
         <textarea
           id={inputId}
           ref={textarea}
           data-parity="composer.textarea"
           defaultValue={props.draftMemory?.current ?? ""}
-          className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[3px] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
+          className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[calc(var(--inset)*0.75)] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
           rows={2}
           placeholder={
             status === "streaming"

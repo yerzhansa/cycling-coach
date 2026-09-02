@@ -84,8 +84,40 @@ function composer(): HTMLTextAreaElement {
 
 type QuestionFixture = {
   readonly kind: PlanCreationOpenQuestion["kind"];
+  readonly prompt: string;
   readonly [key: string]: unknown;
 };
+
+type PlanLengthQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "plan-length-question" }
+>;
+type GoalQuestion = Extract<PlanCreationOpenQuestion, { readonly kind: "goal-question" }>;
+type SuccessQuestion = Extract<PlanCreationOpenQuestion, { readonly kind: "success-question" }>;
+type StartTimingQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "start-timing-question" }
+>;
+type AvailabilityQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "availability-question" }
+>;
+type CommitmentsQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "commitments-question" }
+>;
+type ScheduleModeQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "schedule-mode-question" }
+>;
+type BaselineQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "baseline-question" }
+>;
+type RestrictionQuestion = Extract<
+  PlanCreationOpenQuestion,
+  { readonly kind: "restriction-question" }
+>;
 
 const fixtureStep = { current: 1, total: 9 } as const;
 const fixtureAuthoredOption = {
@@ -98,9 +130,10 @@ const fixtureAuthoredOption = {
 function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
   const shared = { step: fixtureStep, ...question };
   if (question.kind === "goal-question") {
-    return {
+    const completed: GoalQuestion = {
       ...shared,
       kind: "goal-question",
+      candidates: question.candidates as GoalQuestion["candidates"],
       eventNotListedOption: {
         label: "Event not listed",
         detail: "Tell me the event name and its exact date.",
@@ -114,7 +147,8 @@ function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
         detail: "Build fitness for a fixed number of weeks.",
       },
       authoredOption: fixtureAuthoredOption,
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "success-question") {
     const input = question.input as {
@@ -122,30 +156,39 @@ function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
       readonly options?: readonly Record<string, unknown>[];
       readonly placeholder?: string;
     };
-    return {
+    const completed: SuccessQuestion = {
       ...shared,
       kind: "success-question",
       input:
         input.kind === "authored" || input.kind === "fitness-choice"
           ? {
               kind: "fitness-choice",
-              options: input.options ?? [
-                {
-                  choice: "train-consistently",
-                  label: "Train consistently",
-                  detail: "Repeat most planned weeks.",
-                },
-                {
-                  choice: "climb-stronger",
-                  label: "Climb stronger",
-                  detail: "Hold steady on longer climbs.",
-                },
-                {
-                  choice: "ride-farther",
-                  label: "Ride farther comfortably",
-                  detail: "Finish longer rides comfortably.",
-                },
-              ],
+              options: (
+                input.options ?? [
+                  {
+                    choice: "train-consistently",
+                    label: "Train consistently",
+                    detail: "Repeat most planned weeks.",
+                  },
+                  {
+                    choice: "climb-stronger",
+                    label: "Climb stronger",
+                    detail: "Hold steady on longer climbs.",
+                  },
+                  {
+                    choice: "ride-farther",
+                    label: "Ride farther comfortably",
+                    detail: "Finish longer rides comfortably.",
+                  },
+                ]
+              ).map((option) => ({
+                choice: option.choice as
+                  | "train-consistently"
+                  | "climb-stronger"
+                  | "ride-farther",
+                label: String(option.label),
+                detail: String(option.detail ?? "Choose this Fitness outcome."),
+              })),
               authored: {
                 label: fixtureAuthoredOption.label,
                 detail: fixtureAuthoredOption.detail,
@@ -156,29 +199,41 @@ function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
           : {
               kind: "event-finish",
               options: (input.options ?? []).map((option) => ({
-                ...option,
-                detail: option.detail ?? option.description ?? "Choose this event outcome.",
-                description: undefined,
+                choice: option.choice as "finish-comfortably" | "finish-fast" | "race-for-result",
+                label: String(option.label),
+                detail: String(
+                  option.detail ?? option.description ?? "Choose this event outcome.",
+                ),
               })),
               authored: fixtureAuthoredOption,
             },
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "plan-length-question") {
-    return {
+    const options = question.options as readonly (Omit<
+      PlanLengthQuestion["options"][number],
+      "detail"
+    > & {
+      readonly detail?: string;
+      readonly description?: string;
+    })[];
+    const completed: PlanLengthQuestion = {
       ...shared,
       kind: "plan-length-question",
-      options: (question.options as readonly Record<string, unknown>[]).map((option) => ({
-        ...option,
+      options: options.map((option) => ({
+        weeks: option.weeks,
+        label: option.label,
         detail: option.detail ?? option.description ?? "Choose this Plan length.",
-        description: undefined,
       })),
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "start-timing-question") {
-    return {
+    const completed: StartTimingQuestion = {
       ...shared,
       kind: "start-timing-question",
+      earliestAllowed: String(question.earliestAllowed),
       options: [
         {
           timing: "as-soon-as-possible",
@@ -188,10 +243,11 @@ function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
         { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
       ],
       dateLabel: "Earliest start date",
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "commitments-question") {
-    return {
+    const completed: CommitmentsQuestion = {
       ...shared,
       kind: "commitments-question",
       noneOption: { label: "Nothing fixed", detail: "There is nothing fixed to add." },
@@ -203,23 +259,33 @@ function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
             ? question.placeholder
             : fixtureAuthoredOption.placeholder,
       },
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "schedule-mode-question") {
-    return {
+    const options = question.options as readonly (Omit<
+      ScheduleModeQuestion["options"][number],
+      "detail"
+    > & {
+      readonly detail?: string;
+      readonly description?: string;
+    })[];
+    const completed: ScheduleModeQuestion = {
       ...shared,
       kind: "schedule-mode-question",
-      options: (question.options as readonly Record<string, unknown>[]).map((option) => ({
-        ...option,
+      options: options.map((option) => ({
+        mode: option.mode,
+        label: option.label,
         detail: option.detail ?? option.description ?? "Choose this Schedule mode.",
-        description: undefined,
       })),
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "availability-question") {
-    return {
+    const completed: AvailabilityQuestion = {
       ...shared,
       kind: "availability-question",
+      mode: question.mode as AvailabilityQuestion["mode"],
       weeklyHoursOptions: [
         { id: "hours-6", weeklyHoursLimit: 6, label: "5–6 hours", detail: "Usual volume." },
         { id: "hours-8", weeklyHoursLimit: 8, label: "7–8 hours", detail: "A small step." },
@@ -235,31 +301,49 @@ function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
         { weekday: 6, label: "Sat" },
         { weekday: 7, label: "Sun" },
       ],
-    } as PlanCreationOpenQuestion;
+      derivedPoolNote: String(question.derivedPoolNote),
+    };
+    return completed;
   }
   if (question.kind === "baseline-question") {
-    return {
+    const options = question.options as readonly (Omit<
+      BaselineQuestion["options"][number],
+      "detail"
+    > & {
+      readonly detail?: string;
+      readonly description?: string;
+    })[];
+    const completed: BaselineQuestion = {
       ...shared,
       kind: "baseline-question",
-      options: (question.options as readonly Record<string, unknown>[]).map((option) => ({
-        ...option,
+      options: options.map((option) => ({
+        baseline: option.baseline,
+        label: option.label,
         detail: option.detail ?? option.description ?? "Choose this training baseline.",
-        description: undefined,
       })),
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
   if (question.kind === "restriction-question") {
-    return {
+    const options = question.options as readonly (Omit<
+      RestrictionQuestion["options"][number],
+      "detail"
+    > & {
+      readonly detail?: string;
+      readonly description?: string;
+    })[];
+    const completed: RestrictionQuestion = {
       ...shared,
       kind: "restriction-question",
-      options: (question.options as readonly Record<string, unknown>[]).map((option) => ({
-        ...option,
+      options: options.map((option) => ({
+        kind: option.kind,
+        label: option.label,
         detail: option.detail ?? option.description ?? "Choose this operational restriction.",
-        description: undefined,
       })),
-    } as PlanCreationOpenQuestion;
+    };
+    return completed;
   }
-  return shared as PlanCreationOpenQuestion;
+  throw new TypeError(`Unsupported question fixture: ${question.kind}`);
 }
 
 function planCreationModel(
@@ -2512,6 +2596,47 @@ describe("chat surface", () => {
       expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     });
 
+    it("restores focus to Event not listed when backing out of an edited manual Event Goal", async () => {
+      const user = userEvent.setup();
+      const model = planCreationModel(null, {
+        version: 10,
+        readiness: "ready",
+        answeredSummaries: [
+          {
+            answerKey: "goal",
+            title: "Goal",
+            detail: "Highland Tour · 1998-10-18",
+            question: {
+              kind: "goal-question",
+              prompt: "What do you want this Plan to prepare you for?",
+              candidates: [],
+            },
+            answer: {
+              kind: "goal",
+              goal: { kind: "event-manual", name: "Highland Tour", date: "1998-10-18" },
+            },
+          },
+        ],
+      });
+      vi.mocked(actions.editPlanCreation).mockImplementation((answerKey) => {
+        setChat({ planCreationEditingKey: answerKey, planCreationFocusRevision: 1 });
+      });
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+      render(<Harness />);
+
+      await user.click(screen.getByRole("button", { name: "Edit Goal" }));
+      expect(screen.getByRole("textbox", { name: "Event name" })).toHaveValue("Highland Tour");
+      await user.click(screen.getByRole("button", { name: "Back" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Event not listed" })).toHaveFocus(),
+      );
+    });
+
     it("keeps a rejected Edit Card visible with its host answer and error", () => {
       const model = planCreationModel(null, {
         version: 4,
@@ -2678,6 +2803,12 @@ describe("chat surface", () => {
         sendDisabled: true,
       });
       render(<Harness />);
+
+      const outsideCard = screen.getByRole("button", { name: "Hide training context" });
+      outsideCard.focus();
+      await user.keyboard("{Escape}");
+      expect(actions.pausePlanCreation).not.toHaveBeenCalled();
+      expect(screen.getByRole("heading", { name: model.openQuestion?.prompt })).toBeVisible();
 
       await user.click(screen.getByRole("button", { name: "Later" }));
       expect(actions.pausePlanCreation).toHaveBeenCalledOnce();
@@ -2867,11 +2998,9 @@ describe("chat surface", () => {
       );
       expect(screen.getByText("Build steady power")).toBeVisible();
       expect(screen.getByText("Goal · your answer", { exact: true })).toBeVisible();
-      expect(
-        screen.getByText(
-          "1 of 9 answered · your active Plan keeps running until you activate the new one.",
-        ),
-      ).toBeVisible();
+      expect(screen.getByText("1 of 9 answered.")).toBeVisible();
+      const answerRow = screen.getByRole("listitem", { name: "Goal answer" });
+      expect(answerRow).not.toHaveAttribute("role", "status");
       expect(composer()).toBeDisabled();
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
       await userEvent.click(screen.getByRole("button", { name: "Something else" }));
@@ -2918,11 +3047,7 @@ describe("chat surface", () => {
         timeline: [{ kind: "plan-creation", model: complete }],
       });
       expect(screen.queryByRole("heading", { name: "What would success mean?" })).toBeNull();
-      expect(
-        screen.getByText(
-          "2 of 9 answered · your active Plan keeps running until you activate the new one.",
-        ),
-      ).toBeVisible();
+      expect(screen.getByText("2 of 9 answered.")).toBeVisible();
       expect(
         screen.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
       ).toBeVisible();

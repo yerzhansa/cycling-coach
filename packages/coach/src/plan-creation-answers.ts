@@ -356,7 +356,10 @@ function questionForKey(
   context: PlanCreationProjectionContext,
   key: PlanCreationAnswerKey,
 ): PlanCreationOpenQuestion {
-  const step = { current: flow.order.indexOf(key) + 1, total: flow.order.length };
+  const step = {
+    current: flow.order.indexOf(key) + 1,
+    total: flow.order.length === 1 ? 9 : flow.order.length,
+  };
   switch (key) {
     case "goal":
       return {
@@ -378,7 +381,7 @@ function questionForKey(
         },
         authoredOption: {
           label: "Something else",
-          detail: "Tell me the event name and its exact date.",
+          detail: "Answer in your own words.",
           editorLabel: "Name the event and include its exact date.",
           placeholder: "Event name",
         },
@@ -510,19 +513,19 @@ function questionForKey(
             id: "hours-6",
             weeklyHoursLimit: 6,
             label: "5–6 hours",
-            detail: "Roughly your last four weeks.",
+            detail: "Up to about six hours of riding a week.",
           },
           {
             id: "hours-8",
             weeklyHoursLimit: 8,
             label: "7–8 hours",
-            detail: "A small, sustainable step up · from your last 4 weeks.",
+            detail: "Up to about eight hours of riding a week.",
           },
           {
             id: "hours-10",
             weeklyHoursLimit: 10,
             label: "9+ hours",
-            detail: "Only if your schedule truly allows it.",
+            detail: "About nine hours or more of riding a week.",
           },
         ],
         longestWorkoutLabel: "Longest ride in hours",
@@ -663,6 +666,11 @@ export function validPlanCreationAnswer(
   if (answer.kind === "availability") {
     const scheduleMode = flow.valid.get("schedule-mode")?.answer;
     return scheduleMode?.kind === "schedule-mode" && answer.mode === scheduleMode.mode;
+  }
+  if (answer.kind === "restriction") {
+    return answer.restriction.kind === "none" || answer.restriction.endDate === undefined
+      ? true
+      : answer.restriction.endDate >= today;
   }
   return true;
 }

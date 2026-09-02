@@ -399,6 +399,43 @@ describe("Plan Creation contract", () => {
     }
   });
 
+  it("bounds weekly and longest-Workout hours", () => {
+    expect(
+      PlanCreationAnswerInputSchema.safeParse({
+        kind: "availability",
+        mode: "flexible",
+        weeklyHoursLimit: 168,
+        longestWorkoutHours: 24,
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanCreationAnswerInputSchema.safeParse({
+        kind: "restriction",
+        restriction: { kind: "max-duration", hours: 24 },
+      }).success,
+    ).toBe(true);
+    for (const answer of [
+      {
+        kind: "availability",
+        mode: "flexible",
+        weeklyHoursLimit: 168.1,
+        longestWorkoutHours: 24,
+      },
+      {
+        kind: "availability",
+        mode: "flexible",
+        weeklyHoursLimit: 168,
+        longestWorkoutHours: 24.1,
+      },
+      {
+        kind: "restriction",
+        restriction: { kind: "max-duration", hours: 24.1 },
+      },
+    ]) {
+      expect(PlanCreationAnswerInputSchema.safeParse(answer).success).toBe(false);
+    }
+  });
+
   it("keeps Training Restriction input free of athlete-authored medical text", () => {
     const answer = PlanCreationAnswerInputSchema.parse({
       kind: "restriction",

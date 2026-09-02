@@ -2085,6 +2085,33 @@ describe("chat controller", () => {
     });
   });
 
+  it("preserves Edit and focus state when an identical Plan Creation model is restored", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [], planCreation: ready }));
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    const focusRevision = controls.at(-1)?.planCreation?.focusRevision;
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: ready,
+      paused: false,
+      editingKey: "plan-length",
+      focusRevision,
+    });
+  });
+
   it("keeps a rejected Edit open with its error and current answer", async () => {
     const ready: PlanCreationCardModel = {
       creationId: "01J00000000000000000000000",

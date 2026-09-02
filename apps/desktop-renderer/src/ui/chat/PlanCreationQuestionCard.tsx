@@ -13,7 +13,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 
 const fieldClass =
-  "min-h-[var(--ctl-h-lg)] rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20";
+  "min-h-[var(--ctl-h-lg)] rounded-ctl border border-line-2 bg-sunk px-ctl-px-sm py-2 text-sm font-normal leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20";
 const choiceClass =
   "grid min-h-[calc(var(--ctl-h-lg)+var(--row-inset))] w-full grid-cols-[var(--ctl-h-sm)_minmax(0,1fr)_20px] items-center gap-2 rounded-ctl border-0 bg-transparent px-2 py-1.5 text-left text-ink hover:bg-ink/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50";
 
@@ -77,7 +77,10 @@ function ChoiceList(props: {
   readonly children: ReactElement | readonly ReactElement[];
 }): ReactElement {
   return (
-    <div className="grid gap-1 p-2" data-parity="choice.list">
+    <div
+      className="grid gap-inset px-inset pt-inset pb-[calc(var(--inset)/2)]"
+      data-parity="choice.list"
+    >
       {props.children}
     </div>
   );
@@ -104,10 +107,7 @@ function CustomActions(props: {
   readonly onBack: () => void;
 }): ReactElement {
   return (
-    <div
-      className="flex justify-end gap-inset pt-[calc(var(--inset)/2)]"
-      data-parity="custom.actions"
-    >
+    <div className="flex justify-end gap-inset" data-parity="custom.actions">
       <Button type="button" variant="outline" disabled={props.busy} onClick={props.onBack}>
         Back
       </Button>
@@ -141,7 +141,6 @@ function GoalForm(props: QuestionFormProps): ReactElement {
   const [date, setDate] = useState(currentGoal?.kind === "event-manual" ? currentGoal.date : "");
   const [errors, setErrors] = useState<{ name?: string; date?: string }>({});
   const editor = useRef<HTMLInputElement>(null);
-  const restoreTrigger = useRef<HTMLButtonElement | null>(null);
   const eventNotListedTrigger = useRef<HTMLButtonElement>(null);
   const customTrigger = useRef<HTMLButtonElement>(null);
   const nameErrorId = useId();
@@ -152,9 +151,10 @@ function GoalForm(props: QuestionFormProps): ReactElement {
     return () => props.onEditorOpenChange(false);
   }, [manual, props.onEditorOpenChange]);
   const back = (): void => {
+    const trigger = manualSource === "custom" ? customTrigger : eventNotListedTrigger;
     setErrors({});
     setManualSource(null);
-    queueMicrotask(() => restoreTrigger.current?.focus());
+    queueMicrotask(() => trigger.current?.focus());
   };
   if (manual) {
     const editorCopy =
@@ -171,7 +171,7 @@ function GoalForm(props: QuestionFormProps): ReactElement {
     };
     return (
       <form
-        className="grid gap-inset px-4 py-4"
+        className="grid gap-inset pt-ctl-px pr-ctl-px-lg pb-ctl-px-lg pl-ctl-px-lg"
         data-parity="custom.editor"
         onSubmit={submit}
         onKeyDown={(event) => {
@@ -223,11 +223,7 @@ function GoalForm(props: QuestionFormProps): ReactElement {
   }
   const selectedCandidate =
     currentGoal?.kind === "event-candidate" ? currentGoal.candidateId : null;
-  const openManual = (
-    source: "event-not-listed" | "custom",
-    trigger: HTMLButtonElement | null,
-  ): void => {
-    restoreTrigger.current = trigger;
+  const openManual = (source: "event-not-listed" | "custom"): void => {
     setManualSource(source);
   };
   return (
@@ -260,7 +256,7 @@ function GoalForm(props: QuestionFormProps): ReactElement {
             detail={question.eventNotListedOption.detail}
             selected={currentGoal?.kind === "event-manual"}
             disabled={props.busy}
-            onClick={() => openManual("event-not-listed", eventNotListedTrigger.current)}
+            onClick={() => openManual("event-not-listed")}
           />,
           <ChoiceRow
             key="fitness"
@@ -280,7 +276,7 @@ function GoalForm(props: QuestionFormProps): ReactElement {
             detail={question.authoredOption.detail}
             custom
             disabled={props.busy}
-            onClick={() => openManual("custom", customTrigger.current)}
+            onClick={() => openManual("custom")}
           />,
         ]}
       </ChoiceList>
@@ -317,7 +313,7 @@ function SuccessForm(props: QuestionFormProps): ReactElement {
         : { ...question.input.authored, placeholder: question.input.placeholder };
     return (
       <form
-        className="grid gap-inset px-4 py-4"
+        className="grid gap-inset pt-ctl-px pr-ctl-px-lg pb-ctl-px-lg pl-ctl-px-lg"
         data-parity="custom.editor"
         onSubmit={(event) => {
           event.preventDefault();
@@ -396,8 +392,7 @@ function SuccessForm(props: QuestionFormProps): ReactElement {
             }
           />
         ));
-  const authoredOption =
-    question.input.kind === "event-finish" ? question.input.authored : question.input.authored;
+  const authoredOption = question.input.authored;
   return (
     <div>
       <ChoiceList>
@@ -707,7 +702,7 @@ function CommitmentsForm(props: QuestionFormProps): ReactElement {
   if (authored) {
     return (
       <form
-        className="grid gap-inset px-4 py-4"
+        className="grid gap-inset pt-ctl-px pr-ctl-px-lg pb-ctl-px-lg pl-ctl-px-lg"
         data-parity="custom.editor"
         onSubmit={(event) => {
           event.preventDefault();
@@ -978,32 +973,31 @@ export function PlanCreationQuestionCard(
   useEffect(() => {
     heading.current?.focus();
   }, [props.focusRevision, props.question.kind]);
-  useEffect(() => {
-    const later = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (document.querySelector('[role="dialog"]') !== null) return;
-      if (document.querySelector('[role="listbox"][aria-label="Commands"]') !== null) return;
-      event.preventDefault();
-      props.onLater();
-    };
-    document.addEventListener("keydown", later);
-    return () => document.removeEventListener("keydown", later);
-  }, [props.onLater]);
   return (
     <Card
-      className="min-w-0 overflow-hidden shadow-elev-2"
+      className="min-w-0 [gap:normal] overflow-hidden py-0 shadow-elev-2"
       data-parity="question.card"
       data-question={questionAnswerKey(props.question)}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        props.onLater();
+      }}
     >
-      <CardHeader className="border-b border-line">
+      <CardHeader className="gap-0 border-b border-line">
         <p
-          className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2"
+          className="mt-0 mr-0 mb-[calc(var(--inset)/2)] ml-0 text-xs font-semibold leading-4 text-ink-2"
           data-parity="question.eyebrow"
         >
           Plan creation · question {props.question.step.current} of {props.question.step.total}
         </p>
         <CardTitle>
-          <h2 ref={heading} tabIndex={-1} className="m-0 outline-none" data-parity="question.title">
+          <h2
+            ref={heading}
+            tabIndex={-1}
+            className="m-0 font-medium outline-none"
+            data-parity="question.title"
+          >
             {props.question.prompt}
           </h2>
         </CardTitle>
