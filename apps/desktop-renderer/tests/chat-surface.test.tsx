@@ -6,6 +6,8 @@ import type {
   AttachmentCapabilitiesReadModel,
   ChatAttachmentComposerReadModel,
   CoachDecisionReadModel,
+  PlanCreationCardModel,
+  PlanCreationOpenQuestion,
   PlanningRequestDelivery,
   PlanningRequestReadModel,
 } from "@enduragent/coach-contract";
@@ -43,6 +45,10 @@ function stubActions(): ChatActions {
     clearPlanningRequestFocus: vi.fn(),
     startPlanCreation: vi.fn(),
     answerPlanCreation: vi.fn(),
+    pausePlanCreation: vi.fn(),
+    continuePlanCreation: vi.fn(),
+    editPlanCreation: vi.fn(),
+    cancelPlanCreationEdit: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -74,6 +80,164 @@ function composer(): HTMLTextAreaElement {
   const element = document.querySelector("textarea#message");
   if (!(element instanceof HTMLTextAreaElement)) throw new TypeError("composer missing");
   return element;
+}
+
+type QuestionFixture = {
+  readonly kind: PlanCreationOpenQuestion["kind"];
+  readonly [key: string]: unknown;
+};
+
+const fixtureStep = { current: 1, total: 9 } as const;
+const fixtureAuthoredOption = {
+  label: "Something else",
+  description: "Answer in your own words.",
+  editorLabel: "Write your answer.",
+  placeholder: "Type an answer",
+} as const;
+
+function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
+  const shared = { step: fixtureStep, ...question };
+  if (question.kind === "goal-question") {
+    return {
+      ...shared,
+      kind: "goal-question",
+      manualOption: {
+        ...fixtureAuthoredOption,
+        nameLabel: "Event name",
+        dateLabel: "Event date",
+      },
+      fitnessOption: {
+        label: "Improve without an event",
+        description: "Build fitness for a fixed number of weeks.",
+        editorLabel: "Fitness Goal",
+        placeholder: "Describe the goal",
+      },
+    } as PlanCreationOpenQuestion;
+  }
+  if (question.kind === "success-question") {
+    const input = question.input as {
+      readonly kind: "authored" | "event-finish";
+      readonly options?: readonly Record<string, unknown>[];
+      readonly placeholder?: string;
+    };
+    return {
+      ...shared,
+      kind: "success-question",
+      input:
+        input.kind === "authored"
+          ? {
+              kind: "authored",
+              options:
+                input.options ??
+                [
+                  {
+                    text: "Train consistently",
+                    label: "Train consistently",
+                    description: "Repeat most planned weeks.",
+                  },
+                  {
+                    text: "Climb stronger",
+                    label: "Climb stronger",
+                    description: "Hold steady on longer climbs.",
+                  },
+                  {
+                    text: "Ride farther comfortably",
+                    label: "Ride farther comfortably",
+                    description: "Finish longer rides comfortably.",
+                  },
+                ],
+              authored: {
+                ...fixtureAuthoredOption,
+                placeholder: input.placeholder ?? fixtureAuthoredOption.placeholder,
+              },
+            }
+          : {
+              kind: "event-finish",
+              options: (input.options ?? []).map((option) => ({
+                ...option,
+                description: option.description ?? "Choose this event outcome.",
+              })),
+              authored: fixtureAuthoredOption,
+            },
+    } as PlanCreationOpenQuestion;
+  }
+  if (question.kind === "plan-length-question") {
+    return {
+      ...shared,
+      kind: "plan-length-question",
+      options: (question.options as readonly Record<string, unknown>[]).map((option) => ({
+        ...option,
+        description: option.description ?? "Choose this Plan length.",
+      })),
+    } as PlanCreationOpenQuestion;
+  }
+  if (question.kind === "start-timing-question") {
+    return {
+      ...shared,
+      kind: "start-timing-question",
+      options: [
+        {
+          timing: "as-soon-as-possible",
+          label: "As soon as possible",
+          description: "Start at the earliest suitable week.",
+        },
+        { timing: "earliest", label: "From a date", description: "Set an earliest date." },
+      ],
+      dateLabel: "Earliest start date",
+    } as PlanCreationOpenQuestion;
+  }
+  if (question.kind === "commitments-question") {
+    return {
+      ...shared,
+      kind: "commitments-question",
+      noneOption: { label: "Nothing fixed", description: "There is nothing fixed to add." },
+      authoredOption: {
+        ...fixtureAuthoredOption,
+        editorLabel: "Scheduling details",
+        placeholder:
+          typeof question.placeholder === "string"
+            ? question.placeholder
+            : fixtureAuthoredOption.placeholder,
+      },
+    } as PlanCreationOpenQuestion;
+  }
+  if (question.kind === "restriction-question") {
+    return {
+      ...shared,
+      kind: "restriction-question",
+      options: (question.options as readonly Record<string, unknown>[]).map((option) => ({
+        ...option,
+        description: option.description ?? "Choose this operational restriction.",
+      })),
+    } as PlanCreationOpenQuestion;
+  }
+  return shared as PlanCreationOpenQuestion;
+}
+
+function planCreationModel(
+  openQuestion: QuestionFixture | null,
+  patch: Record<string, unknown> = {},
+): PlanCreationCardModel {
+  const summaries = Array.isArray(patch.answeredSummaries)
+    ? patch.answeredSummaries.map((value) => {
+        const summary = value as Record<string, unknown>;
+        return {
+          source: { kind: "athlete" as const },
+          ...summary,
+          question: completeQuestion(summary.question as QuestionFixture),
+        };
+      })
+    : [];
+  return {
+    creationId: "01J00000000000000000000000",
+    version: 1,
+    status: "in-progress",
+    readiness: openQuestion === null ? "ready" : "incomplete",
+    answeredSummaries: [],
+    openQuestion: openQuestion === null ? null : completeQuestion(openQuestion),
+    ...patch,
+    answeredSummaries: summaries,
+  } as PlanCreationCardModel;
 }
 
 const ATTACHMENT_CAPABILITIES: AttachmentCapabilitiesReadModel = {
@@ -1829,23 +1993,26 @@ describe("chat surface", () => {
       await userEvent.click(startButton);
       expect(actions.startPlanCreation).toHaveBeenCalledOnce();
       setChat({
-        planCreation: {
-          creationId: "01J00000000000000000000000",
-          version: 1,
-          status: "in-progress",
-          answeredSummaries: [],
-          openQuestion: {
-            kind: "goal-question",
-            prompt: "What are you preparing for?",
-            candidates: [],
-          },
-        },
+        planCreation: planCreationModel({
+          kind: "goal-question",
+          prompt: "What are you preparing for?",
+          candidates: [],
+        }),
+        sendDisabled: true,
+        inputDisabled: true,
+        composerPlaceholder: "Finish the Plan question above",
       });
       const heading = screen.getByRole("heading", { name: "What are you preparing for?" });
       await waitFor(() => expect(heading).toHaveFocus());
-      expect(screen.getByRole("button", { name: "Event not listed" })).toBeEnabled();
+      expect(screen.getByText("Plan creation · question 1 of 9", { exact: true })).toBeVisible();
+      expect(composer()).toBeDisabled();
+      expect(composer()).toHaveAttribute("placeholder", "Finish the Plan question above");
+      expect(screen.getByRole("button", { name: "Attach files" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Something else" })).toBeEnabled();
       await userEvent.click(screen.getByRole("button", { name: "Improve without an event" }));
       const goalOutcome = screen.getByRole("textbox", { name: "Goal outcome" });
+      expect(composer()).not.toBeVisible();
       expect(goalOutcome).toHaveAttribute(
         "class",
         "min-h-[calc(var(--ctl-h-lg)+var(--inset))] resize-y rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20",
@@ -1861,18 +2028,32 @@ describe("chat surface", () => {
       ).not.toBe(0);
       expect(heading.closest('[data-slot="card"]')).toHaveClass("min-w-0");
       setChat({
-        planCreation: {
-          creationId: "01J00000000000000000000000",
-          version: 2,
-          status: "in-progress",
-          answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "Build steady power" }],
-          openQuestion: {
+        planCreation: planCreationModel(
+          {
             kind: "success-question",
             prompt: "What would success mean?",
             input: { kind: "authored", placeholder: "Describe success" },
           },
-        },
+          {
+            version: 2,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Build steady power",
+              question: {
+                kind: "goal-question",
+                prompt: "What are you preparing for?",
+                candidates: [],
+              },
+              answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
+            },
+          ],
+          },
+        ),
       });
+      expect(screen.queryByRole("textbox", { name: "Success meaning" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Something else" }));
       expect(screen.getByRole("textbox", { name: "Success meaning" })).toHaveValue("");
     });
 
@@ -1882,25 +2063,26 @@ describe("chat surface", () => {
       render(<Harness />);
       setChat({
         planCreationLoaded: true,
-        planCreation: {
-          creationId: "01J00000000000000000000000",
-          version: 1,
-          status: "in-progress",
-          answeredSummaries: [],
-          openQuestion: {
-            kind: "goal-question",
-            prompt: "What are you preparing for?",
-            candidates: [],
-          },
-        },
+        planCreation: planCreationModel({
+          kind: "goal-question",
+          prompt: "What are you preparing for?",
+          candidates: [],
+        }),
       });
-      await userEvent.click(screen.getByRole("button", { name: "Event not listed" }));
+      await userEvent.click(screen.getByRole("button", { name: "Something else" }));
       const eventName = screen.getByRole("textbox", { name: "Event name" });
       const eventDate = screen.getByLabelText("Event date");
       const fieldRecipe =
         "min-h-[calc(var(--ctl-h-lg)+var(--inset))] resize-y rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20";
       expect(eventName).toHaveAttribute("class", fieldRecipe);
       expect(eventDate).toHaveAttribute("class", fieldRecipe);
+      await userEvent.click(screen.getByRole("button", { name: "Confirm goal" }));
+      const nameError = screen.getByText("Enter the event name.");
+      const dateError = screen.getByText("Choose the event date.");
+      expect(eventName).toHaveAttribute("aria-describedby", nameError.id);
+      expect(eventName).toHaveAttribute("aria-invalid", "true");
+      expect(eventDate).toHaveAttribute("aria-describedby", dateError.id);
+      expect(eventDate).toHaveAttribute("aria-invalid", "true");
       await userEvent.type(eventName, "Highland Tour");
       fireEvent.change(eventDate, { target: { value: "1998-10-18" } });
       await userEvent.click(screen.getByRole("button", { name: "Confirm goal" }));
@@ -1916,14 +2098,8 @@ describe("chat surface", () => {
       render(<Harness />);
       setChat({
         planCreationLoaded: true,
-        planCreation: {
-          creationId: "01J00000000000000000000000",
-          version: 2,
-          status: "in-progress",
-          answeredSummaries: [
-            { answerKey: "goal", title: "Goal", detail: "Highland Tour · 1998-10-18" },
-          ],
-          openQuestion: {
+        planCreation: planCreationModel(
+          {
             kind: "success-question",
             prompt: "What would success mean?",
             input: {
@@ -1935,7 +2111,26 @@ describe("chat surface", () => {
               ],
             },
           },
-        },
+          {
+            version: 2,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Highland Tour · 1998-10-18",
+              question: {
+                kind: "goal-question",
+                prompt: "What are you preparing for?",
+                candidates: [],
+              },
+              answer: {
+                kind: "goal",
+                goal: { kind: "event-manual", name: "Highland Tour", date: "1998-10-18" },
+              },
+            },
+          ],
+          },
+        ),
       });
       const options = [
         ["Finish comfortably", "finish-comfortably"],
@@ -1953,36 +2148,571 @@ describe("chat surface", () => {
       }
     });
 
+    it("submits Plan length, start timing, and Schedule mode answers", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planCreationLoaded: true,
+        planCreation: planCreationModel({
+          kind: "plan-length-question",
+          prompt: "How long should this Fitness Plan be?",
+          options: [4, 8, 12, 16].map((weeks) => ({
+            weeks: weeks as 4 | 8 | 12 | 16,
+            label: `${weeks} weeks`,
+          })) as [
+            { weeks: 4; label: string },
+            { weeks: 8; label: string },
+            { weeks: 12; label: string },
+            { weeks: 16; label: string },
+          ],
+        }),
+      });
+      render(<Harness />);
+
+      await user.click(screen.getByRole("radio", { name: "12 weeks" }));
+      await user.click(screen.getByRole("button", { name: "Confirm length" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "plan-length",
+        weeks: 12,
+      });
+
+      setChat({
+        planCreation: planCreationModel(
+          {
+            kind: "start-timing-question",
+            prompt: "When could this Plan start?",
+            earliestAllowed: "1998-10-01",
+          },
+          { version: 2 },
+        ),
+      });
+      await user.click(screen.getByRole("radio", { name: "From a date" }));
+      const startDate = screen.getByLabelText("Earliest start date");
+      expect(startDate).toHaveAttribute("min", "1998-10-01");
+      fireEvent.change(startDate, { target: { value: "1998-10-05" } });
+      await user.click(screen.getByRole("button", { name: "Confirm start" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "start-timing",
+        timing: { kind: "earliest", date: "1998-10-05" },
+      });
+
+      setChat({
+        planCreation: planCreationModel(
+          {
+            kind: "schedule-mode-question",
+            prompt: "Should this Plan use a Fixed or Flexible Schedule?",
+            options: [
+              {
+                mode: "fixed",
+                label: "Fixed Schedule",
+                description: "Place each Workout on one of your available weekdays.",
+              },
+              {
+                mode: "flexible",
+                label: "Flexible Schedule",
+                description: "Choose from an ordered Workout pool during each week.",
+              },
+            ],
+          },
+          { version: 3 },
+        ),
+      });
+      await user.click(screen.getByRole("radio", { name: /Flexible Schedule/u }));
+      await user.click(screen.getByRole("button", { name: "Confirm Schedule" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "schedule-mode",
+        mode: "flexible",
+      });
+    });
+
+    it("submits Fixed and Flexible availability with labelled limits", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planCreationLoaded: true,
+        planCreation: planCreationModel({
+          kind: "availability-question",
+          prompt: "How much training fits in a usual week?",
+          mode: "fixed",
+          derivedPoolNote: "Choose every weekday you can usually train.",
+        }),
+      });
+      render(<Harness />);
+
+      await user.type(screen.getByLabelText("Weekly hours"), "8");
+      await user.type(screen.getByLabelText("Longest Workout hours"), "3.5");
+      await user.click(screen.getByRole("checkbox", { name: "Tue" }));
+      await user.click(screen.getByRole("checkbox", { name: "Sat" }));
+      await user.click(screen.getByRole("button", { name: "Confirm availability" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "availability",
+        mode: "fixed",
+        weeklyHoursLimit: 8,
+        longestWorkoutHours: 3.5,
+        usableWeekdays: [2, 6],
+      });
+
+      setChat({
+        planCreation: planCreationModel(
+          {
+            kind: "availability-question",
+            prompt: "How much training fits in a usual week?",
+            mode: "flexible",
+            derivedPoolNote:
+              "Your weekly limit sets 3 Workouts up to 6 h, 4 up to 8 h, or 5 above 8 h.",
+          },
+          { version: 2 },
+        ),
+      });
+      expect(screen.getByText(/weekly limit sets 3 Workouts/u)).toBeVisible();
+      expect(screen.queryByRole("checkbox", { name: "Tue" })).toBeNull();
+      await user.type(screen.getByLabelText("Weekly hours"), "6");
+      await user.type(screen.getByLabelText("Longest Workout hours"), "2");
+      await user.click(screen.getByRole("button", { name: "Confirm availability" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "availability",
+        mode: "flexible",
+        weeklyHoursLimit: 6,
+        longestWorkoutHours: 2,
+      });
+    });
+
+    it("places availability validation errors beside their controls", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planCreationLoaded: true,
+        planCreation: planCreationModel({
+          kind: "availability-question",
+          prompt: "How much training fits in a usual week?",
+          mode: "fixed",
+          derivedPoolNote: "Choose every weekday you can usually train.",
+        }),
+      });
+      render(<Harness />);
+
+      await user.click(screen.getByRole("button", { name: "Confirm availability" }));
+      const weekly = screen.getByLabelText("Weekly hours");
+      const longest = screen.getByLabelText("Longest Workout hours");
+      const weeklyError = screen.getByText(/Enter weekly hours/u);
+      const longestError = screen.getByText(/Enter a longest Workout/u);
+      expect(weekly).toHaveAttribute("aria-describedby", weeklyError.id);
+      expect(longest).toHaveAttribute("aria-describedby", longestError.id);
+      expect(screen.getByText("Choose at least one usable weekday.")).toBeVisible();
+      expect(actions.answerPlanCreation).not.toHaveBeenCalled();
+    });
+
+    it("submits commitments and recent training baseline answers", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planCreationLoaded: true,
+        planCreation: planCreationModel({
+          kind: "commitments-question",
+          prompt: "Any fixed commitments, other training, or time off to account for?",
+          placeholder: "Add only the scheduling details this Plan should account for",
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.queryByLabelText("Scheduling details")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Nothing fixed" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "commitments",
+        commitments: { kind: "none" },
+      });
+      await user.click(screen.getByRole("button", { name: "Something else" }));
+      const commitments = screen.getByLabelText("Scheduling details");
+      expect(commitments).toHaveAttribute(
+        "placeholder",
+        "Add only the scheduling details this Plan should account for",
+      );
+      await user.type(commitments, "Pilates on Thursday");
+      await user.click(screen.getByRole("button", { name: "Confirm commitments" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "commitments",
+        commitments: { kind: "authored", text: "Pilates on Thursday" },
+      });
+
+      setChat({
+        planCreation: planCreationModel(
+          {
+            kind: "baseline-question",
+            prompt: "What best describes your recent training?",
+            options: [
+              { baseline: "regular", label: "Regular", description: "Consistent training." },
+              { baseline: "occasional", label: "Occasional", description: "Some training." },
+              {
+                baseline: "starting-again",
+                label: "Starting again",
+                description: "Returning to training.",
+              },
+            ],
+          },
+          { version: 2 },
+        ),
+      });
+      await user.click(screen.getByRole("radio", { name: /Starting again/u }));
+      await user.click(screen.getByRole("button", { name: "Confirm baseline" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "baseline",
+        baseline: "starting-again",
+      });
+    });
+
+    it("shows restriction-specific fields and submits the operational restriction", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planCreationLoaded: true,
+        planCreation: planCreationModel({
+          kind: "restriction-question",
+          prompt: "What Training Restriction should this Plan respect?",
+          options: [
+            { kind: "none", label: "None" },
+            { kind: "no-training", label: "No training" },
+            { kind: "no-hard-training", label: "No hard training" },
+            { kind: "max-duration", label: "Maximum Workout duration" },
+          ],
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.queryByLabelText("Optional end date")).toBeNull();
+      await user.click(screen.getByRole("radio", { name: "No training" }));
+      expect(screen.getByLabelText("Optional end date")).toBeVisible();
+      await user.click(screen.getByRole("radio", { name: "No hard training" }));
+      expect(screen.getByLabelText("Optional end date")).toBeVisible();
+      await user.click(screen.getByRole("radio", { name: "Maximum Workout duration" }));
+      await user.type(screen.getByLabelText("Maximum duration hours"), "1.5");
+      fireEvent.change(screen.getByLabelText("Optional end date"), {
+        target: { value: "1998-11-01" },
+      });
+      await user.click(screen.getByRole("button", { name: "Confirm restriction" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "restriction",
+        restriction: { kind: "max-duration", hours: 1.5, endDate: "1998-11-01" },
+      });
+      await user.click(screen.getByRole("radio", { name: "None" }));
+      expect(screen.queryByLabelText("Optional end date")).toBeNull();
+    });
+
+    it("edits a summary, cancels to the unanswered Card, and restores focus", async () => {
+      const user = userEvent.setup();
+      const model = planCreationModel(
+        {
+          kind: "start-timing-question",
+          prompt: "When could this Plan start?",
+          earliestAllowed: "1998-10-01",
+        },
+        {
+          version: 4,
+          answeredSummaries: [
+            {
+              answerKey: "plan-length",
+              title: "Plan length",
+              detail: "12 weeks",
+              question: {
+                kind: "plan-length-question",
+                prompt: "How long should this Fitness Plan be?",
+                options: [
+                  { weeks: 4, label: "4 weeks" },
+                  { weeks: 8, label: "8 weeks" },
+                  { weeks: 12, label: "12 weeks" },
+                  { weeks: 16, label: "16 weeks" },
+                ],
+              },
+              answer: { kind: "plan-length", weeks: 12 },
+            },
+          ],
+        },
+      );
+      vi.mocked(actions.editPlanCreation).mockImplementation((answerKey) => {
+        setChat({ planCreationEditingKey: answerKey, planCreationFocusRevision: 1 });
+      });
+      vi.mocked(actions.cancelPlanCreationEdit).mockImplementation(() => {
+        setChat({ planCreationEditingKey: null, planCreationFocusRevision: 2 });
+      });
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+        sendDisabled: true,
+      });
+      render(<Harness />);
+
+      await user.click(screen.getByRole("button", { name: "Edit Plan length" }));
+      const editHeading = screen.getByRole("heading", {
+        name: "How long should this Fitness Plan be?",
+      });
+      await waitFor(() => expect(editHeading).toHaveFocus());
+      expect(screen.getByRole("radio", { name: "12 weeks" })).toBeChecked();
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      const openHeading = screen.getByRole("heading", { name: "When could this Plan start?" });
+      await waitFor(() => expect(openHeading).toHaveFocus());
+      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    });
+
+    it("edits from host-authored questions and structured current answers", async () => {
+      const user = userEvent.setup();
+      const model = planCreationModel(
+        {
+          kind: "schedule-mode-question",
+          prompt: "Should this Plan use a Fixed or Flexible Schedule?",
+          options: [
+            { mode: "fixed", label: "Fixed", description: "Use fixed days." },
+            { mode: "flexible", label: "Flexible", description: "Use a weekly pool." },
+          ],
+        },
+        {
+          version: 5,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Build Fitness by 1998-12-01",
+              question: {
+                kind: "goal-question",
+                prompt: "What do you want this Plan to prepare you for?",
+                candidates: [],
+              },
+              answer: {
+                kind: "goal",
+                goal: { kind: "fitness", outcome: "Build Fitness by 1998-12-01" },
+              },
+            },
+            {
+              answerKey: "success",
+              title: "Success",
+              detail: "Ride steadily",
+              question: {
+                kind: "success-question",
+                prompt: "What would success mean for this Fitness Goal?",
+                input: { kind: "authored", placeholder: "Describe success" },
+              },
+              answer: {
+                kind: "success",
+                success: { kind: "authored", text: "Ride steadily" },
+              },
+            },
+            {
+              answerKey: "start-timing",
+              title: "Start timing",
+              detail: "Earliest start 1998-10-10",
+              question: {
+                kind: "start-timing-question",
+                prompt: "When could this Plan start?",
+                earliestAllowed: "1998-10-01",
+              },
+              answer: {
+                kind: "start-timing",
+                timing: { kind: "earliest", date: "1998-10-10" },
+              },
+            },
+          ],
+        },
+      );
+      vi.mocked(actions.editPlanCreation).mockImplementation((answerKey) => {
+        setChat({ planCreationEditingKey: answerKey, planCreationFocusRevision: 1 });
+      });
+      vi.mocked(actions.cancelPlanCreationEdit).mockImplementation(() => {
+        setChat({ planCreationEditingKey: null, planCreationFocusRevision: 2 });
+      });
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+        sendDisabled: true,
+      });
+      render(<Harness />);
+
+      await user.click(screen.getByRole("button", { name: "Edit Success" }));
+      expect(
+        screen.getByRole("heading", { name: "What would success mean for this Fitness Goal?" }),
+      ).toBeVisible();
+      expect(screen.getByRole("textbox", { name: "Success meaning" })).toHaveValue("Ride steadily");
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("button", { name: "Something else" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      await user.click(screen.getByRole("button", { name: "Edit Start timing" }));
+      const startDate = screen.getByLabelText("Earliest start date");
+      expect(startDate).toHaveAttribute("min", "1998-10-01");
+      expect(startDate).toHaveValue("1998-10-10");
+      fireEvent.change(startDate, { target: { value: "1998-10-05" } });
+      await user.click(screen.getByRole("button", { name: "Confirm start" }));
+      expect(actions.answerPlanCreation).toHaveBeenLastCalledWith({
+        kind: "start-timing",
+        timing: { kind: "earliest", date: "1998-10-05" },
+      });
+    });
+
+    it("pauses with Later or Escape and Continue restores the focused Card", async () => {
+      const user = userEvent.setup();
+      const model = planCreationModel({
+        kind: "plan-length-question",
+        prompt: "How long should this Fitness Plan be?",
+        options: [
+          { weeks: 4, label: "4 weeks" },
+          { weeks: 8, label: "8 weeks" },
+          { weeks: 12, label: "12 weeks" },
+          { weeks: 16, label: "16 weeks" },
+        ],
+      });
+      vi.mocked(actions.pausePlanCreation).mockImplementation(() => {
+        setChat({ planCreationPaused: true, sendDisabled: false });
+      });
+      vi.mocked(actions.continuePlanCreation).mockImplementation(() => {
+        setChat({ planCreationPaused: false, sendDisabled: true, planCreationFocusRevision: 1 });
+      });
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+        sendDisabled: true,
+      });
+      render(<Harness />);
+
+      await user.click(screen.getByRole("button", { name: "Later" }));
+      expect(actions.pausePlanCreation).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("heading", { name: model.openQuestion?.prompt })).toBeNull();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await waitFor(() =>
+        expect(screen.getByRole("heading", { name: model.openQuestion?.prompt })).toHaveFocus(),
+      );
+      await user.keyboard("{Escape}");
+      expect(actions.pausePlanCreation).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    });
+
+    it("lets Escape close command suggestions before it pauses the Card", async () => {
+      const user = userEvent.setup();
+      const model = planCreationModel({
+        kind: "plan-length-question",
+        prompt: "How long should this Fitness Plan be?",
+        options: [
+          { weeks: 4, label: "4 weeks" },
+          { weeks: 8, label: "8 weeks" },
+          { weeks: 12, label: "12 weeks" },
+          { weeks: 16, label: "16 weeks" },
+        ],
+      });
+      setChat({ planCreationLoaded: true, planCreation: model, sendDisabled: true });
+      render(<Harness />);
+
+      await user.type(composer(), "/");
+      expect(screen.getByRole("listbox", { name: "Commands" })).toBeVisible();
+      await user.keyboard("{Escape}");
+      expect(actions.pausePlanCreation).not.toHaveBeenCalled();
+      expect(screen.queryByRole("listbox", { name: "Commands" })).toBeNull();
+      expect(screen.getByRole("heading", { name: model.openQuestion?.prompt })).toBeVisible();
+    });
+
+    it("shows the ready state and does not carry goal text into the next textarea", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planCreationLoaded: true,
+        planCreation: planCreationModel({
+          kind: "goal-question",
+          prompt: "What do you want this Plan to prepare you for?",
+          candidates: [],
+        }),
+      });
+      render(<Harness />);
+      await user.click(screen.getByRole("button", { name: "Improve without an event" }));
+      await user.type(screen.getByLabelText("Goal outcome"), "Build durable power");
+
+      setChat({
+        planCreation: planCreationModel(
+          {
+            kind: "commitments-question",
+            prompt: "Any fixed commitments, other training, or time off to account for?",
+            placeholder: "Add only the scheduling details this Plan should account for",
+          },
+          { version: 2 },
+        ),
+      });
+      expect(screen.queryByLabelText("Scheduling details")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Something else" }));
+      expect(screen.getByLabelText("Scheduling details")).toHaveValue("");
+
+      const ready = planCreationModel(null, {
+        version: 10,
+        readiness: "ready",
+        answeredSummaries: [
+          {
+            answerKey: "restriction",
+            title: "Training Restriction",
+            detail: "No training restrictions",
+            question: {
+              kind: "restriction-question",
+              prompt: "What Training Restriction should this Plan respect?",
+              options: [
+                { kind: "none", label: "None" },
+                { kind: "no-training", label: "No training" },
+                { kind: "no-hard-training", label: "No hard training" },
+                { kind: "max-duration", label: "Maximum Workout duration" },
+              ],
+            },
+            answer: { kind: "restriction", restriction: { kind: "none" } },
+          },
+        ],
+      });
+      setChat({
+        planCreation: ready,
+        timeline: [{ kind: "plan-creation", model: ready }],
+        sendDisabled: false,
+      });
+      expect(
+        screen.getByText("The essentials are complete. Draft preview arrives in a later update."),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    });
+
     it("keeps summaries in the conversation and submits authored success", async () => {
       const actions = stubActions();
       useEnduragentStore.getState().bindChatActions(actions);
       render(<Harness />);
-      const model = {
-        creationId: "01J00000000000000000000000",
-        version: 2,
-        status: "in-progress" as const,
-        answeredSummaries: [
-          { answerKey: "goal" as const, title: "Goal", detail: "Build steady power" },
-        ],
-        openQuestion: {
-          kind: "success-question" as const,
+      const model = planCreationModel(
+        {
+          kind: "success-question",
           prompt: "What would success mean?",
-          input: { kind: "authored" as const, placeholder: "Describe success" },
+          input: { kind: "authored", placeholder: "Describe success" },
         },
-      };
+        {
+          version: 2,
+          answeredSummaries: [
+          {
+            answerKey: "goal" as const,
+            title: "Goal",
+            detail: "Build steady power",
+            question: {
+              kind: "goal-question" as const,
+              prompt: "What are you preparing for?",
+              candidates: [],
+            },
+            answer: {
+              kind: "goal" as const,
+              goal: { kind: "fitness" as const, outcome: "Build steady power" },
+            },
+          },
+          ],
+        },
+      );
       setChat({
         planCreation: model,
         planCreationLoaded: true,
         sendDisabled: true,
+        inputDisabled: true,
+        composerPlaceholder: "Finish the Plan question above",
         timeline: [{ kind: "plan-creation", model }],
       });
       await waitFor(() =>
         expect(screen.getByRole("heading", { name: "What would success mean?" })).toHaveFocus(),
       );
       expect(screen.getByText("Build steady power")).toBeVisible();
+      expect(screen.getByText("Goal · your answer", { exact: true })).toBeVisible();
       expect(screen.getByText("1 answer confirmed")).toBeVisible();
-      expect(composer()).toBeEnabled();
+      expect(composer()).toBeDisabled();
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      await userEvent.click(screen.getByRole("button", { name: "Something else" }));
       await userEvent.type(
         screen.getByRole("textbox", { name: "Success meaning" }),
         "Ride four steady hours",
@@ -1992,23 +2722,45 @@ describe("chat surface", () => {
         kind: "success",
         success: { kind: "authored", text: "Ride four steady hours" },
       });
-      const complete = {
-        ...model,
-        version: 3,
-        answeredSummaries: [
+      const complete = planCreationModel(
+        {
+          kind: "plan-length-question",
+          prompt: "How long should this Fitness Plan be?",
+          options: [
+            { weeks: 4 as const, label: "4 weeks" },
+            { weeks: 8 as const, label: "8 weeks" },
+            { weeks: 12 as const, label: "12 weeks" },
+            { weeks: 16 as const, label: "16 weeks" },
+          ],
+        },
+        {
+          version: 3,
+          answeredSummaries: [
           ...model.answeredSummaries,
-          { answerKey: "success" as const, title: "Success", detail: "Ride four steady hours" },
-        ],
-        openQuestion: null,
-      };
+          {
+            answerKey: "success" as const,
+            title: "Success",
+            detail: "Ride four steady hours",
+            question: model.openQuestion,
+            answer: {
+              kind: "success" as const,
+              success: { kind: "authored" as const, text: "Ride four steady hours" },
+            },
+          },
+          ],
+        },
+      );
       setChat({
         planCreation: complete,
-        sendDisabled: false,
+        sendDisabled: true,
         timeline: [{ kind: "plan-creation", model: complete }],
       });
       expect(screen.queryByRole("heading", { name: "What would success mean?" })).toBeNull();
       expect(screen.getByText("2 answers confirmed")).toBeVisible();
-      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+      expect(
+        screen.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
+      ).toBeVisible();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     });
 
     it("declares the Inter and Geist font foundation", async () => {

@@ -56,7 +56,7 @@ class PlanCreationBackend {
   private instant = 883_612_800_000;
 
   constructor(private readonly databasePath: string) {
-    const base = createPlanQaFixtureScript("PL-S004");
+    const base = createPlanQaFixtureScript();
     this.script = {
       onRequest: async (value) => {
         const request = value as ScriptRequest;
@@ -172,7 +172,7 @@ async function launch(playwright: Playwright): Promise<Scenario> {
     height: 820,
     colorScheme: "light",
     reducedMotion: true,
-    hidden: false,
+    hidden: true,
     routeChatAttachmentComposer: true,
   });
   return { backend, fixture, scratch, ...(await connect(playwright, fixture)) };
@@ -198,7 +198,7 @@ async function confirmFitnessGoal(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Confirm goal" }).click();
 }
 
-test("persists goal and success and restores the completed Card", async ({ playwright }) => {
+test("persists goal and success and restores the Plan length Card", async ({ playwright }) => {
   const scenario = await launch(playwright);
   try {
     await confirmFitnessGoal(scenario.page);
@@ -207,6 +207,7 @@ test("persists goal and success and restores the completed Card", async ({ playw
         name: "What would success mean for this Fitness Goal?",
       }),
     ).toBeVisible();
+    await scenario.page.getByRole("button", { name: "Something else", exact: true }).click();
     await scenario.page
       .getByRole("textbox", { name: "Success meaning" })
       .fill("Ride four steady hours");
@@ -214,11 +215,17 @@ test("persists goal and success and restores the completed Card", async ({ playw
     await expect(scenario.page.getByText("Build steady power", { exact: true })).toBeVisible();
     await expect(scenario.page.getByText("Ride four steady hours", { exact: true })).toBeVisible();
     await expect(scenario.page.getByText("2 answers confirmed", { exact: true })).toBeVisible();
-    await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeEnabled();
+    await expect(
+      scenario.page.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
+    ).toBeVisible();
+    await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeDisabled();
     await relaunch(scenario, playwright);
     await expect(scenario.page.getByText("Build steady power", { exact: true })).toBeVisible();
     await expect(scenario.page.getByText("Ride four steady hours", { exact: true })).toBeVisible();
-    await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeEnabled();
+    await expect(
+      scenario.page.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
+    ).toBeVisible();
+    await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeDisabled();
     await expect(scenario.backend.inspect()).resolves.toEqual({
       creation: { status: "in-progress", version: 3 },
       answers: [
@@ -246,7 +253,7 @@ test("restores the success Card after relaunching between answers", async ({ pla
         name: "What would success mean for this Fitness Goal?",
       }),
     ).toBeVisible();
-    await expect(scenario.page.getByRole("combobox", { name: "Message your coach" })).toBeEnabled();
+    await expect(scenario.page.getByRole("combobox", { name: "Message your coach" })).toBeDisabled();
     await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeDisabled();
   } finally {
     await close(scenario);

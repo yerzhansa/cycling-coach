@@ -278,7 +278,13 @@ export function createChatViewAdapter(input: {
     const decisionBlocksWork =
       decision?.value?.status === "unanswered" ||
       (decision?.value?.status === "answered" && decision.value.continuation.status === "pending");
-    const planCreationBlocksWork = planCreation?.value?.openQuestion != null;
+    const planCreationPaused = planCreation?.paused ?? false;
+    const planCreationEditingKey = planCreation?.editingKey ?? null;
+    const planCreationBlocksWork =
+      !planCreationPaused &&
+      planCreation?.value !== null &&
+      planCreation?.value !== undefined &&
+      (planCreationEditingKey !== null || planCreation.value.openQuestion !== null);
     const decisionLoading = controls?.decisionLoading === true;
     const decisionLoadError = controls?.queueLoadError ?? controls?.decisionLoadError ?? null;
     const decisionUnavailable = decisionLoading || decisionLoadError !== null;
@@ -318,6 +324,9 @@ export function createChatViewAdapter(input: {
       planCreationLoaded: planCreation?.loaded ?? false,
       planCreationBusy: planCreation?.busy ?? false,
       planCreationError: planCreation?.error ?? null,
+      planCreationPaused,
+      planCreationEditingKey,
+      planCreationFocusRevision: planCreation?.focusRevision ?? 0,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
       notice: decisionBlocksWork
@@ -326,8 +335,7 @@ export function createChatViewAdapter(input: {
           (state.status === "streaming" ? null : state.progress)),
       coachProgress:
         state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,
-      interrupted:
-        state.status === "interrupted" && !decisionBlocksWork && !planCreationBlocksWork,
+      interrupted: state.status === "interrupted" && !decisionBlocksWork && !planCreationBlocksWork,
       workBlocked,
       sendDisabled:
         workBlocked ||
@@ -335,7 +343,10 @@ export function createChatViewAdapter(input: {
         decisionUnavailable ||
         attachmentUnavailable ||
         planCreationBlocksWork,
-      inputDisabled: workBlocked,
+      inputDisabled: workBlocked || planCreationBlocksWork,
+      composerPlaceholder: planCreationBlocksWork
+        ? "Finish the Plan question above"
+        : "Message your coach",
       newConversationUnavailable: newConversationUnavailable || decisionUnavailable,
       resetPhase: state.session.resetPhase,
       resetCount: state.session.resetCount,

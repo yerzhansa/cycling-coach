@@ -2222,18 +2222,89 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       creationId,
       version: 1,
       status: "in-progress",
+      readiness: "incomplete",
       answeredSummaries: [],
-      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+      openQuestion: {
+        kind: "goal-question",
+        step: { current: 1, total: 9 },
+        prompt: "Goal?",
+        candidates: [],
+        manualOption: {
+          label: "Something else",
+          description: "Name an event.",
+          editorLabel: "Name the event.",
+          placeholder: "Event name",
+          nameLabel: "Event name",
+          dateLabel: "Event date",
+        },
+        fitnessOption: {
+          label: "Improve without an event",
+          description: "Build fitness.",
+          editorLabel: "Fitness Goal",
+          placeholder: "Describe the goal",
+        },
+      },
     };
     const answeredCard: PlanCreationCardModel = {
       creationId,
       version: 2,
       status: "in-progress",
-      answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "Build power" }],
+      readiness: "incomplete",
+      answeredSummaries: [
+        {
+          answerKey: "goal",
+          title: "Goal",
+          detail: "Build power",
+          source: { kind: "athlete" },
+          question: {
+            kind: "goal-question",
+            step: { current: 1, total: 9 },
+            prompt: "Goal?",
+            candidates: [],
+            manualOption: {
+              label: "Something else",
+              description: "Name an event.",
+              editorLabel: "Name the event.",
+              placeholder: "Event name",
+              nameLabel: "Event name",
+              dateLabel: "Event date",
+            },
+            fitnessOption: {
+              label: "Improve without an event",
+              description: "Build fitness.",
+              editorLabel: "Fitness Goal",
+              placeholder: "Describe the goal",
+            },
+          },
+          answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build power" } },
+        },
+      ],
       openQuestion: {
         kind: "success-question",
+        step: { current: 2, total: 9 },
         prompt: "Success?",
-        input: { kind: "authored", placeholder: "Describe success" },
+        input: {
+          kind: "authored",
+          options: [
+            {
+              text: "Train consistently",
+              label: "Train consistently",
+              description: "Repeat planned weeks.",
+            },
+            { text: "Climb stronger", label: "Climb stronger", description: "Climb steadily." },
+            {
+              text: "Ride farther comfortably",
+              label: "Ride farther comfortably",
+              description: "Build endurance.",
+            },
+          ],
+          authored: {
+            label: "Something else",
+            description: "Answer in your own words.",
+            editorLabel: "Write your answer.",
+            placeholder: "Describe success",
+          },
+        },
       },
     };
     const startPlanCreation = vi.fn<PlanCreationOperations["plan_creation.start"]>(async () => ({

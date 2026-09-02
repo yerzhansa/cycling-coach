@@ -6,6 +6,7 @@ import type {
   CoachDecisionReadModel,
   PlanningRequestDelivery,
   PlanCreationAnswerInput,
+  PlanCreationAnswerSummary,
   PlanCreationCardModel,
   PlanHandoffSuggestion,
 } from "@enduragent/coach-contract";
@@ -74,6 +75,9 @@ export interface ChatSurfaceState {
   readonly planCreationLoaded: boolean;
   readonly planCreationBusy: boolean;
   readonly planCreationError: string | null;
+  readonly planCreationPaused: boolean;
+  readonly planCreationEditingKey: PlanCreationAnswerSummary["answerKey"] | null;
+  readonly planCreationFocusRevision: number;
   readonly timeline: readonly ChatTranscriptItemView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
@@ -82,6 +86,7 @@ export interface ChatSurfaceState {
   readonly workBlocked: boolean;
   readonly sendDisabled: boolean;
   readonly inputDisabled: boolean;
+  readonly composerPlaceholder: string;
   readonly newConversationUnavailable: boolean;
   readonly resetPhase: SessionResetPhase;
   readonly resetCount: number;
@@ -110,6 +115,10 @@ export interface ChatActions {
   clearPlanningRequestFocus(): void;
   startPlanCreation(): void;
   answerPlanCreation(answer: PlanCreationAnswerInput): void;
+  pausePlanCreation(): void;
+  continuePlanCreation(): void;
+  editPlanCreation(answerKey: PlanCreationAnswerSummary["answerKey"]): void;
+  cancelPlanCreationEdit(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): void;
@@ -149,6 +158,9 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   planCreationLoaded: false,
   planCreationBusy: false,
   planCreationError: null,
+  planCreationPaused: false,
+  planCreationEditingKey: null,
+  planCreationFocusRevision: 0,
   timeline: Object.freeze([]),
   status: "idle",
   notice: null,
@@ -157,6 +169,7 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   workBlocked: false,
   sendDisabled: false,
   inputDisabled: false,
+  composerPlaceholder: "Message your coach",
   newConversationUnavailable: true,
   resetPhase: "idle",
   resetCount: 0,
@@ -296,9 +309,13 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.planCreationLoaded === right.planCreationLoaded &&
     left.planCreationBusy === right.planCreationBusy &&
     left.planCreationError === right.planCreationError &&
+    left.planCreationPaused === right.planCreationPaused &&
+    left.planCreationEditingKey === right.planCreationEditingKey &&
+    left.planCreationFocusRevision === right.planCreationFocusRevision &&
     left.workBlocked === right.workBlocked &&
     left.sendDisabled === right.sendDisabled &&
     left.inputDisabled === right.inputDisabled &&
+    left.composerPlaceholder === right.composerPlaceholder &&
     left.newConversationUnavailable === right.newConversationUnavailable &&
     left.resetPhase === right.resetPhase &&
     left.resetCount === right.resetCount &&

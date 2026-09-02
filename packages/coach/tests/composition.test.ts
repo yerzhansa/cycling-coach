@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
   EMPTY_DROPPED_ACTIVITIES,
@@ -49,6 +49,35 @@ import type { CoachStoreWriterContext } from "../src/runtime.js";
 
 const roots: string[] = [];
 const stores: CoachStoreWriterContext["store"][] = [];
+const runtimeEnvironmentKeys = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "ALIBABA_API_KEY",
+  "MINIMAX_API_KEY",
+  "MOONSHOT_API_KEY",
+  "ZAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "LLM_API_KEY",
+  "LLM_PROVIDER",
+  "LLM_MODEL",
+  "LLM_FLUSH_MODEL",
+  "LLM_COMPACT_MODEL",
+  "LLM_BASE_URL",
+  "CONTEXT_WINDOW_TOKENS",
+  "INTERVALS_API_KEY",
+  "INTERVALS_ATHLETE_ID",
+  "TELEGRAM_BOT_TOKEN",
+  "HISTORY_TOKEN_BUDGET_RATIO",
+  "SESSION_IDLE_MINUTES",
+  "SESSION_DAILY_RESET_HOUR",
+  "SESSION_RESET_ARCHIVE_RETENTION_DAYS",
+  "COACH_TZ",
+  "ENDURAGENT_CLAUDE_CLI_DISABLED",
+  "CLAUDE_CLI_PATH",
+  "CODEX_CLI_PATH",
+] as const;
 
 const state: AthleteState = {
   schemaVersion: LATEST_SCHEMA_VERSION,
@@ -486,9 +515,14 @@ async function composeWithCapturedEngineInput(home: AthleteHome, now = 1_000) {
   return { engineInput, lifecycle };
 }
 
+beforeEach(() => {
+  for (const key of runtimeEnvironmentKeys) vi.stubEnv(key, undefined);
+});
+
 afterEach(async () => {
   await Promise.all(stores.splice(0).map((store) => store.close().catch(() => {})));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 

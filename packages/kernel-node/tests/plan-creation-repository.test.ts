@@ -147,6 +147,35 @@ describe("Plan Creation repository", () => {
     ]);
   });
 
+  it("appends a re-answer for the same key and reads every row in sequence order", async () => {
+    await start();
+    await answer();
+    await repository.recordAnswer({
+      command: stamp("edit-goal", "c", 883_612_800_002),
+      creationId,
+      expectedVersion: 2,
+      answerId: id("4"),
+      answerKey: "goal",
+      valueJson: JSON.stringify({
+        answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build endurance" } },
+        source: { kind: "athlete" },
+      }),
+    });
+
+    const restored = await repository.readUnfinished();
+    expect(restored).toMatchObject({
+      version: 3,
+      answers: [
+        { id: id("3"), answerKey: "goal", sequence: 1, creationVersion: 2 },
+        { id: id("4"), answerKey: "goal", sequence: 2, creationVersion: 3 },
+      ],
+    });
+    const effectiveGoal = restored?.answers.filter((row) => row.answerKey === "goal").at(-1);
+    expect(JSON.parse(effectiveGoal?.valueJson ?? "null")).toMatchObject({
+      answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build endurance" } },
+    });
+  });
+
   it("round-trips real rows through dump, export, and restore", async () => {
     await start();
     await answer();
@@ -168,7 +197,7 @@ describe("Plan Creation repository", () => {
         {
           sink: createSqliteImportSink(destination),
           presence: { hasArtifact: async () => true },
-          targetUserVersion: 29,
+          targetUserVersion: MIGRATIONS.at(-1)!.version,
           ...webCryptoExportEnv,
         },
         { container: built.container },

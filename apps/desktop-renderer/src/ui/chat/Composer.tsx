@@ -50,6 +50,7 @@ export function Composer(props: {
   const listboxId = useId();
   const chatSendDisabled = useEnduragentStore((state) => state.chat.sendDisabled);
   const chatInputDisabled = useEnduragentStore((state) => state.chat.inputDisabled);
+  const chatPlaceholder = useEnduragentStore((state) => state.chat.composerPlaceholder);
   const chatStatus = useEnduragentStore((state) => state.chat.status);
   const actions = useEnduragentStore((state) => state.chatActions);
   const chatReady = useEnduragentStore(setupReady);
@@ -237,7 +238,7 @@ export function Composer(props: {
           placeholder={
             status === "streaming"
               ? "Coach is responding…"
-              : (props.surface?.placeholder ?? "Message your coach")
+              : (props.surface?.placeholder ?? chatPlaceholder)
           }
           disabled={inputDisabled || !canChat}
           role="combobox"

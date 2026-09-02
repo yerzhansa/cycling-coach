@@ -3,21 +3,49 @@ import {
   COACH_RPC_METHOD_NAMES,
   COACH_RPC_METHOD_REGISTRY,
   CoachRpcRequestEnvelopeSchema,
+  PLAN_CREATION_ANSWER_KEYS,
   PlanCreationAnswerInputSchema,
   PlanCreationAnswerRpcParamsSchema,
   PlanCreationAnswerRpcResultSchema,
+  PlanCreationAnswerSummarySchema,
   PlanCreationCardModelSchema,
+  PlanCreationOpenQuestionSchema,
   PlanCreationStartRpcParamsSchema,
   PlanCreationStartRpcResultSchema,
 } from "../src/index.js";
 
 const creationId = "01J00000000000000000000000";
+const step = { current: 1, total: 9 } as const;
+const authoredOption = {
+  label: "Something else",
+  description: "Answer in your own words.",
+  editorLabel: "Write your answer.",
+  placeholder: "Type an answer",
+} as const;
+const goalQuestion = {
+  kind: "goal-question" as const,
+  step,
+  prompt: "Goal?",
+  candidates: [],
+  manualOption: {
+    ...authoredOption,
+    nameLabel: "Event name",
+    dateLabel: "Event date",
+  },
+  fitnessOption: {
+    label: "Improve without an event",
+    description: "Build fitness for a fixed number of weeks.",
+    editorLabel: "Fitness Goal",
+    placeholder: "Describe the goal",
+  },
+};
 const card = {
   creationId,
   version: 1,
   status: "in-progress" as const,
+  readiness: "incomplete" as const,
   answeredSummaries: [],
-  openQuestion: { kind: "goal-question" as const, prompt: "Goal?", candidates: [] },
+  openQuestion: goalQuestion,
 };
 const answers = [
   { kind: "goal", goal: { kind: "event-candidate", candidateId: creationId } },
@@ -27,7 +55,390 @@ const answers = [
   { kind: "success", success: { kind: "authored", text: "Ride well" } },
 ] as const;
 
+const newAnswers = [
+  { kind: "plan-length", weeks: 12 },
+  { kind: "start-timing", timing: { kind: "as-soon-as-possible" } },
+  { kind: "start-timing", timing: { kind: "earliest", date: "1998-09-07" } },
+  { kind: "schedule-mode", mode: "fixed" },
+  { kind: "schedule-mode", mode: "flexible" },
+  {
+    kind: "availability",
+    mode: "fixed",
+    weeklyHoursLimit: 8,
+    longestWorkoutHours: 3,
+    usableWeekdays: [1, 3, 5, 7],
+  },
+  {
+    kind: "availability",
+    mode: "flexible",
+    weeklyHoursLimit: 40.25,
+    longestWorkoutHours: 12.25,
+  },
+  { kind: "commitments", commitments: { kind: "none" } },
+  {
+    kind: "commitments",
+    commitments: { kind: "authored", text: "Strength training on Wednesdays" },
+  },
+  { kind: "baseline", baseline: "regular" },
+  { kind: "baseline", baseline: "occasional" },
+  { kind: "baseline", baseline: "starting-again" },
+  { kind: "restriction", restriction: { kind: "none" } },
+  {
+    kind: "restriction",
+    restriction: { kind: "no-training", endDate: "1998-09-14" },
+  },
+  { kind: "restriction", restriction: { kind: "no-hard-training" } },
+  {
+    kind: "restriction",
+    restriction: { kind: "max-duration", hours: 1.5, endDate: "1998-09-21" },
+  },
+] as const;
+
+const rejectedNewAnswers = [
+  ["plan-length", { kind: "plan-length", weeks: 6 }],
+  ["start-timing", { kind: "start-timing", timing: { kind: "earliest", date: "1998-02-31" } }],
+  ["schedule-mode", { kind: "schedule-mode", mode: "variable" }],
+  [
+    "availability",
+    {
+      kind: "availability",
+      mode: "flexible",
+      weeklyHoursLimit: 0,
+      longestWorkoutHours: 2,
+    },
+  ],
+  ["commitments", { kind: "commitments", commitments: { kind: "authored", text: "" } }],
+  ["baseline", { kind: "baseline", baseline: "unknown" }],
+  [
+    "restriction",
+    {
+      kind: "restriction",
+      restriction: { kind: "no-training", text: "Persistent knee pain" },
+    },
+  ],
+] as const;
+
+const newQuestions = [
+  {
+    kind: "plan-length-question",
+    step,
+    prompt: "How long should this Plan be?",
+    options: [
+      { weeks: 4, label: "4 weeks", description: "A short block." },
+      { weeks: 8, label: "8 weeks", description: "One training cycle." },
+      { weeks: 12, label: "12 weeks", description: "Steady progression." },
+      { weeks: 16, label: "16 weeks", description: "The longest build." },
+    ],
+  },
+  {
+    kind: "start-timing-question",
+    step,
+    prompt: "When can this Plan start?",
+    earliestAllowed: "1998-09-03",
+    options: [
+      {
+        timing: "as-soon-as-possible",
+        label: "As soon as possible",
+        description: "Start at the earliest suitable week.",
+      },
+      { timing: "earliest", label: "From a date", description: "Set an earliest date." },
+    ],
+    dateLabel: "Earliest start date",
+  },
+  {
+    kind: "schedule-mode-question",
+    step,
+    prompt: "How should Workouts fit your week?",
+    options: [
+      { mode: "fixed", label: "Fixed", description: "Put each Workout on a usable day." },
+      {
+        mode: "flexible",
+        label: "Flexible",
+        description: "Choose from an ordered weekly pool.",
+      },
+    ],
+  },
+  {
+    kind: "availability-question",
+    step,
+    prompt: "How much time is available?",
+    mode: "flexible",
+    derivedPoolNote: "This weekly limit creates a pool of four Workouts.",
+  },
+  {
+    kind: "commitments-question",
+    step,
+    prompt: "Any fixed commitments or other training?",
+    noneOption: { label: "Nothing fixed", description: "There is nothing fixed to add." },
+    authoredOption: authoredOption,
+  },
+  {
+    kind: "baseline-question",
+    step,
+    prompt: "What has training looked like recently?",
+    options: [
+      { baseline: "regular", label: "Regular", description: "Training has been consistent." },
+      {
+        baseline: "occasional",
+        label: "Occasional",
+        description: "Training has happened some weeks.",
+      },
+      {
+        baseline: "starting-again",
+        label: "Starting again",
+        description: "Training has paused for a while.",
+      },
+    ],
+  },
+  {
+    kind: "restriction-question",
+    step,
+    prompt: "Is any Training Restriction active?",
+    options: [
+      { kind: "none", label: "None", description: "No restriction." },
+      { kind: "no-training", label: "No training", description: "No Workouts." },
+      { kind: "no-hard-training", label: "No hard training", description: "No intensity." },
+      { kind: "max-duration", label: "Maximum duration", description: "Set a limit." },
+    ],
+  },
+] as const;
+
+const invalidNewQuestions = [
+  [
+    "plan-length",
+    {
+      ...newQuestions[0],
+      options: [newQuestions[0].options[0], ...newQuestions[0].options.slice(0, 3)],
+    },
+  ],
+  ["start-timing", { ...newQuestions[1], earliestAllowed: "1998-02-31" }],
+  [
+    "schedule-mode",
+    {
+      ...newQuestions[2],
+      options: [newQuestions[2].options[0], newQuestions[2].options[0]],
+    },
+  ],
+  ["availability", { ...newQuestions[3], mode: "variable" }],
+  [
+    "commitments",
+    { ...newQuestions[4], authoredOption: { ...newQuestions[4].authoredOption, placeholder: "" } },
+  ],
+  [
+    "baseline",
+    {
+      ...newQuestions[5],
+      options: [newQuestions[5].options[0], newQuestions[5].options[0], newQuestions[5].options[1]],
+    },
+  ],
+  [
+    "restriction",
+    {
+      ...newQuestions[6],
+      options: [
+        newQuestions[6].options[0],
+        newQuestions[6].options[0],
+        newQuestions[6].options[1],
+        newQuestions[6].options[2],
+      ],
+    },
+  ],
+] as const;
+
+const summaryFixtures = [
+  {
+    answerKey: "goal",
+    title: "Goal",
+    detail: "Build power",
+    source: { kind: "athlete" },
+    question: card.openQuestion,
+    answer: answers[2],
+  },
+  {
+    answerKey: "success",
+    title: "Success",
+    detail: "Ride well",
+    source: { kind: "athlete" },
+    question: {
+      kind: "success-question",
+      step: { current: 2, total: 9 },
+      prompt: "Success?",
+      input: {
+        kind: "authored",
+        options: [
+          { text: "Train consistently", label: "Train consistently", description: "Repeat weeks." },
+          { text: "Climb stronger", label: "Climb stronger", description: "Climb steadily." },
+          {
+            text: "Ride farther comfortably",
+            label: "Ride farther comfortably",
+            description: "Build endurance.",
+          },
+        ],
+        authored: authoredOption,
+      },
+    },
+    answer: answers[4],
+  },
+  {
+    answerKey: "plan-length",
+    title: "Plan length",
+    detail: "12 weeks",
+    source: { kind: "athlete" },
+    question: newQuestions[0],
+    answer: newAnswers[0],
+  },
+  {
+    answerKey: "start-timing",
+    title: "Start timing",
+    detail: "As soon as possible",
+    source: { kind: "athlete" },
+    question: newQuestions[1],
+    answer: newAnswers[1],
+  },
+  {
+    answerKey: "schedule-mode",
+    title: "Schedule mode",
+    detail: "Fixed Schedule",
+    source: { kind: "athlete" },
+    question: newQuestions[2],
+    answer: newAnswers[3],
+  },
+  {
+    answerKey: "availability",
+    title: "Availability",
+    detail: "8 h",
+    source: { kind: "athlete" },
+    question: newQuestions[3],
+    answer: newAnswers[6],
+  },
+  {
+    answerKey: "commitments",
+    title: "Commitments",
+    detail: "Nothing fixed",
+    source: { kind: "athlete" },
+    question: newQuestions[4],
+    answer: newAnswers[7],
+  },
+  {
+    answerKey: "baseline",
+    title: "Training baseline",
+    detail: "Regular",
+    source: { kind: "derived", label: "recent training" },
+    question: newQuestions[5],
+    answer: newAnswers[9],
+  },
+  {
+    answerKey: "restriction",
+    title: "Training Restriction",
+    detail: "None",
+    source: { kind: "athlete" },
+    question: newQuestions[6],
+    answer: newAnswers[12],
+  },
+] as const;
+
 describe("Plan Creation contract", () => {
+  it("accepts every essential answer kind and nested variant", () => {
+    newAnswers.forEach((answer) =>
+      expect(PlanCreationAnswerInputSchema.parse(answer)).toEqual(answer),
+    );
+  });
+
+  it.each(rejectedNewAnswers)("rejects an invalid %s answer", (_kind, answer) => {
+    expect(PlanCreationAnswerInputSchema.safeParse(answer).success).toBe(false);
+  });
+
+  it("rejects invalid availability limits and duplicate fixed weekdays", () => {
+    for (const answer of [
+      {
+        kind: "availability",
+        mode: "fixed",
+        weeklyHoursLimit: 8,
+        longestWorkoutHours: 2,
+        usableWeekdays: [1, 3, 3, 6],
+      },
+      {
+        kind: "availability",
+        mode: "fixed",
+        weeklyHoursLimit: 3,
+        longestWorkoutHours: 3.5,
+        usableWeekdays: [2, 4, 6],
+      },
+      {
+        kind: "availability",
+        mode: "flexible",
+        weeklyHoursLimit: 4,
+        longestWorkoutHours: 4.5,
+      },
+    ]) {
+      expect(PlanCreationAnswerInputSchema.safeParse(answer).success).toBe(false);
+    }
+  });
+
+  it("keeps Training Restriction input free of athlete-authored medical text", () => {
+    const answer = PlanCreationAnswerInputSchema.parse({
+      kind: "restriction",
+      restriction: { kind: "no-training" },
+    });
+    expect(answer.kind).toBe("restriction");
+    if (answer.kind !== "restriction") throw new TypeError("Expected a restriction answer");
+    expect(
+      Object.entries(answer.restriction)
+        .filter(([, value]) => typeof value === "string")
+        .map(([key]) => key),
+    ).toEqual(["kind"]);
+    expect(
+      PlanCreationAnswerInputSchema.safeParse({
+        kind: "restriction",
+        restriction: { kind: "max-duration", hours: 1, details: "Treat knee pain" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts every essential open question kind", () => {
+    newQuestions.forEach((question) =>
+      expect(PlanCreationOpenQuestionSchema.parse(question)).toEqual(question),
+    );
+  });
+
+  it.each(invalidNewQuestions)("rejects an invalid %s question", (_kind, question) => {
+    expect(PlanCreationOpenQuestionSchema.safeParse(question).success).toBe(false);
+  });
+
+  it("accepts the nine answer summary keys in flow order", () => {
+    expect(PLAN_CREATION_ANSWER_KEYS).toEqual([
+      "goal",
+      "success",
+      "plan-length",
+      "start-timing",
+      "schedule-mode",
+      "availability",
+      "commitments",
+      "baseline",
+      "restriction",
+    ]);
+    summaryFixtures.forEach((summary) =>
+      expect(PlanCreationAnswerSummarySchema.parse(summary)).toEqual(summary),
+    );
+  });
+
+  it("requires consistent Card readiness and open-question states", () => {
+    expect(PlanCreationCardModelSchema.parse(card).readiness).toBe("incomplete");
+    expect(
+      PlanCreationCardModelSchema.parse({ ...card, readiness: "ready", openQuestion: null })
+        .readiness,
+    ).toBe("ready");
+    expect(PlanCreationCardModelSchema.safeParse({ ...card, readiness: "ready" }).success).toBe(
+      false,
+    );
+    expect(PlanCreationCardModelSchema.safeParse({ ...card, openQuestion: null }).success).toBe(
+      false,
+    );
+    const withoutReadiness: Record<string, unknown> = { ...card };
+    delete withoutReadiness.readiness;
+    expect(PlanCreationCardModelSchema.safeParse(withoutReadiness).success).toBe(false);
+  });
+
   it("closes every answer and host-owned Card variant", () => {
     answers.forEach((answer) =>
       expect(PlanCreationAnswerInputSchema.parse(answer)).toEqual(answer),
@@ -37,11 +448,9 @@ describe("Plan Creation contract", () => {
       PlanCreationCardModelSchema.parse({
         ...card,
         version: 2,
-        answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "x".repeat(2_000) }],
+        answeredSummaries: [{ ...summaryFixtures[0], detail: "x".repeat(2_000) }],
         openQuestion: {
-          kind: "success-question",
-          prompt: "Success?",
-          input: { kind: "authored", placeholder: "Describe success" },
+          ...summaryFixtures[1].question,
         },
       }),
     ).toMatchObject({ version: 2, openQuestion: { input: { kind: "authored" } } });
@@ -50,14 +459,24 @@ describe("Plan Creation contract", () => {
         ...card,
         openQuestion: {
           kind: "success-question",
+          step: { current: 2, total: 8 },
           prompt: "Success?",
           input: {
             kind: "event-finish",
             options: [
-              { choice: "finish-comfortably", label: "Finish comfortably" },
-              { choice: "finish-fast", label: "Finish fast" },
-              { choice: "race-for-result", label: "Race for a result" },
+              {
+                choice: "finish-comfortably",
+                label: "Finish comfortably",
+                description: "Enjoy the finish.",
+              },
+              { choice: "finish-fast", label: "Finish fast", description: "Finish strongly." },
+              {
+                choice: "race-for-result",
+                label: "Race for a result",
+                description: "Race strongly.",
+              },
             ],
+            authored: authoredOption,
           },
         },
       }),
@@ -65,7 +484,7 @@ describe("Plan Creation contract", () => {
     expect(() =>
       PlanCreationCardModelSchema.parse({
         ...card,
-        answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "x".repeat(2_001) }],
+        answeredSummaries: [{ ...summaryFixtures[0], detail: "x".repeat(2_001) }],
       }),
     ).toThrow();
   });

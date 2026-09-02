@@ -871,14 +871,16 @@ export async function createLocalCoachComposition(
   const now = dependencies.now ?? Date.now;
   const logger = createSubsystemLogger("agent", input.home.root);
   const planningIdentity = createAuthoredIdentity(input.home.configDir, { now });
+  const planningTimezone = resolveUserTimezone(input.config.session.timezone);
   const planCreationOperations = createPlanCreationOperations({
     repository: createPlanCreationRepository(input.context.store),
     identity: planningIdentity,
     crypto: globalThis.crypto,
     eventCandidates: { read: async () => [] },
+    baselineEvidence: { read: async () => undefined },
+    today: () => todayInTZ(planningTimezone, new Date(now())),
   });
   const planningRepository = createLegacyPlanRepository(input.context.store);
-  const planningTimezone = resolveUserTimezone(input.config.session.timezone);
   const planningDateKey = (): number =>
     Number(todayInTZ(planningTimezone, new Date(now())).replaceAll("-", ""));
   await importLegacyCurrentPlan({
@@ -1457,7 +1459,6 @@ export async function createLocalCoachComposition(
           backend,
           getAthleteState: () => stateReader.getAthleteState(),
           cyclingFtpAnchorResolver,
-          planCreationDrainGate: planCreationOperations,
           now,
         }),
       };

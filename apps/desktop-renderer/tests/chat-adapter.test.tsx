@@ -108,6 +108,9 @@ describe("chat view adapter", () => {
       planCreationLoaded: false,
       planCreationBusy: false,
       planCreationError: null,
+      planCreationPaused: false,
+      planCreationEditingKey: null,
+      planCreationFocusRevision: 0,
       timeline: [
         {
           kind: "message",
@@ -127,6 +130,7 @@ describe("chat view adapter", () => {
       workBlocked: true,
       sendDisabled: true,
       inputDisabled: true,
+      composerPlaceholder: "Message your coach",
       newConversationUnavailable: false,
       resetPhase: "idle",
       resetCount: 0,
@@ -221,41 +225,115 @@ describe("chat view adapter", () => {
     });
   });
 
-  it("projects a Plan Creation conversation item and blocks only Send for an open question", () => {
+  it("projects a Plan Creation conversation item and blocks the composer for an open question", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
     const model = {
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress" as const,
+      readiness: "incomplete" as const,
       answeredSummaries: [],
-      openQuestion: { kind: "goal-question" as const, prompt: "Goal?", candidates: [] },
+      openQuestion: {
+        kind: "goal-question" as const,
+        step: { current: 1, total: 9 },
+        prompt: "Goal?",
+        candidates: [],
+        manualOption: {
+          label: "Something else" as const,
+          description: "Name an event.",
+          editorLabel: "Name the event.",
+          placeholder: "Event name",
+          nameLabel: "Event name",
+          dateLabel: "Event date",
+        },
+        fitnessOption: {
+          label: "Improve without an event",
+          description: "Build fitness.",
+          editorLabel: "Fitness Goal",
+          placeholder: "Describe the goal",
+        },
+      },
     };
     adapter.view.render(
       EMPTY_CHAT_STATE,
       controls({
-        planCreation: { value: model, loaded: true, busy: false, error: null },
+        planCreation: {
+          value: model,
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 1,
+        },
       }),
     );
     expect(published.at(-1)).toMatchObject({
       planCreation: model,
       planCreationLoaded: true,
       sendDisabled: true,
-      inputDisabled: false,
+      inputDisabled: true,
+      composerPlaceholder: "Finish the Plan question above",
       timeline: [{ kind: "plan-creation", model }],
     });
     adapter.view.render(
       EMPTY_CHAT_STATE,
       controls({
         planCreation: {
-          value: { ...model, version: 2, openQuestion: null },
+          value: model,
           loaded: true,
           busy: false,
           error: null,
+          paused: true,
+          editingKey: null,
+          focusRevision: 1,
         },
       }),
     );
-    expect(published.at(-1)).toMatchObject({ sendDisabled: false, inputDisabled: false });
+    expect(published.at(-1)).toMatchObject({
+      sendDisabled: false,
+      inputDisabled: false,
+      composerPlaceholder: "Message your coach",
+    });
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        planCreation: {
+          value: { ...model, version: 2, readiness: "ready", openQuestion: null },
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 2,
+        },
+      }),
+    );
+    expect(published.at(-1)).toMatchObject({
+      sendDisabled: false,
+      inputDisabled: false,
+      composerPlaceholder: "Message your coach",
+    });
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        planCreation: {
+          value: { ...model, version: 2, readiness: "ready", openQuestion: null },
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: "goal",
+          focusRevision: 3,
+        },
+      }),
+    );
+    expect(published.at(-1)).toMatchObject({
+      sendDisabled: true,
+      inputDisabled: true,
+      composerPlaceholder: "Finish the Plan question above",
+    });
   });
 
   it("suppresses interrupted recovery while a Plan Creation question is open", () => {
@@ -281,12 +359,35 @@ describe("chat view adapter", () => {
             creationId: "01J00000000000000000000000",
             version: 1,
             status: "in-progress",
+            readiness: "incomplete",
             answeredSummaries: [],
-            openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+            openQuestion: {
+              kind: "goal-question",
+              step: { current: 1, total: 9 },
+              prompt: "Goal?",
+              candidates: [],
+              manualOption: {
+                label: "Something else",
+                description: "Name an event.",
+                editorLabel: "Name the event.",
+                placeholder: "Event name",
+                nameLabel: "Event name",
+                dateLabel: "Event date",
+              },
+              fitnessOption: {
+                label: "Improve without an event",
+                description: "Build fitness.",
+                editorLabel: "Fitness Goal",
+                placeholder: "Describe the goal",
+              },
+            },
           },
           loaded: true,
           busy: false,
           error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 1,
         },
       }),
     );

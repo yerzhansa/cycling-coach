@@ -54,6 +54,7 @@ export function ChatView(): ReactElement {
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [compact, setCompact] = useState(false);
   const [decisionCustomOpen, setDecisionCustomOpen] = useState(false);
+  const [planCreationEditorOpen, setPlanCreationEditorOpen] = useState(false);
   const activeView = useEnduragentStore((state) => state.activeView);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
@@ -136,6 +137,9 @@ export function ChatView(): ReactElement {
   const setCustomDecisionOpen = useCallback((open: boolean): void => {
     setDecisionCustomOpen(open);
   }, []);
+  const setPlanEditorOpen = useCallback((open: boolean): void => {
+    setPlanCreationEditorOpen(open);
+  }, []);
 
   return (
     <section
@@ -211,12 +215,12 @@ export function ChatView(): ReactElement {
               </div>
               <div className="mb-2.5 grid gap-2.5 empty:hidden">
                 <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
-                <PlanCreationDock />
+                <PlanCreationDock onEditorOpenChange={setPlanEditorOpen} />
               </div>
               <AttachmentPanel />
               <QueuedMessages />
             </div>
-            <Composer handle={composer} hidden={decisionCustomOpen} />
+            <Composer handle={composer} hidden={decisionCustomOpen || planCreationEditorOpen} />
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>
         </div>
