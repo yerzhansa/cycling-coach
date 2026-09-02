@@ -54,6 +54,17 @@ describe("Plan Creation repository", () => {
           ? JSON.stringify({ kind: "goal", goal: { kind: "fitness", outcome: "Build power" } })
           : JSON.stringify({ kind: "success", success: { kind: "authored", text: "Ride well" } }),
     });
+  const discard = (
+    expectedVersion = 1,
+    commandId = "discard",
+    digest = "c",
+    targetCreationId = creationId,
+  ) =>
+    repository.discard({
+      command: stamp(commandId, digest, 883_612_800_002),
+      creationId: targetCreationId,
+      expectedVersion,
+    });
 
   it("creates once and resumes without replacing the seed", async () => {
     await expect(start()).resolves.toMatchObject({ outcome: "created", snapshot: { version: 1 } });
@@ -101,6 +112,174 @@ describe("Plan Creation repository", () => {
         "SELECT command_id FROM planning_command WHERE command_name='plan_creation.answer'",
       ),
     ).toBeUndefined();
+  });
+
+  it("discards terminally, preserves answers, and permits a fresh creation", async () => {
+    await start();
+    await answer();
+    const answersBefore = await store.all(
+      "SELECT * FROM plan_creation_answer WHERE creation_id=? ORDER BY sequence,id",
+      [creationId],
+    );
+
+    await expect(discard(2)).resolves.toEqual({ outcome: "discarded" });
+    await expect(repository.readUnfinished()).resolves.toBeUndefined();
+    expect(
+      await store.get(
+        "SELECT status,version,terminal_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter FROM plan_creation WHERE id=?",
+        [creationId],
+      ),
+    ).toEqual({
+      status: "discarded",
+      version: 3,
+      terminal_at_ms: 883_612_800_002,
+      updated_at_ms: 883_612_800_002,
+      device_id: "test-device-1998",
+      hlc_physical_ms: 883_612_800_002,
+      hlc_counter: 0,
+    });
+    expect(
+      await store.all(
+        "SELECT * FROM plan_creation_answer WHERE creation_id=? ORDER BY sequence,id",
+        [creationId],
+      ),
+    ).toEqual(answersBefore);
+    const command = await store.get(
+      "SELECT status,version,aggregate_refs_json,result_json FROM planning_command WHERE command_name='plan_creation.discard' AND command_id='discard'",
+    );
+    expect(command).toMatchObject({
+      status: "succeeded",
+      version: 2,
+    });
+    expect(JSON.parse(String(command?.aggregate_refs_json))).toEqual({ creationId });
+    expect(JSON.parse(String(command?.result_json))).toEqual({
+      creationId,
+      outcome: "discarded",
+      version: 3,
+    });
+
+    await expect(
+      repository.start({
+        command: stamp("start-after-discard", "d", 883_612_800_003),
+        creationId: secondId,
+        seed,
+      }),
+    ).resolves.toMatchObject({ outcome: "created", snapshot: { id: secondId, version: 1 } });
+    expect(
+      await store.get(
+        "SELECT count(*) count FROM plan_creation WHERE status IN ('in-progress','review')",
+      ),
+    ).toEqual({ count: 1 });
+    expect(
+      await store.get("SELECT status,version FROM plan_creation WHERE id=?", [creationId]),
+    ).toEqual({ status: "discarded", version: 3 });
+  });
+
+  it("leaves no partial effect for a stale discard version", async () => {
+    await start();
+    const before = await store.get("SELECT * FROM plan_creation WHERE id=?", [creationId]);
+
+    await expect(discard(2)).rejects.toMatchObject({ code: "stale-version" });
+    expect(await store.get("SELECT * FROM plan_creation WHERE id=?", [creationId])).toEqual(before);
+    expect(
+      await store.get(
+        "SELECT command_id FROM planning_command WHERE command_name='plan_creation.discard'",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects discard when the guarded update no longer matches unfinished status", async () => {
+    await start();
+    const before = await store.get("SELECT * FROM plan_creation WHERE id=?", [creationId]);
+    let intercepted = false;
+    const guardedRepository = createPlanCreationRepository({
+      exec: (sql) => store.exec(sql),
+      run: (sql, params) => store.run(sql, params),
+      async get(sql, params) {
+        if (!intercepted && sql.includes("UPDATE plan_creation SET status='discarded'")) {
+          intercepted = true;
+          return undefined;
+        }
+        return store.get(sql, params);
+      },
+      all: (sql, params) => store.all(sql, params),
+      close: () => store.close(),
+      transaction: (operation) => store.transaction(operation),
+    });
+
+    await expect(
+      guardedRepository.discard({
+        command: stamp("guarded-discard", "e", 883_612_800_003),
+        creationId,
+        expectedVersion: 1,
+      }),
+    ).rejects.toMatchObject({ code: "stale-version" });
+    expect(intercepted).toBe(true);
+    expect(await store.get("SELECT * FROM plan_creation WHERE id=?", [creationId])).toEqual(before);
+    expect(
+      await store.get(
+        "SELECT command_id FROM planning_command WHERE command_name='plan_creation.discard'",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("replays a discard without touching a later creation", async () => {
+    await start();
+    const firstResult = await discard();
+    await repository.start({
+      command: stamp("start-after-discard", "d", 883_612_800_003),
+      creationId: secondId,
+      seed,
+    });
+
+    await expect(discard()).resolves.toEqual(firstResult);
+    await expect(repository.readUnfinished()).resolves.toMatchObject({
+      id: secondId,
+      version: 1,
+      answers: [],
+    });
+    expect(
+      await store.get("SELECT status,version FROM plan_creation WHERE id=?", [creationId]),
+    ).toEqual({ status: "discarded", version: 2 });
+    expect(
+      await store.get(
+        "SELECT count(*) count FROM planning_command WHERE command_name='plan_creation.discard'",
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it("rejects conflicting reuse of a discard command", async () => {
+    await start();
+    await discard();
+    const creationBefore = await store.get("SELECT * FROM plan_creation WHERE id=?", [creationId]);
+    const commandBefore = await store.get(
+      "SELECT * FROM planning_command WHERE command_name='plan_creation.discard' AND command_id='discard'",
+    );
+
+    await expect(discard(1, "discard", "d")).rejects.toMatchObject({
+      code: "command-conflict",
+    });
+    expect(await store.get("SELECT * FROM plan_creation WHERE id=?", [creationId])).toEqual(
+      creationBefore,
+    );
+    expect(
+      await store.get(
+        "SELECT * FROM planning_command WHERE command_name='plan_creation.discard' AND command_id='discard'",
+      ),
+    ).toEqual(commandBefore);
+  });
+
+  it("rejects discard when the unfinished creation is absent or different", async () => {
+    await expect(discard()).rejects.toMatchObject({ code: "no-unfinished-creation" });
+    await start();
+    await expect(discard(1, "wrong-creation", "d", secondId)).rejects.toMatchObject({
+      code: "no-unfinished-creation",
+    });
+    expect(
+      await store.get(
+        "SELECT count(*) count FROM planning_command WHERE command_name='plan_creation.discard'",
+      ),
+    ).toEqual({ count: 0 });
   });
 
   it("rejects a malformed persisted seed as a corrupt record", async () => {

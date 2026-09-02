@@ -49,6 +49,9 @@ function stubActions(): ChatActions {
     continuePlanCreation: vi.fn(),
     editPlanCreation: vi.fn(),
     cancelPlanCreationEdit: vi.fn(),
+    openPlanCreationDiscard: vi.fn(),
+    cancelPlanCreationDiscard: vi.fn(),
+    confirmPlanCreationDiscard: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -2904,6 +2907,209 @@ describe("chat surface", () => {
         screen.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
       ).toBeVisible();
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    });
+
+    it("confirms discarding in a modal and restores the initiating control on Escape", async () => {
+      const actions = stubActions();
+      const model = planCreationModel(
+        {
+          kind: "success-question",
+          prompt: "What would success mean?",
+          input: { kind: "authored", placeholder: "Describe success" },
+        },
+        {
+          version: 2,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Build steady power",
+              question: {
+                kind: "goal-question",
+                prompt: "What are you preparing for?",
+                candidates: [],
+              },
+              answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
+            },
+          ],
+        },
+      );
+      actions.openPlanCreationDiscard = vi.fn(() => {
+        setChat({
+          planCreationDiscardConfirmationOpen: true,
+          sendDisabled: true,
+          inputDisabled: true,
+        });
+      });
+      actions.cancelPlanCreationDiscard = vi.fn(() => {
+        setChat({
+          planCreationDiscardConfirmationOpen: false,
+          planCreationFocusRequest: { target: "discard", revision: 1 },
+          sendDisabled: true,
+          inputDisabled: true,
+        });
+      });
+      useEnduragentStore.getState().bindChatActions(actions);
+      render(<Harness />);
+      setChat({
+        decision: unansweredDecision(),
+        planCreation: model,
+        planCreationLoaded: true,
+        sendDisabled: true,
+        inputDisabled: true,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+
+      const discard = screen.getByRole("button", { name: "Discard" });
+      expect(discard).toHaveClass("bg-destructive/10");
+      await userEvent.click(discard);
+
+      expect(screen.getByRole("heading", { name: "Discard this Plan creation?" })).toBeVisible();
+      expect(composer()).toBeDisabled();
+      expect(
+        screen.getByText(
+          "No Plan is created. Your active Plan, Schedule, training restrictions, closed Plans, saved preferences, and chat history are unchanged.",
+        ),
+      ).toBeVisible();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Keep creating" })).toHaveFocus(),
+      );
+      expect(screen.getByRole("button", { name: "Discard creation" })).toHaveClass(
+        "bg-destructive",
+      );
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(actions.cancelPlanCreationDiscard).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("heading", { name: "Discard this Plan creation?" })).toBeNull();
+      expect(screen.getByRole("heading", { name: "What would success mean?" })).toBeVisible();
+      expect(screen.getByText("Choose tomorrow’s priority.")).toBeVisible();
+      await waitFor(() => expect(discard).toHaveFocus());
+    });
+
+    it("disables discard confirmation in flight and focuses Start after success", async () => {
+      const actions = stubActions();
+      const model = planCreationModel(null, {
+        version: 3,
+        answeredSummaries: [
+          {
+            answerKey: "goal",
+            title: "Goal",
+            detail: "Build steady power",
+            question: {
+              kind: "goal-question",
+              prompt: "What are you preparing for?",
+              candidates: [],
+            },
+            answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
+          },
+        ],
+      });
+      actions.openPlanCreationDiscard = vi.fn(() => {
+        setChat({
+          planCreationDiscardConfirmationOpen: true,
+          sendDisabled: true,
+          inputDisabled: true,
+        });
+      });
+      actions.confirmPlanCreationDiscard = vi.fn(() => {
+        setChat({ planCreationBusy: true });
+      });
+      useEnduragentStore.getState().bindChatActions(actions);
+      render(<Harness />);
+      setChat({
+        planCreation: model,
+        planCreationLoaded: true,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+      await userEvent.click(screen.getByRole("button", { name: "Discard creation" }));
+
+      expect(actions.confirmPlanCreationDiscard).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: "Keep creating" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Discard creation" })).toBeDisabled();
+      setChat({
+        planCreation: null,
+        planCreationBusy: false,
+        planCreationDiscardConfirmationOpen: false,
+        planCreationFocusRequest: { target: "start", revision: 1 },
+        sendDisabled: false,
+        inputDisabled: false,
+        timeline: [
+          { kind: "plan-creation-discard", eventId: "01J00000000000000000000000" },
+        ],
+      });
+      const start = screen.getByRole("button", { name: "Start a Plan" });
+      await waitFor(() => expect(start).toHaveFocus());
+      expect(composer()).toBeEnabled();
+      expect(screen.queryByText("Build steady power", { exact: true })).toBeNull();
+      expect(screen.getByText("Plan creation discarded")).toBeVisible();
+      expect(document.querySelector('[data-parity="discarded.record"]')).not.toBeNull();
+      expect(
+        screen.getByText(
+          "No Plan was created. Your active Plan, Schedule, training restrictions, saved preferences, and chat history are unchanged.",
+        ),
+      ).toBeVisible();
+    });
+
+    it("closes discard confirmation and shows the returned Card after rejection", async () => {
+      const actions = stubActions();
+      const model = planCreationModel(null, {
+        version: 3,
+        answeredSummaries: [
+          {
+            answerKey: "goal",
+            title: "Goal",
+            detail: "Build steady power",
+            question: {
+              kind: "goal-question",
+              prompt: "What are you preparing for?",
+              candidates: [],
+            },
+            answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
+          },
+        ],
+      });
+      const returned = { ...model, version: 4 };
+      actions.openPlanCreationDiscard = vi.fn(() => {
+        setChat({
+          planCreationDiscardConfirmationOpen: true,
+          sendDisabled: true,
+          inputDisabled: true,
+        });
+      });
+      actions.confirmPlanCreationDiscard = vi.fn(() => {
+        setChat({
+          planCreation: returned,
+          planCreationDiscardConfirmationOpen: false,
+          planCreationFocusRequest: { target: "discard", revision: 1 },
+          sendDisabled: false,
+          inputDisabled: false,
+          notice:
+            "Plan Creation changed before it could be discarded. The latest version is shown.",
+          timeline: [{ kind: "plan-creation", model: returned }],
+        });
+      });
+      useEnduragentStore.getState().bindChatActions(actions);
+      render(<Harness />);
+      setChat({
+        planCreation: model,
+        planCreationLoaded: true,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: "Discard" }));
+      await userEvent.click(screen.getByRole("button", { name: "Discard creation" }));
+
+      expect(screen.queryByRole("heading", { name: "Discard this Plan creation?" })).toBeNull();
+      expect(screen.getByText("Build steady power", { exact: true })).toBeVisible();
+      expect(
+        screen.getByText(
+          "Plan Creation changed before it could be discarded. The latest version is shown.",
+        ),
+      ).toHaveClass("chat-notice");
+      await waitFor(() => expect(screen.getByRole("button", { name: "Discard" })).toHaveFocus());
     });
 
     it("declares the Inter and Geist font foundation", async () => {

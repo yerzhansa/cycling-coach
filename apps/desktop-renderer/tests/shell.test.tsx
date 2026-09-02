@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell";
+import { loadSettingsView } from "../src/app/views";
 import type { OnboardingController } from "../src/onboarding/controller";
 import type { CredentialSettingsState } from "../src/settings/credential-controller";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
@@ -236,7 +237,7 @@ async function preloadLazyViews(): Promise<void> {
     import("../src/ui/archive/ArchiveView"),
     import("../src/ui/training/TrainingView"),
     import("../src/ui/plan/PlanView"),
-    import("../src/ui/settings/SettingsView"),
+    loadSettingsView(),
   ]);
 }
 

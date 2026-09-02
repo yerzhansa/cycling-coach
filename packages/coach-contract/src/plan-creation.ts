@@ -539,9 +539,33 @@ export const PlanCreationAnswerRpcResultSchema = z.discriminatedUnion("status", 
 ]);
 export type PlanCreationAnswerRpcResult = z.infer<typeof PlanCreationAnswerRpcResultSchema>;
 
+export const PlanCreationDiscardRpcParamsSchema = z
+  .object({
+    commandId: PlanCreationCommandIdSchema,
+    creationId: PlanCreationUlidSchema,
+    expectedVersion: z.number().int().positive(),
+  })
+  .strict();
+export type PlanCreationDiscardRpcParams = z.infer<typeof PlanCreationDiscardRpcParamsSchema>;
+
+export const PlanCreationDiscardRpcResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("discarded") }).strict(),
+  z
+    .object({
+      status: z.literal("rejected"),
+      reason: z.enum(["stale-version", "command-conflict", "no-unfinished-creation"]),
+      planCreation: PlanCreationCardModelSchema.nullable(),
+    })
+    .strict(),
+]);
+export type PlanCreationDiscardRpcResult = z.infer<typeof PlanCreationDiscardRpcResultSchema>;
+
 export interface PlanCreationOperations {
   "plan_creation.start"(request: PlanCreationStartRpcParams): Promise<PlanCreationStartRpcResult>;
   "plan_creation.answer"(
     request: PlanCreationAnswerRpcParams,
   ): Promise<PlanCreationAnswerRpcResult>;
+  "plan_creation.discard"(
+    request: PlanCreationDiscardRpcParams,
+  ): Promise<PlanCreationDiscardRpcResult>;
 }

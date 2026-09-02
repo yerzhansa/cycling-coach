@@ -48,7 +48,8 @@ export type ChatTranscriptItemView =
   | { readonly kind: "message"; readonly message: ChatMessageView }
   | { readonly kind: "choice"; readonly choice: ChatChoiceView }
   | { readonly kind: "planning-request"; readonly delivery: PlanningRequestDelivery }
-  | { readonly kind: "plan-creation"; readonly model: PlanCreationCardModel | null };
+  | { readonly kind: "plan-creation"; readonly model: PlanCreationCardModel | null }
+  | { readonly kind: "plan-creation-discard"; readonly eventId: string };
 
 export type ChatDecisionPhase = "idle" | "continuing" | "recovering";
 
@@ -78,6 +79,11 @@ export interface ChatSurfaceState {
   readonly planCreationPaused: boolean;
   readonly planCreationEditingKey: PlanCreationAnswerSummary["answerKey"] | null;
   readonly planCreationFocusRevision: number;
+  readonly planCreationDiscardConfirmationOpen: boolean;
+  readonly planCreationFocusRequest: {
+    readonly target: "discard" | "start";
+    readonly revision: number;
+  } | null;
   readonly timeline: readonly ChatTranscriptItemView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
@@ -119,6 +125,9 @@ export interface ChatActions {
   continuePlanCreation(): void;
   editPlanCreation(answerKey: PlanCreationAnswerSummary["answerKey"]): void;
   cancelPlanCreationEdit(): void;
+  openPlanCreationDiscard?(): void;
+  cancelPlanCreationDiscard?(): void;
+  confirmPlanCreationDiscard?(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): void;
@@ -161,6 +170,8 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   planCreationPaused: false,
   planCreationEditingKey: null,
   planCreationFocusRevision: 0,
+  planCreationDiscardConfirmationOpen: false,
+  planCreationFocusRequest: null,
   timeline: Object.freeze([]),
   status: "idle",
   notice: null,
@@ -279,6 +290,9 @@ export function sameChatTimeline(
     if (item.kind === "plan-creation" && other.kind === "plan-creation") {
       return JSON.stringify(item.model) === JSON.stringify(other.model);
     }
+    if (item.kind === "plan-creation-discard" && other.kind === "plan-creation-discard") {
+      return item.eventId === other.eventId;
+    }
     return false;
   });
 }
@@ -312,6 +326,9 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.planCreationPaused === right.planCreationPaused &&
     left.planCreationEditingKey === right.planCreationEditingKey &&
     left.planCreationFocusRevision === right.planCreationFocusRevision &&
+    left.planCreationDiscardConfirmationOpen === right.planCreationDiscardConfirmationOpen &&
+    left.planCreationFocusRequest?.target === right.planCreationFocusRequest?.target &&
+    left.planCreationFocusRequest?.revision === right.planCreationFocusRequest?.revision &&
     left.workBlocked === right.workBlocked &&
     left.sendDisabled === right.sendDisabled &&
     left.inputDisabled === right.inputDisabled &&

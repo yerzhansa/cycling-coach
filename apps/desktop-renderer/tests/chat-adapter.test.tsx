@@ -1,6 +1,7 @@
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PlanCreationCardModel } from "@enduragent/coach-contract";
 import type { ChatView, ChatViewControls } from "../src/chat/controller";
 import { mergeHydratedMessages } from "../src/chat/hydration";
 import { createChatViewAdapter } from "../src/state/adapters/chat";
@@ -111,6 +112,8 @@ describe("chat view adapter", () => {
       planCreationPaused: false,
       planCreationEditingKey: null,
       planCreationFocusRevision: 0,
+      planCreationDiscardConfirmationOpen: false,
+      planCreationFocusRequest: null,
       timeline: [
         {
           kind: "message",
@@ -338,6 +341,135 @@ describe("chat view adapter", () => {
       inputDisabled: true,
       composerPlaceholder: "Finish the Plan question above",
     });
+  });
+
+  it("blocks Send for discard confirmation and projects its notice and focus request", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const model: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        planCreation: {
+          value: model,
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 0,
+          discardConfirmationOpen: true,
+          discardEvents: [],
+          notice: null,
+          focusRequest: null,
+        },
+      }),
+    );
+    expect(published.at(-1)).toMatchObject({
+      planCreationDiscardConfirmationOpen: true,
+      sendDisabled: true,
+      inputDisabled: true,
+      composerPlaceholder: "Finish the Plan question above",
+    });
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        planCreation: {
+          value: { ...model, version: 4 },
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 0,
+          discardConfirmationOpen: false,
+          discardEvents: [],
+          notice: "Plan Creation changed before it could be discarded.",
+          focusRequest: { target: "discard", revision: 2 },
+        },
+      }),
+    );
+    expect(published.at(-1)).toMatchObject({
+      planCreationDiscardConfirmationOpen: false,
+      planCreationFocusRequest: { target: "discard", revision: 2 },
+      notice: "Plan Creation changed before it could be discarded.",
+      sendDisabled: false,
+      inputDisabled: false,
+      composerPlaceholder: "Message your coach",
+    });
+  });
+
+  it("keeps keyed discard consequences before later messages and Plan Creations", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const discardEvents = [
+      { eventId: "01J00000000000000000000000", afterMessageId: null },
+    ];
+
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        planCreation: {
+          value: null,
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 0,
+          discardConfirmationOpen: false,
+          discardEvents,
+          notice: null,
+          focusRequest: { target: "start", revision: 1 },
+        },
+      }),
+    );
+
+    expect(published.at(-1)).toMatchObject({
+      planCreation: null,
+      timeline: [{ kind: "plan-creation-discard", eventId: "01J00000000000000000000000" }],
+    });
+
+    const nextModel: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000001",
+      version: 1,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    adapter.view.render(
+      submitted("Later Chat message"),
+      controls({
+        planCreation: {
+          value: nextModel,
+          loaded: true,
+          busy: false,
+          error: null,
+          paused: false,
+          editingKey: null,
+          focusRevision: 0,
+          discardConfirmationOpen: false,
+          discardEvents,
+          notice: null,
+          focusRequest: null,
+        },
+      }),
+    );
+
+    expect(published.at(-1)?.timeline).toMatchObject([
+      { kind: "plan-creation-discard", eventId: "01J00000000000000000000000" },
+      { kind: "message", message: { text: "Later Chat message" } },
+      { kind: "plan-creation", model: nextModel },
+    ]);
   });
 
   it("suppresses interrupted recovery while a Plan Creation question is open", () => {

@@ -8,6 +8,7 @@ export type PlanCreationErrorCode =
   | "command-conflict"
   | "stale-version"
   | "missing-creation"
+  | "no-unfinished-creation"
   | "corrupt-record";
 
 export class PlanCreationStoreError extends Error {
@@ -82,6 +83,12 @@ export interface RecordPlanCreationAnswerInput {
   readonly valueJson: string;
 }
 
+export interface DiscardPlanCreationInput {
+  readonly command: PlanCreationCommandStamp;
+  readonly creationId: string;
+  readonly expectedVersion: number;
+}
+
 export interface PlanCreationRepository {
   readUnfinished(): Promise<PlanCreationSnapshot | undefined>;
   start(input: StartPlanCreationInput): Promise<{
@@ -91,6 +98,9 @@ export interface PlanCreationRepository {
   recordAnswer(input: RecordPlanCreationAnswerInput): Promise<{
     outcome: "recorded" | "replayed";
     snapshot: PlanCreationSnapshot;
+  }>;
+  discard(input: DiscardPlanCreationInput): Promise<{
+    outcome: "discarded";
   }>;
 }
 
@@ -161,8 +171,8 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
     if (snapshot === undefined) throw new PlanCreationStoreError("missing-creation");
     return snapshot;
   };
-  const replay = async (
-    name: "plan_creation.start" | "plan_creation.answer",
+  const hasReplay = async (
+    name: "plan_creation.start" | "plan_creation.answer" | "plan_creation.discard",
     command: PlanCreationCommandStamp,
   ) => {
     const row = await store.get(
@@ -173,10 +183,14 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
     if (text(row, "request_digest") !== command.requestDigest)
       throw new PlanCreationStoreError("command-conflict");
     if (text(row, "status") !== "succeeded") fail();
-    return requireUnfinished();
+    return true;
   };
-  const recordCommand = (
+  const replay = async (
     name: "plan_creation.start" | "plan_creation.answer",
+    command: PlanCreationCommandStamp,
+  ) => ((await hasReplay(name, command)) ? requireUnfinished() : undefined);
+  const recordCommand = (
+    name: "plan_creation.start" | "plan_creation.answer" | "plan_creation.discard",
     command: PlanCreationCommandStamp,
     creationId: string,
     result: unknown,
@@ -280,6 +294,51 @@ WHERE id=? AND status='in-progress' AND version=?`,
           version,
         });
         return { outcome: "recorded", snapshot };
+      });
+    },
+    async discard({ command, creationId, expectedVersion }) {
+      return store.transaction(async () => {
+        if (await hasReplay("plan_creation.discard", command)) return { outcome: "discarded" };
+        const current = await readUnfinished();
+        if (current === undefined || current.id !== creationId)
+          throw new PlanCreationStoreError("no-unfinished-creation");
+        if (current.version !== expectedVersion) throw new PlanCreationStoreError("stale-version");
+        const version = expectedVersion + 1;
+        const updated = await store.get(
+          `UPDATE plan_creation SET status='discarded',terminal_at_ms=?,updated_at_ms=?,version=version+1,
+device_id=?,hlc_physical_ms=?,hlc_counter=?
+WHERE id=? AND status IN ('in-progress','review') AND version=?
+RETURNING status,version`,
+          [
+            command.nowMs,
+            command.nowMs,
+            command.deviceId,
+            command.hlcPhysicalMs,
+            command.hlcCounter,
+            creationId,
+            expectedVersion,
+          ],
+        );
+        if (updated === undefined) throw new PlanCreationStoreError("stale-version");
+        if (text(updated, "status") !== "discarded" || integer(updated, "version") !== version) {
+          fail();
+        }
+        const terminal = await store.get("SELECT status,version FROM plan_creation WHERE id=?", [
+          creationId,
+        ]);
+        if (
+          terminal === undefined ||
+          text(terminal, "status") !== "discarded" ||
+          integer(terminal, "version") !== version
+        ) {
+          throw new PlanCreationStoreError("stale-version");
+        }
+        await recordCommand("plan_creation.discard", command, creationId, {
+          creationId,
+          outcome: "discarded",
+          version,
+        });
+        return { outcome: "discarded" };
       });
     },
   };
