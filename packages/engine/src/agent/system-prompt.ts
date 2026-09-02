@@ -235,7 +235,7 @@ Keep it compact. The athlete asked for numbers — no prose around the table.
 - **Tier C** (forced via \`deep\`): end with ONE line:
     Reply 'show numbers' for the full breakdown.
   (No \`/review deep\` line — the review is already deep.)
-- This footer is non-negotiable. It appears even on short Tier A reviews.
+- The footer appears on every review, including short Tier A ones.
 
 ## Trademark / glossary rules — non-negotiable
 NEVER use these tokens in any review output:

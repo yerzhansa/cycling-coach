@@ -118,7 +118,7 @@ describe("flush prompt dating discipline", () => {
       content.indexOf("Dating discipline"),
     );
     expect(content.indexOf("Dating discipline")).toBeLessThan(
-      content.indexOf("Note (transitional"),
+      content.indexOf("Today is"),
     );
   });
 

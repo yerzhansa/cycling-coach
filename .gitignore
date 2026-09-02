@@ -25,7 +25,6 @@ AGENTS.override.md
 !.agents/skills/maintain-verification-skill/**
 !.agents/skills/verify-enduragent/
 !.agents/skills/verify-enduragent/**
-.ralph/
 .worktrees/
 .specify/
 specs/

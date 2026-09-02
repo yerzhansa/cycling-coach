@@ -254,8 +254,8 @@ describe("intervals_fetch_streams", () => {
     const reader = makeFakeReader({ ok: true, value: {} }, {});
     const tools = createPureCoreIntervalsTools(null, "UTC", reader);
     const description = (tools.intervals_fetch_streams as { description: string }).description;
-    expect(description).toContain("EXPENSIVE");
-    expect(description).toContain("ONLY call for Tier C");
+    expect(description).toContain("Expensive");
+    expect(description).toContain("only for Tier C");
     expect(description).toMatch(/legacy or canonical ID/i);
     expect(description).toContain("Store-backed reads accept up to 16 unique public channels");
     expect(description).toContain("platform-backed");

@@ -169,8 +169,8 @@ export function createPureCoreIntervalsTools(
               "a per-channel min/max/mean stats header carrying the true peaks and averages " +
               "over the full series. Bins are not timestamp-aligned across channels; do not use " +
               "them for pacing, duration-based efforts, decoupling, or HR-recovery claims. " +
-              "EXPENSIVE: a 3-hour ride may contain ~10,800 samples per type even before " +
-              "binning. ONLY call for Tier C deep reviews when the athlete explicitly requests deep analysis. " +
+              "Expensive: a 3-hour ride may contain ~10,800 samples per type even before " +
+              "binning. Call it only for Tier C deep reviews, when the athlete explicitly requests deep analysis. " +
               "For Tier A/B reviews, use `intervals_fetch_activities` and " +
               "`intervals_fetch_activity` instead. Default types are watts, heartrate, " +
               "cadence, time, altitude.",
