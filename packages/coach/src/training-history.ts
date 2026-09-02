@@ -22,9 +22,9 @@ import {
   type TrainingHistoryFactRow,
   type TrainingHistoryReader,
 } from "@enduragent/kernel/store";
+import { utcCivilDateFromEpochSeconds } from "./civil-date.js";
 
 const MAX_VISIBLE_RIDES = 50;
-const SPARSE_DISCOVERY_START = "1900-01-01";
 
 interface WeekSlot {
   readonly window: CivilDateWindow;
@@ -75,15 +75,6 @@ function unavailable(
 
 function instantFromEpochSeconds(value: number): string {
   return new Date(value * 1_000).toISOString();
-}
-
-function utcCivilDateFromEpochSeconds(value: number): string {
-  const date = new Date(value * 1_000);
-  const year = date.getUTCFullYear();
-  if (!Number.isFinite(date.getTime()) || year < 0 || year > 9_999) {
-    throw new TypeError("invalid epoch seconds");
-  }
-  return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 function effectiveCommit(row: CoverageCommitRow): CoverageCommitRow | null {
@@ -243,12 +234,6 @@ function expectedWindows(
 function safeCoverageAnchor(coverage: FoldedCoverage): string | null {
   if (coverage.kind === "none" || coverage.reason === "coverage-timezone-changed") return null;
   return coverage.through;
-}
-
-function latestRideDate(rows: readonly TrainingHistoryFactRow[]): string | null {
-  let latest: string | null = null;
-  for (const row of rows) if (latest === null || row.localDate > latest) latest = row.localDate;
-  return latest;
 }
 
 function scanCutoffDate(
@@ -657,6 +642,7 @@ export function createTrainingHistorySource(dependencies: {
     typeof dependencies !== "object" ||
     dependencies.facts === null ||
     typeof dependencies.facts !== "object" ||
+    typeof dependencies.facts.readLatestRideDate !== "function" ||
     typeof dependencies.facts.readWindow !== "function" ||
     dependencies.coverage === null ||
     typeof dependencies.coverage !== "object" ||
@@ -700,17 +686,16 @@ export function createTrainingHistorySource(dependencies: {
       const provisionalAnchor = lastRecorded ? (retainedAnchor ?? today) : currentAnchor;
       const provisionalDisplayMode = lastRecorded ? "last-recorded" : "current";
       let windows = expectedWindows(provisionalAnchor, today, provisionalDisplayMode);
-      const factsWindow = discoverSparseHistory
-        ? { start: SPARSE_DISCOVERY_START, end: windows.readWindow.end }
-        : windows.readWindow;
-      let facts: Awaited<ReturnType<TrainingHistoryReader["readWindow"]>>;
-      try {
-        facts = await dependencies.facts.readWindow(factsWindow);
-      } catch (error) {
-        return dependencyFailure(error);
+      let sparseRideDate: string | null = null;
+      if (discoverSparseHistory) {
+        try {
+          sparseRideDate = await dependencies.facts.readLatestRideDate({
+            through: windows.readWindow.end,
+          });
+        } catch (error) {
+          return dependencyFailure(error);
+        }
       }
-      if (facts.scanTruncated && facts.rows.length === 0) return unavailable("invalid-data");
-      const sparseRideDate = latestRideDate(facts.rows);
       if (lastRecorded && retainedAnchor === null && sparseRideDate === null) {
         return unavailable("coverage-unavailable");
       }
@@ -727,6 +712,13 @@ export function createTrainingHistorySource(dependencies: {
       if (mondayOfWeek(anchorDate) !== windows.anchor.start) {
         windows = expectedWindows(anchorDate, today, displayMode);
       }
+      let facts: Awaited<ReturnType<TrainingHistoryReader["readWindow"]>>;
+      try {
+        facts = await dependencies.facts.readWindow(windows.readWindow);
+      } catch (error) {
+        return dependencyFailure(error);
+      }
+      if (facts.scanTruncated && facts.rows.length === 0) return unavailable("invalid-data");
       try {
         assignRows(windows, facts.rows);
         const scanCutoff = scanCutoffDate(facts.rows, facts.scanTruncated);

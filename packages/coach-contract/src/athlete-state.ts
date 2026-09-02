@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CanonicalActivityIdSchema } from "./activity-analysis.js";
+import { isActiveIanaZone } from "./time-zone.js";
 import { CivilDateSchema } from "./training-export.js";
 
 export { CivilDateSchema } from "./training-export.js";
@@ -35,15 +36,6 @@ function isFiniteIsoInstant(value: string): boolean {
     local.getUTCMinutes() === Number(match[5]) &&
     local.getUTCSeconds() === Number(match[6])
   );
-}
-
-function isActiveIanaZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function utf8LenAtMost(maximumBytes: number): (value: string) => boolean {

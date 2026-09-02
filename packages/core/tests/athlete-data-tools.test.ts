@@ -187,13 +187,20 @@ describe("store athlete reader", () => {
     });
   });
 
-  it("derives snapshot age from the capture epoch instead of civil text", async () => {
+  it.each([
+    ["ahead", "Europe/Amsterdam", "1998-07-18T22:30:00"],
+    ["behind", "America/New_York", "1998-07-18T16:30:00"],
+  ] as const)("derives snapshot age from the capture epoch when the civil zone is %s", async (
+    _direction,
+    calendarTimeZone,
+    civilDateTime,
+  ) => {
     const snapshot = {
       ...produced("not-an-instant"),
       captureClock: {
         captureEpochMs: Date.parse("1998-07-18T20:30:00.000Z"),
-        civilDateTime: "1998-07-19T03:30:00",
-        calendarTimeZone: "Asia/Almaty",
+        civilDateTime,
+        calendarTimeZone,
       },
     };
     const reader = createStoreAthleteDataReader({
@@ -202,7 +209,7 @@ describe("store athlete reader", () => {
     });
     const result = await reader.getAthlete();
     expect(result.ok && result.freshness).toEqual({
-      capturedAt: "1998-07-19T03:30:00",
+      capturedAt: civilDateTime,
       ageMs: 120_000,
       label: "2 minutes",
     });

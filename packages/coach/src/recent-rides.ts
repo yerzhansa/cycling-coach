@@ -4,6 +4,7 @@ import {
   type RecentRidesPanel,
 } from "@enduragent/coach-contract";
 import type { CanonicalActivityReader, CanonicalActivitySummary } from "@enduragent/kernel/store";
+import { utcCivilDateFromEpochSeconds } from "./civil-date.js";
 
 const DAY_SECONDS = 86_400;
 const WINDOW_DAYS = 28;
@@ -15,10 +16,6 @@ export interface RecentRidesSource {
     readonly asOf: string;
     readonly asOfEpochSeconds: number;
   }): Promise<RecentRidesPanel>;
-}
-
-function civilDate(epochSeconds: number): string {
-  return new Date(epochSeconds * 1_000).toISOString().slice(0, 10);
 }
 
 function rendererRide(activity: CanonicalActivitySummary): RecentRide {
@@ -42,8 +39,8 @@ export function createRecentRidesSource(activities: CanonicalActivityReader): Re
       }
       const firstIncludedEpochSeconds = input.asOfEpochSeconds - WINDOW_DAYS * DAY_SECONDS;
       const page = await activities.listActivities({
-        start: civilDate(firstIncludedEpochSeconds - DAY_SECONDS),
-        end: civilDate(input.asOfEpochSeconds + DAY_SECONDS),
+        start: utcCivilDateFromEpochSeconds(firstIncludedEpochSeconds - DAY_SECONDS),
+        end: utcCivilDateFromEpochSeconds(input.asOfEpochSeconds + DAY_SECONDS),
         limit: MAX_SCANNED_ACTIVITIES,
       });
       const items = page.activities

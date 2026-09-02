@@ -108,6 +108,15 @@ describe("training history reader with real SQLite", () => {
     await store.close();
   });
 
+  it("discovers the latest ride date through a bounded SQLite query", async () => {
+    const reader = createTrainingHistoryReader(store);
+
+    await expect(reader.readLatestRideDate({ through: "1998-07-05" })).resolves.toBeNull();
+    await expect(reader.readLatestRideDate({ through: "1998-07-06" })).resolves.toBe(
+      "1998-07-06",
+    );
+  });
+
   it("reads canonical, authored, and trusted payload facts through one call", async () => {
     const result = await createTrainingHistoryReader(store).readWindow({
       start: "1998-07-06",

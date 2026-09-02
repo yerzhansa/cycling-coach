@@ -1,26 +1,11 @@
 import type {
   AnalysisRefreshFailureCode,
   AnalysisUnavailableReason,
-  CyclingAnchor,
   PowerProgressComputed,
   PowerProgressRefreshFailureCode,
   PowerProgressUnavailableReason,
-  TrainingContextUnknownReason,
 } from "@enduragent/coach-contract";
-import { PLATFORM_COPY } from "../../platform-copy";
 import type { TrainingContextStatus } from "../../training-context/controller";
-
-export const TRAINING_UNKNOWN_COPY: Readonly<Record<TrainingContextUnknownReason, string>> = {
-  "not-synced": "Not synced yet",
-  "missing-anchor": "No cycling FTP anchor is available",
-  "no-platform-load": "No platform Load is available for the last 7 days",
-  "no-plan": "No planned cycling workouts are available",
-  "insufficient-data": "Not enough persisted data to show this yet",
-  "no-wellness": "No wellness readings are available",
-  "source-restricted": "Not enough activity data is visible to calculate this safely",
-};
-
-export const WELLNESS_LABELS: readonly string[] = ["HRV", "Sleep", "Resting HR"];
 
 export const POWER_PROGRESS_UNAVAILABLE_COPY: Readonly<
   Record<PowerProgressUnavailableReason, string>
@@ -64,8 +49,6 @@ export const POWER_PROGRESS_FRESHNESS_COPY: Readonly<
   stale: "Stale",
   critical: "Very stale",
 };
-
-export const RIDE_IMPORT_DESCRIPTION = PLATFORM_COPY.rideImportDescription;
 
 export const TRAINING_HISTORY_COPY = {
   current: "This week",
@@ -175,11 +158,3 @@ export function trainingStatusCopy(status: TrainingContextStatus): string {
 }
 
 export const TRAINING_DEGRADED_COPY = "Data may be incomplete";
-
-export function stalenessCopy(band: CyclingAnchor["stalenessBand"], ageDays: number): string {
-  const days = Math.floor(ageDays);
-  if (band === "fresh") return "Fresh";
-  if (band === "aging") return `Aging · ${days}d`;
-  if (band === "stale") return `Stale · ${days}d`;
-  return `Very stale · ${days}d`;
-}

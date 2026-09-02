@@ -143,6 +143,28 @@ describe("bootstrapReference (behavioral)", () => {
     runtime.scheduler.stop();
   });
 
+  it("falls back to the host calendar zone when none is configured", async () => {
+    const hostZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const observed: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const runtime = await bootstrapReference({
+      dataDir,
+      intervals: { apiKey: "placeholder" },
+      readCalendarTimeZone: () => "",
+      sport: fakeSport(),
+      fetchReferenceData: async (_signal, _credentials, zone = "missing") => {
+        observed.push(zone);
+        return emptyFetched;
+      },
+      startScheduler: false,
+    });
+
+    await runtime.runScheduledOnce();
+
+    expect(observed).toEqual([hostZone]);
+    runtime.scheduler.stop();
+  });
+
   it("resolves static intervals credentials when no live reader is provided", async () => {
     const observed: Array<{ readonly apiKey: string; readonly athleteId?: string }> = [];
     const runtime = await bootstrapReference({

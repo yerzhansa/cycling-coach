@@ -1,5 +1,4 @@
 export const overviewStyles = {
-  status: "mb-3.5 text-sm text-ink-2",
   periodGroup:
     "mb-4 flex items-center gap-1.5 [&_button]:h-ctl-sm [&_button]:rounded-ctl [&_button]:border [&_button]:border-line-2 [&_button]:bg-surface [&_button]:px-ctl-px-sm [&_button]:text-xs [&_button]:font-medium [&_button]:text-ink-2 [&_button]:outline-none [&_button]:transition-colors [&_button]:hover:bg-surface-2 [&_button]:hover:text-ink [&_button]:focus-visible:border-ring [&_button]:focus-visible:ring-3 [&_button]:focus-visible:ring-ring/20 [&_button]:disabled:cursor-default [&_button]:disabled:opacity-64 [&_button]:aria-pressed:border-brand [&_button]:aria-pressed:bg-brand-soft [&_button]:aria-pressed:text-brand motion-reduce:[&_button]:transition-none",
   dataNotice:
@@ -48,8 +47,6 @@ export const overviewStyles = {
   panel: "mb-3.5 rounded-card border border-line bg-surface px-[18px] py-4 shadow-elev-1 last:mb-0",
   panelTitle: "m-0 text-xs font-semibold text-ink-3",
   panelBody: "mt-3 min-w-0",
-  subheading: "mt-[18px] text-xs font-semibold text-ink-2",
-  value: "mb-1.5 text-2xl leading-8 font-semibold tracking-normal tabular-nums",
   meta: "m-0 [overflow-wrap:anywhere] text-xs leading-[1.45] text-ink-2",
   support: "mt-2 [overflow-wrap:anywhere] text-sm leading-[1.45] text-ink-2",
   empty: "m-0 text-sm leading-[1.45] text-ink-2",
@@ -69,25 +66,9 @@ export const overviewStyles = {
   progressFoot: "mt-3.5 text-xs leading-6 text-ink-3",
   badge:
     "training-badge mt-1 mb-2 inline-flex h-5 shrink-0 items-center justify-center gap-1 rounded-chip bg-surface-2 px-1.5 text-xs font-medium text-ink-2 capitalize data-[band=aging]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=aging]:text-warn data-[band=stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=stale]:text-warn data-[band=very-stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=very-stale]:text-warn data-[freshness=flag]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=flag]:text-warn data-[freshness=stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=stale]:text-warn data-[freshness=critical]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=critical]:text-warn",
-  metadata: "flex flex-wrap items-center gap-x-3 gap-y-2 empty:hidden [&_.training-badge]:m-0",
-  syncRow:
-    "mt-3.5 flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-2.5 data-[tone=success]:[&_.training-sync-message]:text-ok data-[tone=partial]:[&_.training-sync-message]:text-warn data-[tone=failure]:[&_.training-sync-message]:text-warn",
-  syncMessage:
-    "training-sync-message m-0 min-w-0 flex-[1_1_220px] [overflow-wrap:anywhere] text-xs leading-[1.45] text-ink-2",
-  zones: "mt-2.5 grid gap-x-4 gap-y-2 text-xs",
-  zone: "flex min-w-0 items-baseline justify-between gap-4",
-  zoneName:
-    "m-0 min-w-0 [overflow-wrap:anywhere] data-[overlaps=true]:after:text-ink-3 data-[overlaps=true]:after:content-['_·_overlaps']",
-  zoneRange: "m-0 shrink-0 tabular-nums",
   exportControls:
     "mt-3 flex flex-wrap items-center gap-[9px] [&_label]:text-xs [&_label]:font-semibold [&_label]:text-ink-2",
   exportStatus: "mt-2.5 text-xs leading-[1.45] text-ink-2",
-  wellness: "mt-3 grid gap-2.5",
-  wellnessRow: "grid min-w-0 grid-cols-[76px_78px_minmax(60px,1fr)] items-center gap-2 text-xs",
-  wellnessValue: "min-w-0 [overflow-wrap:anywhere] text-xs text-ink-2",
-  wellnessEmpty: "min-w-0 [overflow-wrap:anywhere] text-xs text-ink-2",
-  sparkline:
-    "h-[30px] w-full overflow-visible [&_polyline]:fill-none [&_polyline]:stroke-ink [&_polyline]:stroke-2 [&_polyline]:[stroke-linecap:round] [&_polyline]:[stroke-linejoin:round]",
   analysisPanel: "mt-3.5 rounded-card border border-line bg-surface p-5 shadow-elev-1",
   analysisTitle: "m-0 text-xl leading-6 font-semibold tracking-normal",
   analysisIntro: "mt-[9px] max-w-[650px] text-xs leading-6 text-ink-2",
