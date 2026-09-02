@@ -12,9 +12,6 @@ export function PlanCreationSummary(props: {
   const paused = useEnduragentStore((state) => state.chat.planCreationPaused);
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
   const editingKey = useEnduragentStore((state) => state.chat.planCreationEditingKey);
-  const discardConfirmationOpen = useEnduragentStore(
-    (state) => state.chat.planCreationDiscardConfirmationOpen,
-  );
   const focusRequest = useEnduragentStore((state) => state.chat.planCreationFocusRequest);
   const discardButton = useRef<HTMLButtonElement>(null);
   const ready = props.model.readiness === "ready";
@@ -24,7 +21,9 @@ export function PlanCreationSummary(props: {
     props.model.answeredSummaries[0]?.question.step.total ??
     props.model.answeredSummaries.length;
   useEffect(() => {
-    if (focusRequest?.target === "discard") discardButton.current?.focus();
+    if (focusRequest?.target === "discard") {
+      queueMicrotask(() => discardButton.current?.focus());
+    }
   }, [focusRequest?.revision, focusRequest?.target]);
   return (
     <section className="grid min-w-0 gap-inset" aria-label="Plan Creation progress">
@@ -102,9 +101,9 @@ export function PlanCreationSummary(props: {
                 variant="destructive"
                 size="sm"
                 data-plan-creation-discard={props.model.creationId}
-                aria-expanded={discardConfirmationOpen}
-                disabled={busy || actions?.openPlanCreationDiscard === undefined}
-                onClick={() => actions?.openPlanCreationDiscard?.()}
+                aria-haspopup="dialog"
+                disabled={busy || actions === null}
+                onClick={() => actions?.openPlanCreationDiscard()}
               >
                 Discard
               </Button>

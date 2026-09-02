@@ -125,9 +125,9 @@ export interface ChatActions {
   continuePlanCreation(): void;
   editPlanCreation(answerKey: PlanCreationAnswerSummary["answerKey"]): void;
   cancelPlanCreationEdit(): void;
-  openPlanCreationDiscard?(): void;
-  cancelPlanCreationDiscard?(): void;
-  confirmPlanCreationDiscard?(): void;
+  openPlanCreationDiscard(): void;
+  cancelPlanCreationDiscard(): void;
+  confirmPlanCreationDiscard(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): void;

@@ -273,6 +273,10 @@ describe("chat view adapter", () => {
           paused: false,
           editingKey: null,
           focusRevision: 1,
+          discardConfirmationOpen: false,
+          discardEvents: [],
+          notice: null,
+          focusRequest: null,
         },
       }),
     );
@@ -295,6 +299,10 @@ describe("chat view adapter", () => {
           paused: true,
           editingKey: null,
           focusRevision: 1,
+          discardConfirmationOpen: false,
+          discardEvents: [],
+          notice: null,
+          focusRequest: null,
         },
       }),
     );
@@ -314,6 +322,10 @@ describe("chat view adapter", () => {
           paused: false,
           editingKey: null,
           focusRevision: 2,
+          discardConfirmationOpen: false,
+          discardEvents: [],
+          notice: null,
+          focusRequest: null,
         },
       }),
     );
@@ -333,6 +345,10 @@ describe("chat view adapter", () => {
           paused: false,
           editingKey: "goal",
           focusRevision: 3,
+          discardConfirmationOpen: false,
+          discardEvents: [],
+          notice: null,
+          focusRequest: null,
         },
       }),
     );
@@ -528,6 +544,10 @@ describe("chat view adapter", () => {
           paused: false,
           editingKey: null,
           focusRevision: 1,
+          discardConfirmationOpen: false,
+          discardEvents: [],
+          notice: null,
+          focusRequest: null,
         },
       }),
     );
@@ -869,6 +889,7 @@ describe("chat view adapter", () => {
         if (item.kind === "choice") return "choice";
         if (item.kind === "planning-request") return "planning-request";
         if (item.kind === "plan-creation") return "plan-creation";
+        if (item.kind === "plan-creation-discard") return "plan-creation-discard";
         return item.message.role === "athlete" ? "athlete" : item.message.delivery;
       }),
     ).toEqual(["athlete", "interrupted", "choice", "complete"]);

@@ -176,10 +176,10 @@ export interface ChatViewControls {
     readonly paused: boolean;
     readonly editingKey: PlanCreationAnswerSummary["answerKey"] | null;
     readonly focusRevision: number;
-    readonly discardConfirmationOpen?: boolean;
-    readonly discardEvents?: readonly PlanCreationDiscardEvent[];
-    readonly notice?: string | null;
-    readonly focusRequest?: {
+    readonly discardConfirmationOpen: boolean;
+    readonly discardEvents: readonly PlanCreationDiscardEvent[];
+    readonly notice: string | null;
+    readonly focusRequest: {
       readonly target: "discard" | "start";
       readonly revision: number;
     } | null;
@@ -1054,8 +1054,17 @@ export function createChatController(input: {
     if (!decisionBlocksWork() && !planCreationBlocksWork()) void drain();
   };
 
-  const installPlanCreation = (next: PlanCreationCardModel | null): void => {
+  const installPlanCreation = (
+    next: PlanCreationCardModel | null,
+    focusTarget?: "discard" | "start",
+  ): void => {
     const previous = planCreation;
+    let actionFocusRequested = false;
+    const requestActionFocus = (target: "discard" | "start"): void => {
+      requestPlanCreationFocus(target);
+      actionFocusRequested = true;
+    };
+    if (focusTarget !== undefined) requestActionFocus(focusTarget);
     let installed = false;
     if (next === null) {
       planCreation = null;
@@ -1063,6 +1072,7 @@ export function createChatController(input: {
       if (planCreationDiscardConfirmationOpen) {
         planCreationDiscardConfirmationOpen = false;
         planCreationNotice = CHAT_PLAN_CREATION_DISCARD_MISSING_COPY;
+        if (!actionFocusRequested) requestActionFocus("start");
       }
     } else if (
       planCreation === null ||
@@ -1100,7 +1110,7 @@ export function createChatController(input: {
         planCreationPaused = false;
         clearPlanCreationPause();
       }
-      planCreationFocusRevision += 1;
+      if (!actionFocusRequested) planCreationFocusRevision += 1;
     }
   };
   const latestMessageId = (): string | null =>
@@ -2181,18 +2191,19 @@ export function createChatController(input: {
         pendingPlanCreationCommand = null;
         planCreationDiscardConfirmationOpen = false;
         if (result.status === "discarded") {
-          installPlanCreation(null);
+          installPlanCreation(null, "start");
           if (!planCreationDiscardEvents.some((event) => event.eventId === target.creationId)) {
             planCreationDiscardEvents = [
               ...planCreationDiscardEvents,
               { eventId: target.creationId, afterMessageId: latestMessageId() },
             ];
           }
-          requestPlanCreationFocus("start");
         } else {
-          installPlanCreation(result.planCreation);
+          installPlanCreation(
+            result.planCreation,
+            result.planCreation === null ? "start" : "discard",
+          );
           planCreationNotice = planCreationDiscardNotice(result.reason);
-          requestPlanCreationFocus(result.planCreation === null ? "start" : "discard");
         }
       } catch {
         planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;

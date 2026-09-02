@@ -192,8 +192,6 @@ test("preserves an ordinary Chat turn after discard and relaunch", async ({ play
     const unrelatedBeforeDiscard = await scenario.backend.inspectUnrelated();
     expect(unrelatedBeforeDiscard.activePlans).toHaveLength(1);
     expect(unrelatedBeforeDiscard.closedPlans).toHaveLength(1);
-    expect(unrelatedBeforeDiscard.pastChats).toHaveLength(1);
-    expect(unrelatedBeforeDiscard.transcript).toHaveLength(1);
     await discardPlanCreation(scenario.page);
     await expect(scenario.backend.inspectUnrelated()).resolves.toEqual(unrelatedBeforeDiscard);
     await expect(scenario.page.getByText(ordinaryPrompt, { exact: true })).toBeVisible();

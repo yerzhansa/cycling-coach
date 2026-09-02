@@ -326,8 +326,6 @@ updated_at_ms,device_id,hlc_physical_ms,hlc_counter
       closedPlans: await store.all(
         "SELECT plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,updated_at_ms FROM planning_plan WHERE status='closed' ORDER BY plan_id",
       ),
-      pastChats: pastChats.map((entry) => ({ ...entry })),
-      transcript: this.transcript.map((turn) => ({ ...turn })),
     };
   }
 

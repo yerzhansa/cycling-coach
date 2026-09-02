@@ -323,16 +323,6 @@ RETURNING status,version`,
         if (text(updated, "status") !== "discarded" || integer(updated, "version") !== version) {
           fail();
         }
-        const terminal = await store.get("SELECT status,version FROM plan_creation WHERE id=?", [
-          creationId,
-        ]);
-        if (
-          terminal === undefined ||
-          text(terminal, "status") !== "discarded" ||
-          integer(terminal, "version") !== version
-        ) {
-          throw new PlanCreationStoreError("stale-version");
-        }
         await recordCommand("plan_creation.discard", command, creationId, {
           creationId,
           outcome: "discarded",

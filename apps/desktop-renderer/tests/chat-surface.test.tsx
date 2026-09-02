@@ -3042,10 +3042,12 @@ describe("chat surface", () => {
       });
       const start = screen.getByRole("button", { name: "Start a Plan" });
       await waitFor(() => expect(start).toHaveFocus());
+      const discarded = document.querySelector('[data-parity="discarded.record"]');
+      expect(discarded).not.toBeNull();
+      expect(discarded?.compareDocumentPosition(start)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
       expect(composer()).toBeEnabled();
       expect(screen.queryByText("Build steady power", { exact: true })).toBeNull();
       expect(screen.getByText("Plan creation discarded")).toBeVisible();
-      expect(document.querySelector('[data-parity="discarded.record"]')).not.toBeNull();
       expect(
         screen.getByText(
           "No Plan was created. Your active Plan, Schedule, training restrictions, saved preferences, and chat history are unchanged.",
@@ -3055,22 +3057,35 @@ describe("chat surface", () => {
 
     it("closes discard confirmation and shows the returned Card after rejection", async () => {
       const actions = stubActions();
-      const model = planCreationModel(null, {
-        version: 3,
-        answeredSummaries: [
-          {
-            answerKey: "goal",
-            title: "Goal",
-            detail: "Build steady power",
-            question: {
-              kind: "goal-question",
-              prompt: "What are you preparing for?",
-              candidates: [],
+      const model = planCreationModel(
+        {
+          kind: "plan-length-question",
+          prompt: "How long should this Fitness Plan be?",
+          options: [
+            { weeks: 4 as const, label: "4 weeks" },
+            { weeks: 8 as const, label: "8 weeks" },
+          ],
+        },
+        {
+          version: 3,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Build steady power",
+              question: {
+                kind: "goal-question",
+                prompt: "What are you preparing for?",
+                candidates: [],
+              },
+              answer: {
+                kind: "goal",
+                goal: { kind: "fitness", outcome: "Build steady power" },
+              },
             },
-            answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
-          },
-        ],
-      });
+          ],
+        },
+      );
       const returned = { ...model, version: 4 };
       actions.openPlanCreationDiscard = vi.fn(() => {
         setChat({

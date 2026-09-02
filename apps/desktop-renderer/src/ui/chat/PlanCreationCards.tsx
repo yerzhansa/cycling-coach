@@ -21,10 +21,10 @@ export function PlanCreationDiscardDialog(): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const keepCreating = useRef<HTMLButtonElement>(null);
   const cancelDiscard = useCallback((): void => {
-    actions?.cancelPlanCreationDiscard?.();
+    actions?.cancelPlanCreationDiscard();
   }, [actions]);
   const confirmDiscard = useCallback((): void => {
-    actions?.confirmPlanCreationDiscard?.();
+    actions?.confirmPlanCreationDiscard();
   }, [actions]);
 
   return (
@@ -35,14 +35,14 @@ export function PlanCreationDiscardDialog(): ReactElement {
       }}
     >
       <DialogContent
-        className="w-[min(520px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+        className="w-[min(520px,calc(100vw-32px))] max-w-none gap-normal border-line p-5 shadow-elev-4 sm:max-w-none"
         showCloseButton={false}
         initialFocus={keepCreating}
         finalFocus={false}
         aria-busy={busy ? "true" : undefined}
       >
-        <DialogHeader className="gap-2.5">
-          <DialogTitle className="m-0 text-xl">Discard this Plan creation?</DialogTitle>
+        <DialogHeader className="gap-inset">
+          <DialogTitle className="m-0 text-lg font-bold">Discard this Plan creation?</DialogTitle>
           <DialogDescription className="m-0 leading-5">
             No Plan is created. Your active Plan, Schedule, training restrictions, closed Plans,
             saved preferences, and chat history are unchanged.
@@ -53,14 +53,14 @@ export function PlanCreationDiscardDialog(): ReactElement {
             {error}
           </p>
         )}
-        <DialogFooter className="mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">
+        <DialogFooter className="mx-0 mt-ctl-px-lg mb-0 flex-row justify-end rounded-none border-0 bg-transparent p-0">
           <DialogClose
             render={
               <Button
                 ref={keepCreating}
                 variant="outline"
                 size="lg"
-                disabled={busy || actions?.cancelPlanCreationDiscard === undefined}
+                disabled={busy || actions === null}
               />
             }
           >
@@ -69,7 +69,7 @@ export function PlanCreationDiscardDialog(): ReactElement {
           <Button
             variant="destructive-solid"
             size="lg"
-            disabled={busy || actions?.confirmPlanCreationDiscard === undefined}
+            disabled={busy || actions === null}
             onClick={confirmDiscard}
           >
             Discard creation
@@ -104,7 +104,7 @@ export function PlanCreationDock(props: {
   if (model === null) {
     return (
       <div
-        className="flex min-w-0 justify-end rounded-card border border-line bg-surface px-4 py-3"
+        className="flex min-w-0 justify-end gap-[calc(var(--inset)*0.75)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2"
         data-parity="start.row"
       >
         <Button
@@ -155,7 +155,7 @@ export function PlanCreationDiscardConsequence(props: {
 }): ReactElement {
   return (
     <article
-      className="grid gap-[calc(var(--inset)/2)] rounded-card bg-sunk p-3"
+      className="grid gap-row rounded-card border border-line bg-surface p-3"
       data-plan-creation-discard-event={props.eventId}
       data-parity="discarded.record"
     >

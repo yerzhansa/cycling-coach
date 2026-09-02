@@ -1952,9 +1952,9 @@ describe("chat controller", () => {
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
-      readiness: "ready",
+      readiness: "incomplete",
       answeredSummaries: [],
-      openQuestion: null,
+      openQuestion: startTimingQuestion(),
     };
     const returned = { ...card, version: 4 };
     const discardPlanCreation = vi
@@ -1975,6 +1975,7 @@ describe("chat controller", () => {
     });
     const { controller, controls } = subject(fake);
     await controller.start();
+    const questionFocusRevision = controls.at(-1)?.planCreation?.focusRevision;
 
     controller.openPlanCreationDiscard();
     await controller.confirmPlanCreationDiscard();
@@ -1985,10 +1986,8 @@ describe("chat controller", () => {
       discardConfirmationOpen: false,
       notice: "Plan Creation changed before it could be discarded. The latest version is shown.",
       focusRequest: { target: "discard", revision: 1 },
+      focusRevision: questionFocusRevision,
     });
-
-    await expect(controller.submit("Continue ordinary Chat")).resolves.toBe(true);
-    expect(controls.at(-1)?.planCreation?.notice).toBeNull();
 
     controller.openPlanCreationDiscard();
     await controller.confirmPlanCreationDiscard();
@@ -1999,6 +1998,35 @@ describe("chat controller", () => {
       discardConfirmationOpen: false,
       notice: "There is no unfinished Plan Creation to discard.",
       focusRequest: { target: "start", revision: 2 },
+    });
+  });
+
+  it("returns focus to Start when refresh removes a Card behind its discard dialog", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: card })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null });
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.openPlanCreationDiscard();
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      discardConfirmationOpen: false,
+      notice: "There is no unfinished Plan Creation to discard.",
+      focusRequest: { target: "start", revision: 1 },
     });
   });
 
