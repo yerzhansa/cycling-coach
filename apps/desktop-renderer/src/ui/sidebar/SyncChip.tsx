@@ -69,7 +69,7 @@ export function SyncChip(): ReactElement {
     <div
       ref={wrapper}
       tabIndex={-1}
-      className="relative flex min-h-ctl min-w-0 w-full items-center gap-2 px-row py-1.5 text-left text-xs font-normal text-ink-2"
+      className="relative grid min-h-ctl min-w-0 w-full grid-cols-[7px_minmax(0,1fr)] items-start gap-x-2 px-row py-1.5 text-left text-xs font-normal text-ink-2"
       data-sync-chip=""
       data-status={status}
     >
@@ -91,7 +91,7 @@ export function SyncChip(): ReactElement {
       />
       <span
         className={cn(
-          "pointer-events-none relative z-[1] size-[7px] flex-none rounded-full bg-ink-3",
+          "pointer-events-none relative z-[1] mt-[5px] size-[7px] rounded-full bg-ink-3",
           status === "synced" && "bg-ok",
           status === "syncing" && "bg-ink-2",
           (status === "attention" || status === "unavailable") && "bg-warn",
@@ -99,13 +99,17 @@ export function SyncChip(): ReactElement {
         data-status={status}
         aria-hidden="true"
       />
-      <span className="pointer-events-none relative z-[1] min-w-0 flex-1">
-        <span className="block truncate" aria-hidden="true">
+      <span className="pointer-events-none relative z-[1] min-w-0">
+        <span className="block whitespace-normal" data-sync-headline="" aria-hidden="true">
           {HEADLINE[status]}
         </span>
         {restriction === null ? (
           detail === null ? null : (
-            <span className="mt-px block truncate text-ink-3" aria-hidden="true">
+            <span
+              className="mt-px block whitespace-normal text-ink-3"
+              data-sync-detail=""
+              aria-hidden="true"
+            >
               {detail}
             </span>
           )
@@ -117,7 +121,8 @@ export function SyncChip(): ReactElement {
               <a
                 href={`#${STRAVA_RESTRICTION_CARD_ID}`}
                 aria-label={`${restrictionLabel}. How to fix this`}
-                className="pointer-events-auto mt-px flex w-full min-w-0 items-center gap-1 text-[11px] no-underline"
+                className="pointer-events-auto mt-px flex w-full min-w-0 flex-wrap items-center gap-x-1 text-[11px] leading-4 no-underline"
+                data-sync-restriction=""
                 onClick={() => {
                   setActiveView("settings");
                   requestTrainingRestrictionFocus();
@@ -129,10 +134,8 @@ export function SyncChip(): ReactElement {
             }
             triggerContent={
               <>
-                <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-warn">
-                  {restrictionLabel}
-                </span>
-                <span className="flex-none font-sans text-brand underline-offset-2 hover:underline">
+                <span className="text-warn">{restrictionLabel}</span>
+                <span className="font-sans text-brand underline-offset-2 hover:underline">
                   · How to fix this
                 </span>
               </>
@@ -140,12 +143,13 @@ export function SyncChip(): ReactElement {
             body={STRAVA_RESTRICTION_DESKTOP_COPY.tooltipBody}
           />
         )}
-      </span>
-      <span
-        className="pointer-events-none relative z-[1] flex-none text-xs text-ink-3 max-[860px]:hidden"
-        aria-hidden="true"
-      >
-        {sync.label}
+        <span
+          className="mt-px block whitespace-normal text-xs text-ink-3"
+          data-sync-action=""
+          aria-hidden="true"
+        >
+          {sync.label}
+        </span>
       </span>
     </div>
   );
