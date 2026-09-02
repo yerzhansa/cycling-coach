@@ -1852,6 +1852,20 @@ describe("chat surface", () => {
         heading.compareDocumentPosition(composer()) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).not.toBe(0);
       expect(heading.closest('[data-slot="card"]')).toHaveClass("min-w-0");
+      setChat({
+        planCreation: {
+          creationId: "01J00000000000000000000000",
+          version: 2,
+          status: "in-progress",
+          answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "Build steady power" }],
+          openQuestion: {
+            kind: "success-question",
+            prompt: "What would success mean?",
+            input: { kind: "authored", placeholder: "Describe success" },
+          },
+        },
+      });
+      expect(screen.getByRole("textbox", { name: "Success meaning" })).toHaveValue("");
     });
 
     it("submits a manually entered Event Goal", async () => {

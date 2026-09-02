@@ -92,7 +92,7 @@ export function PlanCreationDock(): ReactElement | null {
             </Button>
           </div>
         ) : question.kind === "goal-question" && goalMode === "fitness" ? (
-          <form className="grid min-w-0 gap-inset" onSubmit={submitFitness}>
+          <form key="goal-fitness" className="grid min-w-0 gap-inset" onSubmit={submitFitness}>
             <textarea
               aria-label="Goal outcome"
               className={fieldClass}
@@ -106,7 +106,7 @@ export function PlanCreationDock(): ReactElement | null {
             </Button>
           </form>
         ) : question.kind === "goal-question" ? (
-          <form className="grid min-w-0 gap-inset sm:grid-cols-2" onSubmit={submitManual}>
+          <form key="goal-manual" className="grid min-w-0 gap-inset sm:grid-cols-2" onSubmit={submitManual}>
             <input
               aria-label="Event name"
               className={fieldClass}
@@ -127,7 +127,7 @@ export function PlanCreationDock(): ReactElement | null {
             </Button>
           </form>
         ) : question.input.kind === "authored" ? (
-          <form className="grid min-w-0 gap-inset" onSubmit={submitSuccess}>
+          <form key="success" className="grid min-w-0 gap-inset" onSubmit={submitSuccess}>
             <textarea
               aria-label="Success meaning"
               className={fieldClass}
