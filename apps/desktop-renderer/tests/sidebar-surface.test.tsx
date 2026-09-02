@@ -11,7 +11,10 @@ import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
 import { useEnduragentStore } from "../src/state/store";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
-import { toManualSyncViewState } from "../src/training-context/manual-sync";
+import {
+  type ManualSyncViewState,
+  toManualSyncViewState,
+} from "../src/training-context/manual-sync";
 import { Sidebar } from "../src/ui/sidebar/Sidebar";
 import { clearTrainingRestrictionFocusRequest } from "../src/ui/settings/restriction-focus";
 import { planReadModel } from "./plan-fixtures";
@@ -159,6 +162,13 @@ function stravaDroppedActivities() {
       restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 4 }],
       other: 0,
     },
+  };
+}
+
+function noDroppedActivities() {
+  return {
+    overall: { total: 5, visible: 5, restrictions: [], other: 0 },
+    recent7Days: { total: 5, visible: 5, restrictions: [], other: 0 },
   };
 }
 
@@ -434,7 +444,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toBeDisabled();
     expect(chipSurface()).toHaveTextContent("Syncing");
     expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
-    expect(chip()).toHaveAccessibleName("Sync now · Syncing");
+    expect(chip()).toHaveAccessibleName("Sync now · Syncing · Syncing training data…");
 
     update({
       sync: toManualSyncViewState({
@@ -448,7 +458,84 @@ describe("sidebar sync chip", () => {
     expect(chipSurface()).toHaveTextContent("Sync needs attention");
     expect(chipSurface()).toHaveTextContent("Try again");
     expect(screen.getByText("Try again")).toHaveAttribute("data-sync-action");
-    expect(chip()).toHaveAccessibleName("Try again · Sync needs attention");
+    expect(chip()).toHaveAccessibleName(
+      "Try again · Sync needs attention · Training-data processing partially completed. Try again to finish.",
+    );
+  });
+
+  it("keeps refresh failure ahead of retained sync success", () => {
+    useEnduragentStore.setState({
+      training: {
+        ...EMPTY_TRAINING_SURFACE,
+        status: "refresh-unavailable",
+        metadata: {
+          lastUpdated: "1998-07-19T08:00:00.000Z",
+          lastSynced: "1998-07-19T07:55:00.000Z",
+          freshness: "flag",
+          degraded: false,
+        },
+      },
+    });
+    render(<Sidebar />);
+
+    expect(chip()).toHaveAttribute("data-status", "attention");
+    expect(chipSurface()).toHaveTextContent("Sync needs attention");
+    expect(chipSurface()).not.toHaveTextContent("Training data synced");
+  });
+
+  it("shows and politely announces each exact manual sync message once", () => {
+    render(<Sidebar />);
+
+    const announcement = chipSurface().querySelector('[role="status"]');
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+
+    const syncMessages = [
+      [toManualSyncViewState({ status: "queued", operation: 1 }), "Sync queued."],
+      [toManualSyncViewState({ status: "running", operation: 1 }), "Syncing training data…"],
+      [
+        toManualSyncViewState({
+          status: "succeeded",
+          operation: 1,
+          kind: "published",
+          droppedActivities: noDroppedActivities(),
+        }),
+        "Training-data check completed.",
+      ],
+      [
+        toManualSyncViewState({
+          status: "failed",
+          operation: 1,
+          kind: "partial",
+          retryable: true,
+        }),
+        "Training-data processing partially completed. Try again to finish.",
+      ],
+      [
+        toManualSyncViewState({
+          status: "failed",
+          operation: 1,
+          kind: "indeterminate",
+          retryable: true,
+        }),
+        "Connection interrupted. The sync may still be finishing. Enduragent won’t retry it automatically.",
+      ],
+      [
+        toManualSyncViewState({
+          status: "failed",
+          operation: 1,
+          kind: "protocol",
+          retryable: false,
+        }),
+        "Enduragent couldn’t verify the sync result. Quit and reopen Enduragent.",
+      ],
+    ] satisfies ReadonlyArray<readonly [ManualSyncViewState, string]>;
+
+    for (const [state, message] of syncMessages) {
+      update({ sync: state });
+      expect(announcement?.textContent).toBe(message);
+      expect(chipSurface().querySelectorAll('[role="status"]')).toHaveLength(1);
+    }
   });
 
   it("keeps Strava remedy navigation independent from syncing", async () => {
@@ -483,7 +570,7 @@ describe("sidebar sync chip", () => {
     expect(chipSurface()).not.toHaveTextContent("1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAttribute("title", "1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAccessibleName(
-      "Sync again · Training data synced · 1998-07-19 07:55:00 UTC",
+      "Sync again · Training data synced · Training-data check completed. A Strava API restriction prevents intervals.icu from sharing 60 activities, so they aren’t included.",
     );
     expect(
       chip().querySelector("a, button, input, select, textarea, [role='button'], [tabindex]"),
@@ -549,7 +636,8 @@ describe("sidebar sync chip", () => {
         },
       }),
     });
-    expect(chipSurface()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chipSurface()).toHaveTextContent("Local training-data processing completed.");
+    expect(chipSurface()).not.toHaveTextContent("1998-07-19 07:55:00 UTC");
     expect(chip()).not.toHaveAttribute("title");
     expect(chipSurface().querySelector("[data-info-tip]")).toBeNull();
   });

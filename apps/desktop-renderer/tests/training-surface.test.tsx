@@ -1284,9 +1284,67 @@ describe("training history states and import status", () => {
 
     setTraining(ready(history(), { status: "unavailable" }));
     expect(page).not.toHaveAttribute("aria-busy");
+    expect(screen.getByText("Training data unavailable")).toBeVisible();
 
     setTraining(ready(history(), { status: "refresh-unavailable" }));
     expect(page).not.toHaveAttribute("aria-busy");
+    expect(screen.getByText("Refresh unavailable")).toBeVisible();
+    expect(screen.queryByText("Training data unavailable")).not.toBeInTheDocument();
+  });
+
+  it("renders one training notice with failure, history, then degraded precedence", () => {
+    const stalePanel: TrainingHistoryPanel = {
+      kind: "stale",
+      failedAt: "1998-07-12T08:15:00.000Z",
+      reason: "temporary-failure",
+      lastGood: history(),
+    };
+    setTraining(
+      ready(stalePanel, {
+        status: "refresh-unavailable",
+        metadata: {
+          lastUpdated: "1998-07-12T08:00:00.000Z",
+          lastSynced: "1998-07-12T07:55:00.000Z",
+          freshness: "flag",
+          degraded: true,
+        },
+      }),
+    );
+    render(<TrainingView />);
+
+    expect(screen.getByText("Refresh unavailable")).toBeVisible();
+    expect(
+      screen.queryByText("Training could not be refreshed. Showing the last recorded data."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Data may be incomplete")).not.toBeInTheDocument();
+
+    setTraining(
+      ready(stalePanel, {
+        metadata: {
+          lastUpdated: "1998-07-12T08:00:00.000Z",
+          lastSynced: "1998-07-12T07:55:00.000Z",
+          freshness: "flag",
+          degraded: true,
+        },
+      }),
+    );
+    expect(
+      screen.getByText("Training could not be refreshed. Showing the last recorded data."),
+    ).toBeVisible();
+    expect(screen.queryByText("Data may be incomplete")).not.toBeInTheDocument();
+
+    setTraining(
+      ready(history(), {
+        metadata: {
+          lastUpdated: "1998-07-12T08:00:00.000Z",
+          lastSynced: "1998-07-12T07:55:00.000Z",
+          freshness: "flag",
+          degraded: true,
+        },
+      }),
+    );
+    expect(screen.getByText("Data may be incomplete")).toBeVisible();
+    expect(screen.queryByText("Refresh unavailable")).not.toBeInTheDocument();
   });
 
   it("renders a retained stale wrapper as last-recorded with one refresh-failure warning", () => {

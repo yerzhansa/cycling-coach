@@ -25,7 +25,7 @@ import {
   formatWholeNumber,
 } from "../../training-context/format";
 import { Page } from "../shared/Page";
-import { TRAINING_HISTORY_COPY } from "./copy";
+import { TRAINING_DEGRADED_COPY, TRAINING_HISTORY_COPY, trainingStatusCopy } from "./copy";
 import { overviewStyles as styles } from "./overviewStyles";
 import { PowerProgressContent } from "./PowerProgressPanel";
 import { RideDetailView, trainingRideDateTime, trainingRideKind } from "./RideReview";
@@ -464,10 +464,18 @@ export function TrainingView(): ReactElement {
   const activeWeek = history === null ? null : selectedWeek(history, period);
   const warning =
     history === null || activeWeek === null ? null : dataWarning(panel, history, activeWeek);
+  const statusWarning =
+    training.status === "unavailable" || training.status === "refresh-unavailable"
+      ? trainingStatusCopy(training.status)
+      : null;
+  const notice =
+    statusWarning ??
+    warning ??
+    (training.metadata?.degraded === true ? TRAINING_DEGRADED_COPY : null);
   const label = history === null ? null : periodLabel(history, period, retained);
   const announcement = useMemo(
-    () => (label === null ? null : warning === null ? label : `${label}. ${warning}`),
-    [label, warning],
+    () => (label === null ? null : notice === null ? label : `${label}. ${notice}`),
+    [label, notice],
   );
 
   if (resolvedRide !== null) {
@@ -490,7 +498,12 @@ export function TrainingView(): ReactElement {
 
   let historyContent: ReactNode;
   if (history === null || activeWeek === null) {
-    historyContent = <UnavailableHistory />;
+    historyContent = (
+      <>
+        {notice === null ? null : <p className={styles.dataNotice}>{notice}</p>}
+        <UnavailableHistory />
+      </>
+    );
   } else {
     historyContent = (
       <>
@@ -514,7 +527,7 @@ export function TrainingView(): ReactElement {
         <p className={styles.srOnly} role="status" aria-live="polite" aria-atomic="true">
           {announcement}
         </p>
-        {warning === null ? null : <p className={styles.dataNotice}>{warning}</p>}
+        {notice === null ? null : <p className={styles.dataNotice}>{notice}</p>}
         <WeeklySummary
           history={history}
           retained={retained}
