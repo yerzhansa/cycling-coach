@@ -1,8 +1,8 @@
 export const overviewStyles = {
-  periodGroup: "flex items-center gap-inset",
+  periodGroup: "flex items-center gap-inset max-[761px]:gap-1",
   periodButton: "border-line-2 bg-surface text-ink-2 hover:bg-surface-2 hover:text-ink",
   dataNotice:
-    "mb-[18px] flex items-center gap-inset border-l-[3px] border-warn bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] px-[11px] py-[9px] text-xs leading-5 text-ink-2",
+    "mb-[18px] flex items-center gap-inset border-l-[3px] border-warn bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] px-[11px] py-[9px] text-xs leading-4 text-ink-2",
   dataNoticeCoverage: "font-semibold text-ink",
   weekSection: "min-w-0",
   weekHero:
@@ -72,7 +72,7 @@ export const overviewStyles = {
   badge:
     "training-badge mt-1 mb-2 inline-flex h-5 shrink-0 items-center justify-center gap-1 rounded-chip bg-surface-2 px-1.5 text-xs font-medium text-ink-2 capitalize data-[band=aging]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=aging]:text-warn data-[band=stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=stale]:text-warn data-[band=very-stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=very-stale]:text-warn data-[freshness=flag]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=flag]:text-warn data-[freshness=stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=stale]:text-warn data-[freshness=critical]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=critical]:text-warn",
   exportControls:
-    "mt-3 flex flex-wrap items-center gap-[9px] [&_label]:text-xs [&_label]:font-semibold [&_label]:text-ink-2",
+    "mt-3 flex flex-wrap items-center gap-[9px] [&_label]:text-xs [&_label]:text-ink-2",
   exportStatus: "mt-2.5 text-xs leading-[1.45] text-ink-2",
   analysisPanel: "mt-3.5 rounded-card border border-line bg-surface p-5 shadow-elev-1",
   analysisTitle: "m-0 text-xl leading-6 font-semibold tracking-normal",

@@ -20,6 +20,7 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller";
 import type { TrainingContextViewState } from "../src/training-context/controller";
 import { TrainingView } from "../src/ui/training/TrainingView";
+import { WorkoutArchiveExportControl } from "../src/ui/training/TrainingExportControls";
 import { pinDefaultLocale } from "./intl";
 
 const FIRST_ID = "a".repeat(64);
@@ -403,7 +404,7 @@ describe("training landing page", () => {
       name: "Previous week",
     });
     const next = within(group).getByRole("button", { name: "Next week" });
-    expect(group).toHaveClass("gap-inset");
+    expect(group).toHaveClass("gap-inset", "max-[761px]:gap-1");
     expect(within(group).getAllByRole("button")).toEqual([previous, current, next]);
     expect(previous).toHaveClass("[&_svg:not([class*='size-'])]:size-3");
     expect(next).toHaveClass("[&_svg:not([class*='size-'])]:size-3");
@@ -742,9 +743,11 @@ describe("ride review", () => {
     const rideSummary = overview.querySelector("dl:first-of-type");
     expect(rideSummary).toHaveClass(
       "mt-[calc(var(--row-inset)+var(--inset))]",
+      "grid-cols-3",
       "gap-3.5",
       "pt-3.5",
       "max-[520px]:grid-cols-1",
+      "[&_dd]:whitespace-nowrap",
     );
     expect(rideSummary).not.toHaveClass("max-[761px]:grid-cols-1");
     expect(overview.querySelectorAll("dl")).toHaveLength(1);
@@ -803,7 +806,7 @@ describe("ride review", () => {
 
     const panel = screen.getByRole("region", { name: "Export ride" });
     const formatLabel = within(panel).getByText("File format");
-    expect(formatLabel.parentElement).toHaveClass("[&_label]:font-semibold");
+    expect(formatLabel).toHaveClass("font-semibold");
     await user.click(within(panel).getByRole("combobox", { name: "File format" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "FIT",
@@ -824,6 +827,12 @@ describe("ride review", () => {
       });
     });
     expect(within(panel).getByRole("status")).toHaveTextContent("Export saved locally.");
+  });
+
+  it("uses the prototype label weight for workout archive export", () => {
+    render(<WorkoutArchiveExportControl oldest="1998-07-06" newest="1998-07-12" />);
+
+    expect(screen.getByText("Workout format")).toHaveClass("font-medium");
   });
 
   it("shows elapsed fallback as secondary metadata", async () => {
@@ -1474,16 +1483,26 @@ describe("training history states and import status", () => {
     });
     render(<TrainingView />);
 
-    expect(screen.getByRole("button", { name: "Last recorded week" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const periodGroup = screen.getByRole("group", { name: "Completed riding period" });
+    const lastRecorded = within(periodGroup).getByRole("button", {
+      name: "Last recorded week",
+    });
+    expect(lastRecorded).toBeDisabled();
+    expect(lastRecorded).not.toHaveAttribute("aria-pressed");
+    expect(within(periodGroup).getAllByRole("button")).toEqual([lastRecorded]);
+    expect(within(periodGroup).queryByRole("button", { name: "Previous week" })).toBeNull();
+    expect(within(periodGroup).queryByRole("button", { name: "Next week" })).toBeNull();
     expect(
       screen.getByText("Training could not be refreshed. Showing the last recorded data."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "This week" })).not.toBeInTheDocument();
     expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
     expect(screen.getByText("Recorded through Jul 12, 1998")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Recorded rides" })).toBeInTheDocument();
+    const notice = screen
+      .getByText("Training could not be refreshed. Showing the last recorded data.")
+      .closest("p");
+    expect(notice).toHaveClass("text-xs", "leading-4");
   });
 
   it("combines stale and incomplete history into one warning", () => {
@@ -1514,6 +1533,11 @@ describe("training history states and import status", () => {
       screen.getByText("Training may be out of date, and some rides may be missing."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Some rides may be missing.")).not.toBeInTheDocument();
+    const ridesHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "Latest available rides",
+    });
+    expect(ridesHeading).toHaveAttribute("id", "recent-rides-title");
   });
 
   it("renders sparse and unavailable history without substituting legacy data", () => {

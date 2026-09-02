@@ -62,7 +62,9 @@ export function ActivityExportControl(props: {
         Save a copy to your computer. Exporting does not change this ride or your training account.
       </p>
       <div className={styles.exportControls}>
-        <label htmlFor={`${id}-format`}>File format</label>
+        <label className="font-semibold" htmlFor={`${id}-format`}>
+          File format
+        </label>
         <Select
           items={ACTIVITY_FORMATS}
           value={format}
@@ -114,7 +116,9 @@ export function WorkoutArchiveExportControl(props: {
         Save the visible planned workouts as a ZIP. Exporting does not change your plan.
       </p>
       <div className={styles.exportControls}>
-        <label htmlFor={`${id}-format`}>Workout format</label>
+        <label className="font-medium" htmlFor={`${id}-format`}>
+          Workout format
+        </label>
         <Select
           items={WORKOUT_FORMATS}
           value={format}

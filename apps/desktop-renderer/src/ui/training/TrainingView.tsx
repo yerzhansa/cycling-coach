@@ -316,6 +316,11 @@ function RecentRides(props: {
   readonly onPreviousWeek: () => void;
   readonly registerButton: (id: string, node: HTMLButtonElement | null) => void;
 }): ReactElement {
+  const heading = props.retained
+    ? TRAINING_HISTORY_COPY.recordedRides
+    : props.history.coverage.kind === "incomplete"
+      ? TRAINING_HISTORY_COPY.latestAvailableRides
+      : TRAINING_HISTORY_COPY.recentRides;
   const truncation =
     props.week.rides.truncated && props.week.rides.items.length > 0
       ? props.week.rides.count.kind === "at-least"
@@ -329,7 +334,7 @@ function RecentRides(props: {
       aria-labelledby="recent-rides-title"
     >
       <div className={styles.ridesHeading}>
-        <h2 id="recent-rides-title">Recent rides</h2>
+        <h2 id="recent-rides-title">{heading}</h2>
         {props.week.rides.items.length === 0 ? null : (
           <span>{TRAINING_HISTORY_COPY.newestFirst}</span>
         )}
@@ -391,41 +396,52 @@ function PeriodNavigation(props: {
 }): ReactElement {
   return (
     <div className={styles.periodGroup} role="group" aria-label="Completed riding period">
-      <Button
-        type="button"
-        variant="outline"
-        size="icon-xs"
-        className={styles.periodButton}
-        aria-label={TRAINING_HISTORY_COPY.previous}
-        disabled={
-          props.retained || props.period === "previous" || props.history.previousWeek === null
-        }
-        onClick={() => props.onChange("previous")}
-      >
-        <ChevronLeft aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="xs"
-        className={styles.periodButton}
-        aria-pressed={props.period === "anchor"}
-        disabled={props.retained}
-        onClick={() => props.onChange("anchor")}
-      >
-        {periodLabel(props.history, "anchor", props.retained)}
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="icon-xs"
-        className={styles.periodButton}
-        aria-label={TRAINING_HISTORY_COPY.next}
-        disabled={props.retained || props.period === "anchor"}
-        onClick={() => props.onChange("anchor")}
-      >
-        <ChevronRight aria-hidden="true" />
-      </Button>
+      {props.retained ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className={styles.periodButton}
+          disabled
+        >
+          {TRAINING_HISTORY_COPY.lastRecorded}
+        </Button>
+      ) : (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            className={styles.periodButton}
+            aria-label={TRAINING_HISTORY_COPY.previous}
+            disabled={props.period === "previous" || props.history.previousWeek === null}
+            onClick={() => props.onChange("previous")}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className={styles.periodButton}
+            aria-pressed={props.period === "anchor"}
+            onClick={() => props.onChange("anchor")}
+          >
+            {periodLabel(props.history, "anchor", props.retained)}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            className={styles.periodButton}
+            aria-label={TRAINING_HISTORY_COPY.next}
+            disabled={props.period === "anchor"}
+            onClick={() => props.onChange("anchor")}
+          >
+            <ChevronRight aria-hidden="true" />
+          </Button>
+        </>
+      )}
     </div>
   );
 }
@@ -502,7 +518,7 @@ function UnavailableHistory(): ReactElement {
         aria-labelledby="recent-rides-title"
       >
         <div className={styles.ridesHeading}>
-          <h2 id="recent-rides-title">Recent rides</h2>
+          <h2 id="recent-rides-title">{TRAINING_HISTORY_COPY.recentRides}</h2>
         </div>
         <p className={styles.historyEmpty}>{TRAINING_HISTORY_COPY.unknownRides}</p>
       </section>
