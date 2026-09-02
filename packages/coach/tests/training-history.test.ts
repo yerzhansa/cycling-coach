@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTrainingHistorySource } from "../src/training-history.js";
 
 const AS_OF = "1998-07-10T12:00:00.000Z";
+const DEFAULT_COMMITTED_AT = "1998-07-11T12:00:00.000Z";
 
 function absent(): RecordedFact<number> {
   return { kind: "absent" };
@@ -62,9 +63,10 @@ function commit(input: {
   readonly newest?: string;
   readonly committedAt?: string;
   readonly zone?: string;
-  readonly gapState?: "none" | "undated-dropped-rows";
+  readonly datedLocalDates?: readonly string[];
+  readonly undatedCount?: number;
 }): CoverageCommitRow {
-  const committedAt = input.committedAt ?? AS_OF;
+  const committedAt = input.committedAt ?? DEFAULT_COMMITTED_AT;
   return {
     coverageCommitId: input.id,
     source: "intervals-icu",
@@ -75,7 +77,10 @@ function commit(input: {
     coveredOldest: input.oldest ?? "1998-05-01",
     coveredNewest: input.newest ?? "1998-07-10",
     committedEpochSeconds: Date.parse(committedAt) / 1_000,
-    gapState: input.gapState ?? "none",
+    gaps: {
+      datedLocalDates: input.datedLocalDates ?? [],
+      undatedCount: input.undatedCount ?? 0,
+    },
   };
 }
 
@@ -197,7 +202,7 @@ describe("training history projection", () => {
         commit({
           id: 1,
           newest: "1998-07-12",
-          committedAt: "1998-07-12T12:00:00.000Z",
+          committedAt: "1998-07-13T12:00:00.000Z",
         }),
       ],
     });
@@ -358,7 +363,7 @@ describe("training history projection", () => {
     expect(result.projection.anchorWeek.callout).toBeNull();
   });
 
-  it("ends the callout window at proven coverage through when it precedes Sunday", async () => {
+  it("ends the current-week callout at the last elapsed covered day", async () => {
     const winner = ride({
       id: "1".repeat(64),
       localDate: "1998-07-08",
@@ -372,7 +377,13 @@ describe("training history projection", () => {
         ride({ id: "3".repeat(64), localDate: "1998-06-28", movingSeconds: 5_400 }),
         ride({ id: "4".repeat(64), localDate: "1998-06-20", movingSeconds: 4_800 }),
       ],
-      commits: [commit({ id: 1, newest: "1998-07-10" })],
+      commits: [
+        commit({
+          id: 1,
+          newest: "1998-07-09",
+          committedAt: "1998-07-10T08:00:00.000Z",
+        }),
+      ],
     });
 
     expect(result.projection.kind).toBe("computed");
@@ -381,7 +392,7 @@ describe("training history projection", () => {
       kind: "longest-ride-28d",
       rideId: winner.id,
       durationSeconds: 7_200,
-      window: { start: "1998-06-13", end: "1998-07-10" },
+      window: { start: "1998-06-12", end: "1998-07-09" },
       comparisonRideCount: 4,
     });
   });
@@ -486,7 +497,7 @@ describe("training history projection", () => {
   it("folds superseding commits into contiguous, incomplete, and sparse coverage", async () => {
     const supersededGap = commit({
       id: 1,
-      gapState: "undated-dropped-rows",
+      undatedCount: 1,
       committedAt: "1998-07-09T12:00:00.000Z",
     });
     const clean = commit({ id: 2 });
@@ -497,7 +508,7 @@ describe("training history projection", () => {
         kind: "contiguous",
         start: "1998-05-01",
         through: "1998-07-10",
-        committedAt: AS_OF,
+        committedAt: DEFAULT_COMMITTED_AT,
       },
     });
 
@@ -506,8 +517,8 @@ describe("training history projection", () => {
         clean,
         commit({
           id: 3,
-          gapState: "undated-dropped-rows",
-          committedAt: "1998-07-10T13:00:00.000Z",
+          undatedCount: 1,
+          committedAt: "1998-07-12T13:00:00.000Z",
         }),
       ],
     });
@@ -518,7 +529,7 @@ describe("training history projection", () => {
         provenStart: "1998-05-01",
         provenThrough: "1998-07-10",
         observedThrough: "1998-07-10",
-        committedAt: "1998-07-10T13:00:00.000Z",
+        committedAt: "1998-07-12T13:00:00.000Z",
         reason: "undated-dropped-rows",
       },
     });
@@ -538,6 +549,73 @@ describe("training history projection", () => {
       anchorWeek: { window: { start: "1998-05-25", end: "1998-05-31" } },
     });
     expect(sparse.readWindow).toHaveBeenCalledWith({ start: "1900-01-01", end: "1998-07-12" });
+  });
+
+  it("localizes dated dropped rows to intersecting weeks", async () => {
+    const result = await read({
+      rows: [
+        ride({ id: "1".repeat(64), localDate: "1998-07-08" }),
+        ride({ id: "2".repeat(64), localDate: "1998-07-03" }),
+      ],
+      commits: [
+        commit({
+          id: 1,
+          committedAt: "1998-07-11T12:00:00.000Z",
+          datedLocalDates: ["1998-07-03"],
+        }),
+      ],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed" || result.projection.previousWeek === null) return;
+    expect(result.projection.anchorWeek.coverage).toEqual({ kind: "complete" });
+    expect(result.projection.anchorWeek.rides.count).toEqual({ kind: "exact", value: 1 });
+    expect(result.projection.previousWeek.coverage).toMatchObject({
+      kind: "incomplete",
+      reason: "source-degraded",
+    });
+    expect(result.projection.previousWeek.rides.count).toEqual({ kind: "at-least", value: 1 });
+  });
+
+  it("does not claim the open current day from coverage through yesterday", async () => {
+    const result = await read({
+      rows: [ride({ id: "1".repeat(64), localDate: "1998-07-10" })],
+      commits: [
+        commit({
+          id: 1,
+          newest: "1998-07-09",
+          committedAt: "1998-07-10T12:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.coverage).toMatchObject({
+      kind: "incomplete",
+      recordedThrough: "1998-07-09",
+    });
+    expect(result.projection.anchorWeek.rides.count).toEqual({ kind: "at-least", value: 1 });
+    expect(result.projection.anchorWeek.callout).toBeNull();
+  });
+
+  it("clamps an existing same-day coverage claim when reading it", async () => {
+    const result = await read({
+      commits: [
+        commit({
+          id: 1,
+          newest: "1998-07-10",
+          committedAt: "1998-07-10T12:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(result.projection.kind).toBe("computed");
+    if (result.projection.kind !== "computed") return;
+    expect(result.projection.anchorWeek.coverage).toMatchObject({
+      kind: "incomplete",
+      recordedThrough: "1998-07-09",
+    });
   });
 
   it("limits scan coverage at the oldest returned week without degrading newer weeks", async () => {

@@ -74,18 +74,28 @@ describe("captureReference", () => {
 
   it("splits the activity rows the capture drops into source-restricted and other", async () => {
     const stub = { id: "9001", icu_athlete_id: "i12345", start_date_local: "1998-07-17T14:08:41", source: "STRAVA" };
-    const foreign = { id: "9002", icu_athlete_id: "i12345", start_date_local: "1998-07-17T14:09:41", source: "GARMIN_CONNECT" };
+    const foreign = { id: "9002", icu_athlete_id: "i12345", source: "GARMIN_CONNECT" };
     const value = fixture({ time: [0, 1], watts: [200, 210] }, [ACTIVITY, stub, foreign]);
 
     const batch = await value.source.captureReference(PLAN, budget());
 
     expect(batch.records.activities).toHaveLength(1);
-    expect(batch.dropped_activity_rows).toEqual({ sourceRestricted: 1, other: 1 });
+    expect(batch.dropped_activity_rows).toEqual({
+      sourceRestricted: 1,
+      other: 1,
+      datedLocalDates: ["1998-07-17"],
+      undatedCount: 1,
+    });
   });
 
   it("reports no dropped activity rows for a clean capture", async () => {
     const batch = await fixture().source.captureReference(PLAN, budget());
-    expect(batch.dropped_activity_rows).toEqual({ sourceRestricted: 0, other: 0 });
+    expect(batch.dropped_activity_rows).toEqual({
+      sourceRestricted: 0,
+      other: 0,
+      datedLocalDates: [],
+      undatedCount: 0,
+    });
   });
 
   it("omits malformed stream responses without omitting required lanes", async () => {
