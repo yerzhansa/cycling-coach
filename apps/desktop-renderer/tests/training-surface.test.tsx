@@ -472,7 +472,10 @@ describe("training landing page", () => {
     const figure = screen.getByRole("figure", {
       name: "Six complete weeks of riding time",
     });
+    expect(figure.parentElement).toHaveClass("max-[761px]:grid-cols-1", "max-[761px]:gap-[18px]");
+    expect(figure).toHaveClass("max-[761px]:border-t", "max-[761px]:pt-3.5");
     expect(figure.querySelectorAll(".training-trend-bar")).toHaveLength(6);
+    expect(figure.querySelector('[aria-hidden="true"]')).toHaveClass("max-[761px]:min-h-[76px]");
     const table = within(figure).getByRole("table", {
       name: "Six complete weeks of riding time data",
     });
@@ -507,14 +510,16 @@ describe("training landing page", () => {
     expect(within(recent).getByText("1998-07-09 · 22:00")).toBeInTheDocument();
     expect(within(recent).getByText("1h 25m")).toBeInTheDocument();
     expect(within(recent).getByText("42.1 km")).toBeInTheDocument();
-    expect(within(recent).getByText("Load 91")).toHaveClass("max-[760px]:hidden");
+    expect(within(recent).getByText("Load 91")).toHaveClass("max-[761px]:hidden");
     expect(within(recent).getByText("Indoor ride")).toBeInTheDocument();
     expect(within(recent).getByText("1998-07-08")).toBeInTheDocument();
     expect(within(recent).queryByText(/1998-07-08 ·/u)).not.toBeInTheDocument();
     expect(within(recent).getAllByText("Worth a look")).toHaveLength(1);
-    expect(
-      within(recent).getByText("Longest recorded ride in the 28 days ending 1998-07-09"),
-    ).toBeInTheDocument();
+    const reason = within(recent).getByText(
+      "Longest recorded ride in the 28 days ending 1998-07-09",
+    );
+    expect(reason).toHaveClass("[overflow-wrap:anywhere]", "whitespace-normal");
+    expect(reason).not.toHaveClass("text-ellipsis", "whitespace-nowrap");
   });
 
   it("uses the units preference across the weekly summary, ride row, and Ride review", async () => {
@@ -632,10 +637,15 @@ describe("ride review", () => {
     );
 
     const overview = screen.getByRole("region", { name: "River tempo" });
+    expect(overview).toHaveClass("[&_h2]:leading-8");
     expect(within(overview).getByText("Road ride")).toBeInTheDocument();
     expect(within(overview).getByText("1998-07-09 · 22:00")).toBeInTheDocument();
     expect(within(overview).getByText("1h 25m")).toBeInTheDocument();
     expect(within(overview).getByText("42.1 km")).toBeInTheDocument();
+    const rideSummary = overview.querySelector("dl:first-of-type");
+    expect(rideSummary).toHaveClass("mt-[calc(var(--row-inset)+var(--inset))]", "gap-3.5");
+    const recordedMetrics = overview.querySelector("dl:nth-of-type(2)");
+    expect(recordedMetrics).toHaveClass("max-[761px]:grid-cols-2");
     const metricLabels = [...overview.querySelectorAll("dl:nth-of-type(2) dt")].map(
       (node) => node.textContent,
     );

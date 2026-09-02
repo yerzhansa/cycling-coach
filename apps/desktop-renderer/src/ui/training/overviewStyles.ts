@@ -8,7 +8,7 @@ export const overviewStyles = {
   weekHeading:
     "mb-3.5 flex min-w-0 items-baseline justify-between gap-3 max-[520px]:grid [&_h2]:m-0 [&_h2]:text-lg [&_h2]:leading-7 [&_h2]:font-semibold [&_p]:m-0 [&_p]:text-xs [&_p]:leading-4 [&_p]:text-ink-3",
   weekHero:
-    "grid min-w-0 grid-cols-[minmax(210px,0.82fr)_minmax(0,1.18fr)] items-stretch gap-6 max-[760px]:grid-cols-1 max-[760px]:gap-[18px]",
+    "grid min-w-0 grid-cols-[minmax(210px,0.82fr)_minmax(0,1.18fr)] items-stretch gap-6 max-[761px]:grid-cols-1 max-[761px]:gap-[18px]",
   weekFacts: "min-w-0",
   weekEyebrow: "m-0 text-xs leading-4 font-semibold text-ink-3",
   weekTime:
@@ -16,10 +16,10 @@ export const overviewStyles = {
   weekMetrics:
     "mt-2.5 flex min-w-0 flex-wrap gap-x-[18px] gap-y-2 [&>div]:min-w-0 [&_dt]:text-xs [&_dt]:leading-4 [&_dt]:text-ink-3 [&_dd]:mt-0.5 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-sm [&_dd]:leading-5 [&_dd]:font-medium [&_dd]:tabular-nums",
   trend:
-    "m-0 grid min-w-0 grid-rows-[auto_1fr] gap-2.5 border-l border-line pl-6 max-[760px]:border-t max-[760px]:border-l-0 max-[760px]:pt-3.5 max-[760px]:pl-0",
+    "m-0 grid min-w-0 grid-rows-[auto_1fr] gap-2.5 border-l border-line pl-6 max-[761px]:border-t max-[761px]:border-l-0 max-[761px]:pt-3.5 max-[761px]:pl-0",
   trendCaption: "text-xs leading-4 font-medium text-ink-2",
   trendBars:
-    "grid min-h-[92px] grid-cols-6 items-end gap-inset border-b border-line max-[760px]:min-h-[76px]",
+    "grid min-h-[92px] grid-cols-6 items-end gap-inset border-b border-line max-[761px]:min-h-[76px]",
   trendColumn: "grid h-full min-w-0 grid-rows-[1fr_auto] items-end gap-1",
   trendBar: "training-trend-bar w-full rounded-t-chip bg-line-2",
   trendLabel:
@@ -31,17 +31,17 @@ export const overviewStyles = {
   historyRideItem:
     "border-t border-line last:border-b data-[callout=true]:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
   historyRideButton:
-    "group/ride relative grid min-h-[78px] w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_18px] items-center gap-3.5 bg-transparent px-inset py-row text-left text-ink outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--ink)_5%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink motion-reduce:transition-none max-[760px]:grid-cols-[minmax(0,1fr)_auto_18px] max-[520px]:gap-2.5",
+    "group/ride relative grid min-h-[78px] w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto_18px] items-center gap-3.5 bg-transparent px-inset py-row text-left text-ink outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--ink)_5%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink motion-reduce:transition-none max-[761px]:grid-cols-[minmax(0,1fr)_auto_18px] max-[520px]:gap-2.5",
   historyRideMain: "grid min-w-0 gap-1",
   historyRideTitle:
     "flex min-w-0 flex-wrap items-center gap-inset [&>strong]:overflow-hidden [&>strong]:text-sm [&>strong]:font-semibold [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>span]:inline-flex [&>span]:min-h-5 [&>span]:items-center [&>span]:rounded-chip [&>span]:bg-brand-soft [&>span]:px-1.5 [&>span]:text-xs [&>span]:font-medium [&>span]:text-brand",
   historyRideReason:
-    "overflow-hidden text-xs leading-4 font-medium text-brand text-ellipsis whitespace-nowrap",
+    "[overflow-wrap:anywhere] text-xs leading-4 font-medium whitespace-normal text-brand",
   historyRideStats:
-    "grid min-w-[76px] gap-1 text-right text-xs leading-4 text-ink-2 tabular-nums max-[760px]:col-start-1 max-[760px]:row-start-2 max-[760px]:min-w-0 max-[760px]:grid-flow-col max-[760px]:justify-start max-[760px]:gap-3 max-[760px]:text-left",
-  historyRideLoad: "text-xs leading-4 text-ink-2 tabular-nums max-[760px]:hidden",
+    "grid min-w-[76px] gap-1 text-right text-xs leading-4 text-ink-2 tabular-nums max-[761px]:col-start-1 max-[761px]:row-start-2 max-[761px]:min-w-0 max-[761px]:grid-flow-col max-[761px]:justify-start max-[761px]:gap-3 max-[761px]:text-left",
+  historyRideLoad: "text-xs leading-4 text-ink-2 tabular-nums max-[761px]:hidden",
   historyRideArrow:
-    "text-sm text-ink-3 transition-transform group-hover/ride:translate-x-0.5 motion-reduce:transition-none max-[760px]:col-start-3 max-[760px]:row-span-2 max-[760px]:row-start-1",
+    "text-sm text-ink-3 transition-transform group-hover/ride:translate-x-0.5 motion-reduce:transition-none max-[761px]:col-start-3 max-[761px]:row-span-2 max-[761px]:row-start-1",
   historyEmpty: "m-0 py-3.5 text-sm leading-5 text-ink-2",
   truncation: "mt-3 text-xs leading-5 text-ink-3",
   importStatus: "mt-7 border-t border-line pt-3.5 [&>h2]:m-0 [&>h2]:text-sm [&>h2]:font-semibold",
