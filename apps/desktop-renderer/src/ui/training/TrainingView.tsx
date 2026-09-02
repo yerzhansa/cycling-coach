@@ -14,6 +14,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { formatCivilDate } from "../../lib/date";
 import { rideImportStatusCopy } from "../../ride-import";
@@ -64,13 +65,10 @@ function dataWarning(
 ): string | null {
   if (panel.kind === "stale") return TRAINING_HISTORY_COPY.refreshFailure;
   if (history.coverage.kind === "sparse") return TRAINING_HISTORY_COPY.sparse;
-  const through = coverageDate(history);
-  if (history.displayMode === "last-recorded" && through !== null) {
+  if (history.displayMode === "last-recorded") {
     return history.coverage.kind === "incomplete"
-      ? `Training may be out of date, and some rides may be missing. Showing recorded rides through ${formatCivilDate(
-          through,
-        )}.`
-      : `Training may be out of date. Showing recorded rides through ${formatCivilDate(through)}.`;
+      ? TRAINING_HISTORY_COPY.outOfDateIncomplete
+      : TRAINING_HISTORY_COPY.outOfDate;
   }
   if (week.coverage.kind === "complete") return null;
   if (week.coverage.reason === "coverage-lag") return TRAINING_HISTORY_COPY.coverageLag;
@@ -92,6 +90,28 @@ function rideCountCopy(value: number): string {
   return `${formatWholeNumber(value)} ${value === 1 ? "ride" : "rides"}`;
 }
 
+function weekRangeLabel(week: CompletedActivityWeek): string {
+  const startMonth = formatCivilDate(week.window.start, { month: "short" });
+  const endMonth = formatCivilDate(week.window.end, { month: "short" });
+  const start = formatCivilDate(week.window.start, { day: "numeric", month: "short" });
+  const end = formatCivilDate(
+    week.window.end,
+    startMonth === endMonth ? { day: "numeric" } : { day: "numeric", month: "short" },
+  );
+  return `${start}–${end}`;
+}
+
+function noticeCoverage(
+  panel: TrainingHistoryPanel,
+  history: TrainingHistoryComputed,
+  week: CompletedActivityWeek,
+): string | null {
+  if (panel.kind !== "stale" && week.coverage.kind !== "incomplete") return null;
+  const through =
+    week.coverage.kind === "incomplete" ? week.coverage.recordedThrough : coverageDate(history);
+  return through === null ? null : `${TRAINING_HISTORY_COPY.coverage} ${formatCivilDate(through)}`;
+}
+
 function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
   const trend = props.week.trend;
   if (trend.kind === "unavailable") {
@@ -103,7 +123,8 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
     return (
       <figure className={styles.trend} aria-labelledby="training-trend-title">
         <figcaption id="training-trend-title" className={styles.trendCaption}>
-          {TRAINING_HISTORY_COPY.trendTitle}
+          <span>{TRAINING_HISTORY_COPY.trendLabel}</span>{" "}
+          <span>{TRAINING_HISTORY_COPY.trendPeriod}</span>
         </figcaption>
         <p className={styles.trendUnavailable}>{TRAINING_HISTORY_COPY.trendUnavailable}</p>
         <p className={styles.trendReason}>{reason}</p>
@@ -114,14 +135,15 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
   return (
     <figure className={styles.trend} aria-labelledby="training-trend-title">
       <figcaption id="training-trend-title" className={styles.trendCaption}>
-        {TRAINING_HISTORY_COPY.trendTitle}
+        <span>{TRAINING_HISTORY_COPY.trendLabel}</span>{" "}
+        <span>{TRAINING_HISTORY_COPY.trendPeriod}</span>
       </figcaption>
       <div className={styles.trendBars} aria-hidden="true">
         {trend.buckets.map((bucket) => (
           <span className={styles.trendColumn} key={bucket.window.start}>
             <span
               className={styles.trendBar}
-              style={{ height: `${(bucket.ridingSeconds / maximum) * 100}%` }}
+              style={{ height: `${(bucket.ridingSeconds / maximum) * 75}%` }}
             />
             <span className={styles.trendLabel}>
               {formatCivilDate(bucket.window.start, { day: "numeric", month: "numeric" })}
@@ -163,47 +185,38 @@ function WeeklySummary(props: {
 }): ReactElement {
   const ridesExist = props.week.rides.items.length > 0 || props.week.rides.count.value > 0;
   const label = periodLabel(props.history, props.period, props.retained);
-  const recordedThrough = coverageDate(props.history);
   return (
     <section
       className={styles.weekSection}
       data-panel="weekly-summary"
       aria-labelledby="weekly-summary-title"
     >
-      <div className={styles.weekHeading}>
-        <h2 id="weekly-summary-title">Weekly summary</h2>
-        {recordedThrough === null ? null : (
-          <p>
-            {TRAINING_HISTORY_COPY.coverage} {formatCivilDate(recordedThrough)}
-          </p>
-        )}
-      </div>
+      <h2 id="weekly-summary-title" className={styles.srOnly}>
+        Weekly summary
+      </h2>
       <div className={styles.weekHero}>
         <div className={styles.weekFacts}>
           <p className={styles.weekEyebrow}>{label}</p>
           <p className={styles.weekTime} data-summary-metric="riding-time">
             {metricCopy(props.week.totals.ridingSeconds, formatRidingDuration, ridesExist)}
           </p>
-          <dl className={styles.weekMetrics}>
-            <div data-summary-metric="ride-count">
-              <dt>Rides</dt>
-              <dd>{metricCopy(props.week.totals.rideCount, rideCountCopy, ridesExist)}</dd>
-            </div>
-            <div data-summary-metric="distance">
-              <dt>Distance</dt>
-              <dd>
-                {metricCopy(
-                  props.week.totals.distanceMeters,
-                  (value) => formatDistance(value, props.units),
-                  ridesExist,
-                )}
-              </dd>
-            </div>
-            <div data-summary-metric="load">
-              <dt>Load</dt>
-              <dd>{metricCopy(props.week.totals.load, formatWholeNumber, ridesExist)}</dd>
-            </div>
-          </dl>
+          <p className={styles.weekMetrics}>
+            <span data-summary-metric="ride-count">
+              {metricCopy(props.week.totals.rideCount, rideCountCopy, ridesExist)}
+            </span>
+            {" · "}
+            <span data-summary-metric="distance">
+              {metricCopy(
+                props.week.totals.distanceMeters,
+                (value) => formatDistance(value, props.units),
+                ridesExist,
+              )}
+            </span>
+            {" · "}
+            <span data-summary-metric="load">
+              Load {metricCopy(props.week.totals.load, formatWholeNumber, ridesExist)}
+            </span>
+          </p>
         </div>
         <Trend week={props.week} />
       </div>
@@ -285,6 +298,7 @@ function RecentRides(props: {
   readonly week: CompletedActivityWeek;
   readonly units: UnitsPreference;
   readonly onOpen: (ride: TrainingHistoryRide) => void;
+  readonly onPreviousWeek: () => void;
   readonly registerButton: (id: string, node: HTMLButtonElement | null) => void;
 }): ReactElement {
   const truncation =
@@ -299,7 +313,12 @@ function RecentRides(props: {
       data-panel="recent-rides"
       aria-labelledby="recent-rides-title"
     >
-      <h2 id="recent-rides-title">Recent rides</h2>
+      <div className={styles.ridesHeading}>
+        <h2 id="recent-rides-title">Recent rides</h2>
+        {props.week.rides.items.length === 0 ? null : (
+          <span>{TRAINING_HISTORY_COPY.newestFirst}</span>
+        )}
+      </div>
       {props.week.rides.items.length === 0 ? (
         <p className={styles.historyEmpty}>
           {emptyRidesCopy(props.history, props.retained, props.period)}
@@ -319,6 +338,19 @@ function RecentRides(props: {
         </ol>
       )}
       {truncation === null ? null : <p className={styles.truncation}>{truncation}</p>}
+      {props.period !== "anchor" || props.retained || props.history.previousWeek === null ? null : (
+        <div className={styles.moreHistory}>
+          <Button
+            type="button"
+            variant="outline"
+            className={styles.moreHistoryButton}
+            data-parity="rides-previous-week"
+            onClick={props.onPreviousWeek}
+          >
+            {TRAINING_HISTORY_COPY.previous}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
@@ -336,19 +368,64 @@ function PowerProgressStatePanel(props: {
   );
 }
 
-function RideImportAction(): ReactElement {
-  const state = useEnduragentStore((store) => store.rideImport);
-  const actions = useEnduragentStore((store) => store.rideImportActions);
+function PeriodNavigation(props: {
+  readonly history: TrainingHistoryComputed;
+  readonly period: Period;
+  readonly retained: boolean;
+  readonly onChange: (period: Period) => void;
+}): ReactElement {
   return (
-    <Button
-      type="button"
-      variant="outline"
-      disabled={actions === null || state.status === "running"}
-      aria-describedby={state.status === "idle" ? undefined : "ride-import-status"}
-      onClick={() => actions?.choose()}
-    >
-      Import ride files
-    </Button>
+    <div className={styles.periodGroup} role="group" aria-label="Completed riding period">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        className={styles.periodButton}
+        aria-label={TRAINING_HISTORY_COPY.previous}
+        disabled={
+          props.retained || props.period === "previous" || props.history.previousWeek === null
+        }
+        onClick={() => props.onChange("previous")}
+      >
+        <ChevronLeft className="size-4" aria-hidden="true" />
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="xs"
+        className={styles.periodButton}
+        aria-pressed={props.period === "anchor"}
+        disabled={props.retained}
+        onClick={() => props.onChange("anchor")}
+      >
+        {periodLabel(props.history, "anchor", props.retained)}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        className={styles.periodButton}
+        aria-label={TRAINING_HISTORY_COPY.next}
+        disabled={props.retained || props.period === "anchor"}
+        onClick={() => props.onChange("anchor")}
+      >
+        <ChevronRight className="size-4" aria-hidden="true" />
+      </Button>
+    </div>
+  );
+}
+
+function DataNotice(props: {
+  readonly coverage: string | null;
+  readonly notice: string;
+}): ReactElement {
+  return (
+    <p className={styles.dataNotice}>
+      {props.coverage === null ? null : (
+        <span className={styles.dataNoticeCoverage}>{props.coverage}</span>
+      )}
+      <span>{props.notice}</span>
+    </p>
   );
 }
 
@@ -399,9 +476,9 @@ function UnavailableHistory(): ReactElement {
         data-panel="weekly-summary"
         aria-labelledby="weekly-summary-title"
       >
-        <div className={styles.weekHeading}>
-          <h2 id="weekly-summary-title">Weekly summary</h2>
-        </div>
+        <h2 id="weekly-summary-title" className={styles.srOnly}>
+          Weekly summary
+        </h2>
         <p className={styles.historyEmpty}>{TRAINING_HISTORY_COPY.unavailable}</p>
       </section>
       <section
@@ -409,7 +486,9 @@ function UnavailableHistory(): ReactElement {
         data-panel="recent-rides"
         aria-labelledby="recent-rides-title"
       >
-        <h2 id="recent-rides-title">Recent rides</h2>
+        <div className={styles.ridesHeading}>
+          <h2 id="recent-rides-title">Recent rides</h2>
+        </div>
         <p className={styles.historyEmpty}>{TRAINING_HISTORY_COPY.unknownRides}</p>
       </section>
     </>
@@ -472,6 +551,8 @@ export function TrainingView(): ReactElement {
     statusWarning ??
     warning ??
     (training.metadata?.degraded === true ? TRAINING_DEGRADED_COPY : null);
+  const coverage =
+    history === null || activeWeek === null ? null : noticeCoverage(panel, history, activeWeek);
   const label = history === null ? null : periodLabel(history, period, retained);
   const announcement = useMemo(
     () => (label === null ? null : notice === null ? label : `${label}. ${notice}`),
@@ -500,34 +581,17 @@ export function TrainingView(): ReactElement {
   if (history === null || activeWeek === null) {
     historyContent = (
       <>
-        {notice === null ? null : <p className={styles.dataNotice}>{notice}</p>}
+        {notice === null ? null : <DataNotice coverage={coverage} notice={notice} />}
         <UnavailableHistory />
       </>
     );
   } else {
     historyContent = (
       <>
-        <div className={styles.periodGroup} role="group" aria-label="Completed riding period">
-          <button
-            type="button"
-            aria-pressed={period === "anchor"}
-            onClick={() => setPeriod("anchor")}
-          >
-            {periodLabel(history, "anchor", retained)}
-          </button>
-          <button
-            type="button"
-            aria-pressed={period === "previous"}
-            disabled={history.previousWeek === null}
-            onClick={() => setPeriod("previous")}
-          >
-            {TRAINING_HISTORY_COPY.previous}
-          </button>
-        </div>
         <p className={styles.srOnly} role="status" aria-live="polite" aria-atomic="true">
           {announcement}
         </p>
-        {notice === null ? null : <p className={styles.dataNotice}>{notice}</p>}
+        {notice === null ? null : <DataNotice coverage={coverage} notice={notice} />}
         <WeeklySummary
           history={history}
           retained={retained}
@@ -542,6 +606,7 @@ export function TrainingView(): ReactElement {
           week={activeWeek}
           units={training.unitsPreference.value}
           onOpen={openRide}
+          onPreviousWeek={() => setPeriod("previous")}
           registerButton={(id, node) => {
             if (node === null) rideButtons.current.delete(id);
             else rideButtons.current.set(id, node);
@@ -554,10 +619,19 @@ export function TrainingView(): ReactElement {
   return (
     <Page
       title="Training"
-      subtitle="Completed riding and recent rides"
+      subtitle={activeWeek === null ? undefined : weekRangeLabel(activeWeek)}
       titleRef={title}
       busy={training.status === "loading"}
-      action={<RideImportAction />}
+      action={
+        history === null ? undefined : (
+          <PeriodNavigation
+            history={history}
+            period={period}
+            retained={retained}
+            onChange={setPeriod}
+          />
+        )
+      }
     >
       {historyContent}
       <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />

@@ -2,11 +2,15 @@ import { overviewStyles } from "./overviewStyles";
 
 export const rideStyles = {
   ...overviewStyles,
+  rideBack: "bg-surface text-ink-2",
   rideOverview:
-    "rounded-card border border-line bg-surface p-5 shadow-elev-1 [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold [&_h2]:tracking-normal",
+    "rounded-card border border-line bg-surface p-5 shadow-elev-1 [&_h2]:m-0 [&_h2]:mt-2 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold [&_h2]:tracking-normal",
+  rideOverviewEyebrow: "m-0 text-xs font-semibold text-ink-3",
   elapsedFallback: "mt-2 text-xs leading-5 text-ink-3",
+  keyStats:
+    "mt-7 [&>h2]:m-0 [&>h2]:text-lg [&>h2]:font-semibold [&>h2]:tracking-normal",
   recordedMetrics:
-    "mt-4 grid grid-cols-4 gap-3.5 border-y border-line py-3.5 max-[761px]:grid-cols-2 max-[520px]:grid-cols-1 [&>div]:min-w-0 [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:mt-1 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-sm [&_dd]:font-medium [&_dd]:tabular-nums",
+    "my-3.5 grid grid-cols-4 gap-3.5 border-y border-line py-3.5 max-[761px]:grid-cols-2 max-[520px]:grid-cols-1 [&>div]:min-w-0 [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:mt-1 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-sm [&_dd]:font-medium [&_dd]:tabular-nums",
   calloutReason:
     "mt-3.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 rounded-ctl bg-brand-soft px-3 py-2.5 text-sm text-brand [&_strong]:font-semibold [&_span]:text-xs [&_span]:leading-5",
   recordedDisclosure:
@@ -66,5 +70,5 @@ export const rideStyles = {
   effortRank: "row-span-2 row-start-1 text-xs text-ink-3",
   rideEyebrow: "mb-2 text-xs font-medium text-ink-3",
   rideSummary:
-    "mt-[calc(var(--row-inset)+var(--inset))] grid grid-cols-3 gap-3.5 border-t border-line max-[520px]:grid-cols-1 [&>div]:min-w-0 [&>div]:pt-3.5 [&>div]:pr-3.5 [&_dt]:mb-[5px] [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:m-0 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-xs [&_dd]:leading-[1.45] [&_dd]:text-ink [&_dd]:tabular-nums",
+    "mt-[calc(var(--row-inset)+var(--inset))] grid grid-cols-3 gap-3.5 border-t border-line pt-3.5 max-[520px]:grid-cols-1 [&>div]:min-w-0 [&>div]:pr-3.5 [&_dt]:mb-[5px] [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:m-0 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-xs [&_dd]:leading-[1.45] [&_dd]:text-ink [&_dd]:tabular-nums",
 } as const;

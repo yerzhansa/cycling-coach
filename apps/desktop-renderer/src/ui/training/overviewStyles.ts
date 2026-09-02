@@ -1,22 +1,21 @@
 export const overviewStyles = {
-  periodGroup:
-    "mb-4 flex items-center gap-1.5 [&_button]:h-ctl-sm [&_button]:rounded-ctl [&_button]:border [&_button]:border-line-2 [&_button]:bg-surface [&_button]:px-ctl-px-sm [&_button]:text-xs [&_button]:font-medium [&_button]:text-ink-2 [&_button]:outline-none [&_button]:transition-colors [&_button]:hover:bg-surface-2 [&_button]:hover:text-ink [&_button]:focus-visible:border-ring [&_button]:focus-visible:ring-3 [&_button]:focus-visible:ring-ring/20 [&_button]:disabled:cursor-default [&_button]:disabled:opacity-64 [&_button]:aria-pressed:border-brand [&_button]:aria-pressed:bg-brand-soft [&_button]:aria-pressed:text-brand motion-reduce:[&_button]:transition-none",
+  periodGroup: "flex items-center gap-inset",
+  periodButton: "border-line-2 bg-surface text-ink-2 hover:bg-surface-2 hover:text-ink",
   dataNotice:
-    "mb-[18px] border-l-[3px] border-warn bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] px-[11px] py-[9px] text-xs leading-5 text-ink-2",
-  weekSection: "mb-7 min-w-0",
-  weekHeading:
-    "mb-3.5 flex min-w-0 items-baseline justify-between gap-3 max-[520px]:grid [&_h2]:m-0 [&_h2]:text-lg [&_h2]:leading-7 [&_h2]:font-semibold [&_p]:m-0 [&_p]:text-xs [&_p]:leading-4 [&_p]:text-ink-3",
+    "mb-[18px] flex items-center gap-inset border-l-[3px] border-warn bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] px-[11px] py-[9px] text-xs leading-5 text-ink-2",
+  dataNoticeCoverage: "font-semibold text-ink",
+  weekSection: "min-w-0",
   weekHero:
     "grid min-w-0 grid-cols-[minmax(210px,0.82fr)_minmax(0,1.18fr)] items-stretch gap-6 max-[761px]:grid-cols-1 max-[761px]:gap-[18px]",
   weekFacts: "min-w-0",
   weekEyebrow: "m-0 text-xs leading-4 font-semibold text-ink-3",
   weekTime:
     "mt-2 [overflow-wrap:anywhere] text-2xl leading-8 font-semibold tracking-normal tabular-nums",
-  weekMetrics:
-    "mt-2.5 flex min-w-0 flex-wrap gap-x-[18px] gap-y-2 [&>div]:min-w-0 [&_dt]:text-xs [&_dt]:leading-4 [&_dt]:text-ink-3 [&_dd]:mt-0.5 [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-sm [&_dd]:leading-5 [&_dd]:font-medium [&_dd]:tabular-nums",
+  weekMetrics: "mt-2.5 flex min-h-5 min-w-0 flex-wrap text-sm leading-5 text-ink-2 tabular-nums",
   trend:
     "m-0 grid min-w-0 grid-rows-[auto_1fr] gap-2.5 border-l border-line pl-6 max-[761px]:border-t max-[761px]:border-l-0 max-[761px]:pt-3.5 max-[761px]:pl-0",
-  trendCaption: "text-xs leading-4 font-medium text-ink-2",
+  trendCaption:
+    "flex items-baseline justify-between gap-row text-xs leading-4 font-normal text-ink-3",
   trendBars:
     "grid min-h-[92px] grid-cols-6 items-end gap-inset border-b border-line max-[761px]:min-h-[76px]",
   trendColumn: "grid h-full min-w-0 grid-rows-[1fr_auto] items-end gap-1",
@@ -25,7 +24,11 @@ export const overviewStyles = {
     "overflow-hidden text-center text-xs leading-4 text-ink-3 text-ellipsis whitespace-nowrap",
   trendUnavailable: "mt-2 text-sm leading-5 font-medium text-ink",
   trendReason: "mt-1 text-xs leading-5 text-ink-2",
-  ridesSection: "mb-7 min-w-0 [&>h2]:mb-2.5 [&>h2]:text-lg [&>h2]:leading-7 [&>h2]:font-semibold",
+  ridesSection: "mt-7 min-w-0",
+  ridesHeading:
+    "mb-row flex items-baseline justify-between gap-row [&_h2]:m-0 [&_h2]:text-lg [&_h2]:leading-7 [&_h2]:font-semibold [&_span]:text-xs [&_span]:leading-4 [&_span]:text-ink-3",
+  moreHistory: "mt-3.5 flex justify-center",
+  moreHistoryButton: "border-line-2 bg-surface text-ink-2 hover:bg-surface-2 hover:text-ink",
   historyRideList: "m-0 list-none p-0",
   historyRideItem:
     "border-t border-line last:border-b data-[callout=true]:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",

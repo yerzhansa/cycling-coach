@@ -739,15 +739,22 @@ export function RideDetailView(props: {
   return (
     <Page
       title={TRAINING_HISTORY_COPY.review}
+      subtitle={formatCivilDate(props.ride.localDate)}
       titleRef={props.titleRef}
       action={
-        <Button type="button" variant="outline" onClick={props.onBack}>
+        <Button
+          className={styles.rideBack}
+          type="button"
+          variant="outline"
+          size="xs"
+          onClick={props.onBack}
+        >
           {TRAINING_HISTORY_COPY.back}
         </Button>
       }
     >
       <section className={styles.rideOverview} aria-labelledby="ride-overview-title">
-        <p className={styles.rideEyebrow}>{trainingRideKind(props.ride)}</p>
+        <p className={styles.rideOverviewEyebrow}>{trainingRideKind(props.ride)}</p>
         <h2 id="ride-overview-title">{title}</h2>
         <RideSummary ride={props.ride} units={props.units} />
         {props.ride.ridingTimeBasis === "elapsed" ? (
@@ -755,7 +762,20 @@ export function RideDetailView(props: {
             Elapsed time used because moving time was not recorded.
           </p>
         ) : null}
-        {metrics.length === 0 ? null : (
+        {props.calloutReason === null ? null : (
+          <p className={styles.calloutReason}>
+            <strong>Worth a look</strong>
+            <span>{props.calloutReason}</span>
+          </p>
+        )}
+      </section>
+      {metrics.length === 0 ? null : (
+        <section
+          className={styles.keyStats}
+          aria-labelledby="key-stats-title"
+          data-parity="ride-key-stats"
+        >
+          <h2 id="key-stats-title">{TRAINING_HISTORY_COPY.keyStats}</h2>
           <dl className={styles.recordedMetrics}>
             {metrics.map((metric) => (
               <div key={metric.label}>
@@ -764,14 +784,8 @@ export function RideDetailView(props: {
               </div>
             ))}
           </dl>
-        )}
-        {props.calloutReason === null ? null : (
-          <p className={styles.calloutReason}>
-            <strong>Worth a look</strong>
-            <span>{props.calloutReason}</span>
-          </p>
-        )}
-      </section>
+        </section>
+      )}
       <details
         className={styles.recordedDisclosure}
         onToggle={(event) => {
