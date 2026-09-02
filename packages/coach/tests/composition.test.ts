@@ -1244,9 +1244,14 @@ describe("local coach composition", () => {
       ...projectedState,
       trainingContext: {
         ...projectedTrainingContext,
+        recentRides: expectedTrainingContext.recentRides,
         trainingHistory: expectedTrainingContext.trainingHistory,
       },
     }).toEqual(state);
+    expect(projectedTrainingContext.recentRides).toEqual({
+      kind: "unknown",
+      reason: "not-synced",
+    });
     expect(projectedTrainingContext.trainingHistory).toMatchObject({
       kind: "computed",
       calendarTimeZone: "UTC",

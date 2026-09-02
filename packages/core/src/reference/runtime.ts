@@ -16,6 +16,7 @@ import type { FetchedReference } from "./sync/run-sync.js";
 import type { ReferenceServices } from "./services.js";
 import type { Sport } from "../sport.js";
 import type { PhysicalRequestLedger } from "@enduragent/kernel/store";
+import { resolveUserTimezone } from "@enduragent/engine/sport";
 
 /** Shared between runtime + tests so the strings stay in sync. */
 export const INITIAL_SYNC_FAILED_LOG_PREFIX = "Reference: initial sync failed";
@@ -85,7 +86,11 @@ export async function bootstrapReference(
       attemptLedgerForRun: deps.attemptLedgerForRun,
     });
   const fetchReferenceDataForRun = (signal: AbortSignal) =>
-    fetchReferenceData(signal, readIntervals(), deps.readCalendarTimeZone());
+    fetchReferenceData(
+      signal,
+      readIntervals(),
+      resolveUserTimezone(deps.readCalendarTimeZone()),
+    );
 
   const mutex = new AsyncMutex();
   const cooldown = new Cooldown();

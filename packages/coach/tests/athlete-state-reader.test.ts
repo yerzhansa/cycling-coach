@@ -328,16 +328,11 @@ describe("persisted athlete state source", () => {
     const root = await home();
     const now = new Date("1998-07-18T12:00:00.000Z");
     const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
-    const readRecentRides = vi.fn(async () => ({
-      kind: "unknown" as const,
-      reason: "not-synced" as const,
-    }));
 
     const state = await createPersistedAthleteStateSource({
       dataDir: root,
       cyclingFtpAnchorResolver: resolver,
       now: () => now,
-      recentRidesSource: { readRecentRides },
       trainingHistorySource: { readTrainingHistory },
       sourceOwner: () => "synthetic-athlete",
       calendarTimeZone: () => "UTC",
@@ -351,7 +346,38 @@ describe("persisted athlete state source", () => {
       freshness: "fresh",
       sourceRestricted: false,
     });
+    expect(state.trainingContext?.recentRides).toEqual({
+      kind: "unknown",
+      reason: "not-synced",
+    });
     expect(state.trainingContext?.trainingHistory).toMatchObject({ kind: "computed" });
+  });
+
+  it("derives canonical-store training-history freshness from the successful sync marker", async () => {
+    const root = await home();
+    const now = new Date("1998-07-23T00:00:00.000Z");
+    await writeJson(root, ".scheduler.json", schedulerState(T1));
+    const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
+
+    const state = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    }).getAthleteState();
+
+    expect(readTrainingHistory).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+      calendarTimeZone: "UTC",
+      freshness: "stale",
+      sourceRestricted: false,
+    });
+    expect(state.freshness).toBe("stale");
+    expect(state.lastUpdated).toBe(T1);
+    expect(state.lastSynced).toBe(T1);
   });
 
   it("evaluates training history now and prefers the successful sync marker for freshness", async () => {

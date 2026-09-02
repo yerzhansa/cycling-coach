@@ -225,10 +225,27 @@ export function createPersistedAthleteStateSource(
         readJson(latestPath),
         readJson(errorPath),
       ]);
+      const schedulerParsed =
+        schedulerResult.status === "fulfilled"
+          ? SchedulerStateSchema.safeParse(schedulerResult.value)
+          : null;
+      const schedulerState =
+        schedulerParsed?.success === true &&
+        schedulerParsed.data.schema_version === SCHEDULER_SCHEMA_VERSION
+          ? schedulerParsed.data
+          : null;
+      const committedSyncAt = schedulerState?.last_sync_at ?? null;
+      const lastSynced =
+        committedSyncAt !== null && isFiniteInstant(committedSyncAt) ? committedSyncAt : null;
       if (latestResult.status === "rejected") {
-        if (input.recentRidesSource !== undefined && isMissingFile(latestResult.reason)) {
+        if (
+          isMissingFile(latestResult.reason) &&
+          (input.recentRidesSource !== undefined || trainingHistoryIdentity !== null)
+        ) {
           const asOf = evaluatedAt.toISOString();
           const asOfEpochSeconds = Math.floor(evaluatedAt.getTime() / 1_000);
+          const freshness =
+            lastSynced === null ? "fresh" : referenceFreshnessAt(lastSynced, evaluatedAt);
           const [recentRides, trainingHistory] = await Promise.all([
             readRecentRides(input.recentRidesSource, asOf, asOfEpochSeconds),
             trainingHistoryIdentity === null
@@ -237,16 +254,16 @@ export function createPersistedAthleteStateSource(
                   asOf,
                   asOfEpochSeconds,
                   calendarTimeZone: trainingHistoryIdentity.calendarTimeZone,
-                  freshness: "fresh",
+                  freshness,
                   sourceRestricted: false,
                 }),
           ]);
           return AthleteStateSchema.parse({
             schemaVersion: LATEST_SCHEMA_VERSION,
-            lastUpdated: asOf,
-            freshness: "fresh",
+            lastUpdated: lastSynced ?? asOf,
+            freshness,
             degraded: false,
-            lastSynced: null,
+            lastSynced,
             athleteProfile: null,
             currentStatus: null,
             derivedMetrics: {},
@@ -276,18 +293,6 @@ export function createPersistedAthleteStateSource(
         errorParsed.data.schema_version === ERROR_STATE_SCHEMA_VERSION
           ? errorParsed.data
           : null;
-      const schedulerParsed =
-        schedulerResult.status === "fulfilled"
-          ? SchedulerStateSchema.safeParse(schedulerResult.value)
-          : null;
-      const schedulerState =
-        schedulerParsed?.success === true &&
-        schedulerParsed.data.schema_version === SCHEDULER_SCHEMA_VERSION
-          ? schedulerParsed.data
-          : null;
-      const committedSyncAt = schedulerState?.last_sync_at ?? null;
-      const lastSynced =
-        committedSyncAt !== null && isFiniteInstant(committedSyncAt) ? committedSyncAt : null;
       const latest = latestParsed.data;
       const trainingHistoryFreshness = referenceFreshnessAt(
         lastSynced ?? latest.metadata.last_updated,

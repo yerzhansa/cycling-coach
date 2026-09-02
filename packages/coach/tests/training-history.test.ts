@@ -90,6 +90,14 @@ function source(input: {
   readonly scanTruncated?: boolean;
   readonly readFailure?: Error;
 }) {
+  const readLatestRideDate = vi.fn<TrainingHistoryReader["readLatestRideDate"]>(async (window) =>
+    (input.rows ?? [])
+      .filter((row) => row.localDate <= window.through)
+      .reduce<string | null>(
+        (latest, row) => (latest === null || row.localDate > latest ? row.localDate : latest),
+        null,
+      ),
+  );
   const readWindow = vi.fn<TrainingHistoryReader["readWindow"]>(async () => {
     if (input.readFailure !== undefined) throw input.readFailure;
     return {
@@ -99,10 +107,11 @@ function source(input: {
   });
   const listCommits = vi.fn<TrainingCoverageReader["listCommits"]>(async () => input.commits ?? []);
   return {
+    readLatestRideDate,
     readWindow,
     listCommits,
     trainingHistory: createTrainingHistorySource({
-      facts: { readWindow },
+      facts: { readLatestRideDate, readWindow },
       coverage: { listCommits },
     }),
   };
@@ -548,7 +557,11 @@ describe("training history projection", () => {
       },
       anchorWeek: { window: { start: "1998-05-25", end: "1998-05-31" } },
     });
-    expect(sparse.readWindow).toHaveBeenCalledWith({ start: "1900-01-01", end: "1998-07-12" });
+    expect(sparse.readLatestRideDate).toHaveBeenCalledWith({ through: "1998-07-12" });
+    expect(sparse.readWindow).toHaveBeenCalledWith({
+      start: "1998-04-13",
+      end: "1998-05-31",
+    });
   });
 
   it("localizes dated dropped rows to intersecting weeks", async () => {
@@ -726,9 +739,10 @@ describe("training history projection", () => {
       coverage: { kind: "incomplete", reason: "source-degraded" },
       anchorWeek: { window: { start: "1998-05-25", end: "1998-05-31" } },
     });
+    expect(latestSafeRide.readLatestRideDate).toHaveBeenCalledWith({ through: "1998-07-12" });
     expect(latestSafeRide.readWindow).toHaveBeenCalledWith({
-      start: "1900-01-01",
-      end: "1998-07-12",
+      start: "1998-04-13",
+      end: "1998-05-31",
     });
   });
 
