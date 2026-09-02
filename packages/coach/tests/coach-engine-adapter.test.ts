@@ -144,6 +144,42 @@ describe("coach engine adapter", () => {
     expect(selected.resolve).not.toHaveBeenCalled();
   });
 
+  it("fails open when the Plan Creation drain gate cannot be read", async () => {
+    const selected = resolver();
+    const chat = vi.fn<CoachEngine["chat"]>(async () => ({ text: "ok" }));
+    const queueResult = {
+      snapshot: { schemaVersion: 1 as const, revision: 4, items: [] },
+    };
+    const resumeChatQueue = vi.fn(async () => queueResult);
+    const runQueuedCommand = vi.fn(async () => queueResult);
+    const retryQueuedTurn = vi.fn(async () => queueResult);
+    const engine = createCoachEngineAdapter({
+      backend: backend({ chat, resumeChatQueue, runQueuedCommand, retryQueuedTurn }),
+      getAthleteState: async () => state,
+      cyclingFtpAnchorResolver: selected.value,
+      planCreationDrainGate: {
+        hasOpenQuestion: async () => Promise.reject(new Error("corrupt Plan Creation record")),
+      },
+      now: () => 1_752_796_801_999,
+    });
+
+    await expect(engine.chat({ chatId: "desktop", message: "continue" })).resolves.toEqual({
+      text: "ok",
+    });
+    await expect(engine.resumeChatQueue?.({ chatId: "desktop" })).resolves.toEqual(queueResult);
+    await expect(
+      engine.runQueuedCommand?.({ chatId: "desktop", queuedMessageId: "queued-1" }),
+    ).resolves.toEqual(queueResult);
+    await expect(
+      engine.retryQueuedTurn?.({ chatId: "desktop", claimId: "claim-1" }),
+    ).resolves.toEqual(queueResult);
+    expect(chat).toHaveBeenCalledOnce();
+    expect(resumeChatQueue).toHaveBeenCalledOnce();
+    expect(runQueuedCommand).toHaveBeenCalledOnce();
+    expect(retryQueuedTurn).toHaveBeenCalledOnce();
+    expect(selected.resolve).toHaveBeenCalledOnce();
+  });
+
   it("resolves one FTP anchor at the call epoch and validates event order and response", async () => {
     const selected = resolver();
     const calls: string[] = [];

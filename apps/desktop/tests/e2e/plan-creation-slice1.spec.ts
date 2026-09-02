@@ -12,13 +12,13 @@ import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   createPlanCreationOperations,
   type PlanCreationHost,
-} from "../../../packages/coach/src/plan-creation-operations.js";
+} from "../../../../packages/coach/src/plan-creation-operations.js";
 import {
   launchDesktopFixture,
   type DesktopFixtureScript,
   type RunningDesktopFixture,
-} from "./helpers/desktop-fixture.js";
-import { createPlanQaFixtureScript } from "./helpers/plan-qa-live.js";
+} from "../helpers/desktop-fixture.js";
+import { createPlanQaFixtureScript } from "../helpers/plan-qa-live.js";
 
 const token = "c".repeat(43);
 const emptyAttachmentComposer = {

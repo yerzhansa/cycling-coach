@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { TrainingExportCivilDateSchema } from "./training-export.js";
 
 const PlanCreationUlidSchema = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/u);
 const PlanCreationCommandIdSchema = z.string().min(1).max(512);
-const PlanCreationCivilDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+const PlanCreationCivilDateSchema = TrainingExportCivilDateSchema;
 
 export const PlanCreationGoalSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("event-candidate"), candidateId: PlanCreationUlidSchema }).strict(),
@@ -83,7 +84,7 @@ export const PlanCreationAnswerSummarySchema = z
   .object({
     answerKey: z.enum(["goal", "success"]),
     title: z.string().min(1).max(128),
-    detail: z.string().min(1).max(512),
+    detail: z.string().min(1).max(2_000),
   })
   .strict();
 export type PlanCreationAnswerSummary = z.infer<typeof PlanCreationAnswerSummarySchema>;

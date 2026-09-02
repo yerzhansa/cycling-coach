@@ -5,17 +5,21 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { useEnduragentStore } from "../../state/store";
 
 const fieldClass =
-  "min-h-10 min-w-0 rounded-ctl border border-line bg-bg px-3 py-2 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-focus";
+  "min-h-[calc(var(--ctl-h-lg)+var(--inset))] resize-y rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20";
 
 export function PlanCreationDock(): ReactElement | null {
   const model = useEnduragentStore((state) => state.chat.planCreation);
   const loaded = useEnduragentStore((state) => state.chat.planCreationLoaded);
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
   const error = useEnduragentStore((state) => state.chat.planCreationError);
+  const decision = useEnduragentStore((state) => state.chat.decision);
   const actions = useEnduragentStore((state) => state.chatActions);
   const [goalMode, setGoalMode] = useState<"choices" | "manual" | "fitness">("choices");
   const heading = useRef<HTMLHeadingElement>(null);
   const question = model?.openQuestion ?? null;
+  const decisionPending =
+    decision?.status === "unanswered" ||
+    (decision?.status === "answered" && decision.continuation.status === "pending");
   useEffect(() => {
     setGoalMode("choices");
     if (question !== null) heading.current?.focus();
@@ -26,7 +30,7 @@ export function PlanCreationDock(): ReactElement | null {
       <div className="flex min-w-0 justify-end rounded-card border border-line bg-surface px-4 py-3">
         <Button
           variant="outline"
-          disabled={busy || actions === null}
+          disabled={busy || actions === null || decisionPending}
           onClick={() => actions?.startPlanCreation()}
         >
           Start a Plan

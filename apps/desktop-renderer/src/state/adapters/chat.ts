@@ -278,6 +278,7 @@ export function createChatViewAdapter(input: {
     const decisionBlocksWork =
       decision?.value?.status === "unanswered" ||
       (decision?.value?.status === "answered" && decision.value.continuation.status === "pending");
+    const planCreationBlocksWork = planCreation?.value?.openQuestion != null;
     const decisionLoading = controls?.decisionLoading === true;
     const decisionLoadError = controls?.queueLoadError ?? controls?.decisionLoadError ?? null;
     const decisionUnavailable = decisionLoading || decisionLoadError !== null;
@@ -325,14 +326,15 @@ export function createChatViewAdapter(input: {
           (state.status === "streaming" ? null : state.progress)),
       coachProgress:
         state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,
-      interrupted: state.status === "interrupted" && !decisionBlocksWork,
+      interrupted:
+        state.status === "interrupted" && !decisionBlocksWork && !planCreationBlocksWork,
       workBlocked,
       sendDisabled:
         workBlocked ||
         decisionBlocksWork ||
         decisionUnavailable ||
         attachmentUnavailable ||
-        planCreation?.value?.openQuestion != null,
+        planCreationBlocksWork,
       inputDisabled: workBlocked,
       newConversationUnavailable: newConversationUnavailable || decisionUnavailable,
       resetPhase: state.session.resetPhase,

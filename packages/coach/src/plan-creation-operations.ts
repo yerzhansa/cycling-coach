@@ -276,7 +276,10 @@ export function createPlanCreationOperations(input: {
     },
     readCard,
     async hasOpenQuestion() {
-      return (await readCard())?.openQuestion != null;
+      const snapshot = await input.repository.readUnfinished();
+      if (snapshot === undefined || snapshot.status !== "in-progress") return false;
+      const answerKeys = new Set(snapshot.answers.map((answer) => answer.answerKey));
+      return !answerKeys.has("goal") || !answerKeys.has("success");
     },
   };
 }

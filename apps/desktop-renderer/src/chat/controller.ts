@@ -282,6 +282,7 @@ export function createChatController(input: {
   let planningRequestBusyId: string | null = null;
   let planningRequestError: string | null = null;
   let planningRequestFocusId: string | null = null;
+  let planningRequestLoadTask: Promise<void> | undefined;
   let pendingPlanningRequestCreate: PendingPlanningRequestCreate | null = null;
   let planCreation: PlanCreationCardModel | null = null;
   let planCreationLoaded = false;
@@ -942,12 +943,34 @@ export function createChatController(input: {
     planningRequestsLoaded = true;
     planningRequestError = null;
     render();
+    if (!decisionBlocksWork() && !planCreationBlocksWork()) void drain();
   };
 
   const installPlanCreation = (next: PlanCreationCardModel | null): void => {
-    if (next !== null && (planCreation === null || next.version >= planCreation.version)) {
+    if (next === null) {
+      planCreation = null;
+    } else if (
+      planCreation === null ||
+      next.creationId !== planCreation.creationId ||
+      next.version >= planCreation.version
+    ) {
       planCreation = next;
     }
+  };
+  const trackPlanningRequestLoad = (task: Promise<void>): Promise<void> => {
+    planningRequestLoadTask = task;
+    void task.then(
+      () => {
+        if (planningRequestLoadTask === task) planningRequestLoadTask = undefined;
+      },
+      () => {
+        if (planningRequestLoadTask === task) planningRequestLoadTask = undefined;
+      },
+    );
+    return task;
+  };
+  const waitForPlanningRequestLoad = async (): Promise<void> => {
+    while (planningRequestLoadTask !== undefined) await planningRequestLoadTask;
   };
   const planCommandId = (key: string): string => {
     if (pendingPlanCreationCommand?.key !== key) {
@@ -1413,7 +1436,8 @@ export function createChatController(input: {
     return task;
   };
 
-  const drain = (): Promise<void> => {
+  const drain = async (): Promise<void> => {
+    await waitForPlanningRequestLoad();
     if (
       !canChat() ||
       !queueLoaded ||
@@ -1490,20 +1514,22 @@ export function createChatController(input: {
     })();
     const attachmentLoadGeneration = attachmentGeneration;
     const attachmentLoadTask = refreshAttachments(undefined, attachmentLoadGeneration);
-    const planningRequestLoadTask = recoverPlanningRequests().catch(() => {
-      if (!disposed) {
-        planningRequestsLoaded = false;
-        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
-        render();
-      }
-    });
+    const planningLoadTask = trackPlanningRequestLoad(
+      recoverPlanningRequests().catch(() => {
+        if (!disposed) {
+          planningRequestsLoaded = false;
+          planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+          render();
+        }
+      }),
+    );
     const task = Promise.all([
       transcriptLoadTask,
       sessionProbeTask,
       loadTask,
       queueLoadTask,
       attachmentLoadTask,
-      planningRequestLoadTask,
+      planningLoadTask,
     ]).then(async () => {
       if (!decisionBlocksWork() && !planCreationBlocksWork()) await drain();
     });
@@ -1542,7 +1568,8 @@ export function createChatController(input: {
       }
       finishAttachmentWrite(ownership.token);
     },
-    submit(message, attachmentIds = []) {
+    async submit(message, attachmentIds = []) {
+      await waitForPlanningRequestLoad();
       if (
         !canChat() ||
         !queueLoaded ||
@@ -1773,21 +1800,25 @@ export function createChatController(input: {
       }
       planningRequestError = null;
       render();
-      void recoverPlanningRequests().catch(() => {
-        if (disposed) return;
-        planningRequestsLoaded = false;
-        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
-        render();
-      });
+      void trackPlanningRequestLoad(
+        recoverPlanningRequests().catch(() => {
+          if (disposed) return;
+          planningRequestsLoaded = false;
+          planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+          render();
+        }),
+      );
     },
     refreshPlanningRequests() {
       if (disposed || planningRequestBusyId !== null) return;
-      void loadPlanningRequests().catch(() => {
-        if (disposed) return;
-        planningRequestsLoaded = false;
-        planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
-        render();
-      });
+      void trackPlanningRequestLoad(
+        loadPlanningRequests().catch(() => {
+          if (disposed) return;
+          planningRequestsLoaded = false;
+          planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
+          render();
+        }),
+      );
     },
     focusPlanningRequest(requestId) {
       if (disposed) return;
@@ -1800,7 +1831,15 @@ export function createChatController(input: {
       render();
     },
     async startPlanCreation() {
-      if (disposed || planCreationBusy || !planCreationLoaded || planCreation !== null) return;
+      if (
+        disposed ||
+        planCreationBusy ||
+        !planCreationLoaded ||
+        planCreation !== null ||
+        decisionBlocksWork()
+      ) {
+        return;
+      }
       planCreationBusy = true;
       planCreationError = null;
       render();
@@ -1941,7 +1980,8 @@ export function createChatController(input: {
         state.status !== "interrupted" ||
         state.retryRequired != null ||
         state.activeTurn === null ||
-        resetBlocksWork()
+        resetBlocksWork() ||
+        planCreationBlocksWork()
       ) {
         return activeTask ?? Promise.resolve();
       }
@@ -1961,7 +2001,8 @@ export function createChatController(input: {
             !canChat() ||
             disposed ||
             state.status !== "interrupted" ||
-            state.activeTurn?.requestKey !== requestKey
+            state.activeTurn?.requestKey !== requestKey ||
+            planCreationBlocksWork()
           ) {
             return;
           }

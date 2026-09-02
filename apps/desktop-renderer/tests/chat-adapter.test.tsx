@@ -258,6 +258,42 @@ describe("chat view adapter", () => {
     expect(published.at(-1)).toMatchObject({ sendDisabled: false, inputDisabled: false });
   });
 
+  it("suppresses interrupted recovery while a Plan Creation question is open", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    let stopped = submitted();
+    stopped = reduceChatState(stopped, {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "interrupted",
+        turnId: "turn-stopped",
+        chatId: "desktop",
+        text: "Partial response",
+      },
+    });
+
+    adapter.view.render(
+      stopped,
+      controls({
+        planCreation: {
+          value: {
+            creationId: "01J00000000000000000000000",
+            version: 1,
+            status: "in-progress",
+            answeredSummaries: [],
+            openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+          },
+          loaded: true,
+          busy: false,
+          error: null,
+        },
+      }),
+    );
+
+    expect(published.at(-1)).toMatchObject({ status: "interrupted", interrupted: false });
+  });
+
   it("keeps v2 decision consequences between the athlete request and Coach continuation", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });

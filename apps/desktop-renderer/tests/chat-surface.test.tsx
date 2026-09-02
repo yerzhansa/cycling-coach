@@ -1819,8 +1819,14 @@ describe("chat surface", () => {
       const actions = stubActions();
       useEnduragentStore.getState().bindChatActions(actions);
       render(<Harness />);
-      setChat({ planCreationLoaded: true });
-      await userEvent.click(screen.getByRole("button", { name: "Start a Plan" }));
+      setChat({ planCreationLoaded: true, decision: unansweredDecision() });
+      const startButton = screen.getByRole("button", { name: "Start a Plan" });
+      expect(startButton).toBeDisabled();
+      await userEvent.click(startButton);
+      expect(actions.startPlanCreation).not.toHaveBeenCalled();
+      setChat({ decision: null });
+      expect(startButton).toBeEnabled();
+      await userEvent.click(startButton);
       expect(actions.startPlanCreation).toHaveBeenCalledOnce();
       setChat({
         planCreation: {
@@ -1839,10 +1845,12 @@ describe("chat surface", () => {
       await waitFor(() => expect(heading).toHaveFocus());
       expect(screen.getByRole("button", { name: "Event not listed" })).toBeEnabled();
       await userEvent.click(screen.getByRole("button", { name: "Improve without an event" }));
-      await userEvent.type(
-        screen.getByRole("textbox", { name: "Goal outcome" }),
-        "Build steady power",
+      const goalOutcome = screen.getByRole("textbox", { name: "Goal outcome" });
+      expect(goalOutcome).toHaveAttribute(
+        "class",
+        "min-h-[calc(var(--ctl-h-lg)+var(--inset))] resize-y rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20",
       );
+      await userEvent.type(goalOutcome, "Build steady power");
       await userEvent.click(screen.getByRole("button", { name: "Confirm goal" }));
       expect(actions.answerPlanCreation).toHaveBeenCalledWith({
         kind: "goal",
@@ -1887,8 +1895,14 @@ describe("chat surface", () => {
         },
       });
       await userEvent.click(screen.getByRole("button", { name: "Event not listed" }));
-      await userEvent.type(screen.getByRole("textbox", { name: "Event name" }), "Highland Tour");
-      fireEvent.change(screen.getByLabelText("Event date"), { target: { value: "1998-10-18" } });
+      const eventName = screen.getByRole("textbox", { name: "Event name" });
+      const eventDate = screen.getByLabelText("Event date");
+      const fieldRecipe =
+        "min-h-[calc(var(--ctl-h-lg)+var(--inset))] resize-y rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm leading-5 text-ink outline-none focus:border-ring focus:ring-3 focus:ring-ring/20";
+      expect(eventName).toHaveAttribute("class", fieldRecipe);
+      expect(eventDate).toHaveAttribute("class", fieldRecipe);
+      await userEvent.type(eventName, "Highland Tour");
+      fireEvent.change(eventDate, { target: { value: "1998-10-18" } });
       await userEvent.click(screen.getByRole("button", { name: "Confirm goal" }));
       expect(actions.answerPlanCreation).toHaveBeenCalledWith({
         kind: "goal",

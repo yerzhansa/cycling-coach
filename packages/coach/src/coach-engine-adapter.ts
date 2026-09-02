@@ -41,8 +41,14 @@ export interface CoachEngineAdapterInput {
 }
 
 export function createCoachEngineAdapter(input: CoachEngineAdapterInput): CoachEngine {
-  const blocked = (chatId: string) =>
-    chatId === "desktop" && input.planCreationDrainGate.hasOpenQuestion();
+  const blocked = async (chatId: string): Promise<boolean> => {
+    if (chatId !== "desktop") return false;
+    try {
+      return await input.planCreationDrainGate.hasOpenQuestion();
+    } catch {
+      return false;
+    }
+  };
   const currentQueue = async (chatId: string): Promise<ChatQueueRunResult> => {
     if (input.backend.getChatQueue === undefined)
       throw new Error("Durable chat queue is unavailable.");

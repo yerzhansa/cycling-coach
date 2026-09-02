@@ -37,7 +37,7 @@ describe("Plan Creation contract", () => {
       PlanCreationCardModelSchema.parse({
         ...card,
         version: 2,
-        answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "Build power" }],
+        answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "x".repeat(2_000) }],
         openQuestion: {
           kind: "success-question",
           prompt: "Success?",
@@ -62,6 +62,12 @@ describe("Plan Creation contract", () => {
         },
       }),
     ).toMatchObject({ openQuestion: { input: { kind: "event-finish" } } });
+    expect(() =>
+      PlanCreationCardModelSchema.parse({
+        ...card,
+        answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "x".repeat(2_001) }],
+      }),
+    ).toThrow();
   });
 
   it("rejects renderer-authored fields and malformed command boundaries", () => {
@@ -72,6 +78,18 @@ describe("Plan Creation contract", () => {
       PlanCreationAnswerInputSchema.parse({
         kind: "goal",
         goal: { kind: "event-manual", name: "Tour", date: "2026-2-3" },
+      }),
+    ).toThrow();
+    expect(
+      PlanCreationAnswerInputSchema.parse({
+        kind: "goal",
+        goal: { kind: "event-manual", name: "Tour", date: "2026-02-28" },
+      }),
+    ).toMatchObject({ goal: { date: "2026-02-28" } });
+    expect(() =>
+      PlanCreationAnswerInputSchema.parse({
+        kind: "goal",
+        goal: { kind: "event-manual", name: "Tour", date: "2026-02-31" },
       }),
     ).toThrow();
     expect(() => PlanCreationCardModelSchema.parse({ ...card, version: 0 })).toThrow();

@@ -10,6 +10,7 @@ import {
 import type {
   ChatAttachmentComposerReadModel,
   ChatQueueSnapshot,
+  CoachDecisionReadModel,
   CoachTurnEventNotificationEnvelope,
   CreatePlanningRequestRpcParams,
   CreateWorkoutPlanningRequestRpcParams,
@@ -240,6 +241,20 @@ function client(
       method: "removeChatAttachment" | "retryChatAttachment" | "selectChatAttachmentWorkout",
     ) => Promise<ChatAttachmentComposerReadModel>;
     readonly clearAttachmentDraft?: () => Promise<ChatAttachmentComposerReadModel>;
+    readonly getChatQueue?: () => Promise<ChatQueueSnapshot>;
+    readonly enqueueChatMessage?: (request: {
+      readonly chatId: string;
+      readonly submissionId: string;
+      readonly text: string;
+      readonly attachmentIds?: readonly string[];
+    }) => Promise<ChatQueueSnapshot>;
+    readonly resumeChatQueue?: () => Promise<{
+      readonly snapshot: ChatQueueSnapshot;
+      readonly response?: { readonly text: string };
+    }>;
+    readonly getCoachDecision?: () => Promise<{
+      readonly decision: CoachDecisionReadModel | null;
+    }>;
     readonly listPlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
       readonly planCreation?: PlanCreationCardModel | null;
@@ -382,15 +397,20 @@ function client(
     }
     if (method === "getChatQueue") {
       hideQueueCall();
+      if (sessions.getChatQueue !== undefined) return sessions.getChatQueue() as never;
       return Promise.resolve(snapshot()) as never;
     }
     if (method === "enqueueChatMessage") {
       hideQueueCall();
       const value = request as {
+        chatId: string;
         submissionId: string;
         text: string;
         attachmentIds?: readonly string[];
       };
+      if (sessions.enqueueChatMessage !== undefined) {
+        return sessions.enqueueChatMessage(value) as never;
+      }
       if (!queued.some((item) => item.submissionId === value.submissionId)) {
         queued.push({
           queuedMessageId: `queued-${value.submissionId}`,
@@ -418,6 +438,9 @@ function client(
       method === "retryQueuedTurn"
     ) {
       hideQueueCall();
+      if (method === "resumeChatQueue" && sessions.resumeChatQueue !== undefined) {
+        return sessions.resumeChatQueue() as never;
+      }
       const group = (() => {
         if (method === "retryQueuedTurn") {
           const claimId = (request as { claimId: string }).claimId;
@@ -480,7 +503,9 @@ function client(
         request as { chatId: string; turnId: string },
       ) as never;
     }
-    if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
+    if (method === "getCoachDecision") {
+      return (sessions.getCoachDecision?.() ?? Promise.resolve({ decision: null })) as never;
+    }
     if (method !== "chat") throw new TypeError();
     return implementation(
       request as { chatId: string; message: string },
@@ -526,6 +551,7 @@ function subject(
   canChat: () => boolean = () => true,
   settleSubmissions = true,
   openPlanningRequest = vi.fn(),
+  initialQueueSnapshot: ChatQueueSnapshot = { schemaVersion: 1, revision: 0, items: [] },
 ) {
   const states: ChatState[] = [];
   const controls: ChatViewControls[] = [];
@@ -557,7 +583,7 @@ function subject(
     refreshTrainingContext: refresh,
     refreshSpend,
     canChat,
-    initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
+    initialQueueSnapshot,
     openPlanningRequest,
   });
   const submittedController = {
@@ -1671,6 +1697,117 @@ describe("chat controller", () => {
     expect(chatMessages(fake)).toEqual([]);
   });
 
+  it("does not start Plan Creation while a Coach decision blocks work", async () => {
+    const startPlanCreation = vi.fn<
+      (request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>
+    >();
+    const fake = client(replies(), {
+      getCoachDecision: async () => ({
+        decision: {
+          decisionId: "decision-1",
+          chatId: "desktop",
+          messageId: "message-1",
+          question: "Choose tomorrow's priority.",
+          status: "unanswered",
+          options: [],
+        },
+      }),
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: null }),
+      startPlanCreation,
+    });
+    const { controller } = subject(fake);
+
+    await controller.start();
+    await controller.startPlanCreation();
+
+    expect(startPlanCreation).not.toHaveBeenCalled();
+  });
+
+  it("waits for Plan Creation restoration before queue drains and submissions", async () => {
+    const restoredMessage: QueuedChatMessage = {
+      queuedMessageId: "queued-restored",
+      messageId: "message-restored",
+      submissionId: "submission-restored",
+      text: "Keep this queued",
+      kind: "ordinary",
+      attachmentIds: [],
+      position: 0,
+      restored: true,
+    };
+    const restoredQueue: ChatQueueSnapshot = {
+      schemaVersion: 1,
+      revision: 4,
+      items: [restoredMessage],
+    };
+    const planCreation: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      answeredSummaries: [],
+      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+    };
+    let finishPlanningLoad!: (result: {
+      deliveries: readonly PlanningRequestDelivery[];
+      planCreation: PlanCreationCardModel | null;
+    }) => void;
+    const planningLoad = new Promise<{
+      deliveries: readonly PlanningRequestDelivery[];
+      planCreation: PlanCreationCardModel | null;
+    }>((resolve) => {
+      finishPlanningLoad = resolve;
+    });
+    const getChatQueue = vi.fn(async () => restoredQueue);
+    const getCoachDecision = vi.fn(async () => ({ decision: null }));
+    const resumeChatQueue = vi.fn(async () => ({
+      snapshot: { schemaVersion: 1 as const, revision: 5, items: [] },
+    }));
+    const enqueueChatMessage = vi.fn(async () => restoredQueue);
+    const fake = client(replies(), {
+      getChatQueue,
+      getCoachDecision,
+      resumeChatQueue,
+      enqueueChatMessage,
+      listPlanningRequests: async () => planningLoad,
+    });
+    const { controller, states, controls } = subject(
+      fake,
+      fake,
+      async () => {},
+      async () => {},
+      () => true,
+      true,
+      vi.fn(),
+      restoredQueue,
+    );
+
+    const starting = controller.start();
+    const submission = controller.submit("Do not enqueue this yet");
+    await vi.waitFor(() => {
+      expect(getChatQueue).toHaveBeenCalledOnce();
+      expect(getCoachDecision).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(resumeChatQueue).not.toHaveBeenCalled();
+    expect(enqueueChatMessage).not.toHaveBeenCalled();
+
+    finishPlanningLoad({ deliveries: [], planCreation });
+    await expect(submission).resolves.toBe(false);
+    await starting;
+
+    expect(resumeChatQueue).not.toHaveBeenCalled();
+    expect(enqueueChatMessage).not.toHaveBeenCalled();
+    expect(states.at(-1)?.queued).toEqual([
+      {
+        id: "queued-restored",
+        text: "Keep this queued",
+        command: false,
+        restored: true,
+        attachmentIds: [],
+      },
+    ]);
+    expect(controls.at(-1)?.planCreation).toMatchObject({ loaded: true, value: planCreation });
+  });
+
   it("retries Card commands with stable ids, installs monotonically, and unblocks Chat", async () => {
     const goalCard: PlanCreationCardModel = {
       creationId: "01J00000000000000000000000",
@@ -1688,7 +1825,7 @@ describe("chat controller", () => {
     const listPlanningRequests = vi
       .fn()
       .mockResolvedValueOnce({ deliveries: [], planCreation: null })
-      .mockResolvedValue({ deliveries: [], planCreation: null });
+      .mockResolvedValue({ deliveries: [], planCreation: goalCard });
     const startPlanCreation = vi
       .fn<(request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>>()
       .mockRejectedValueOnce(new Error("interrupted"))
@@ -1724,6 +1861,69 @@ describe("chat controller", () => {
     expect(controls.at(-1)?.planCreation?.value).toEqual(completeCard);
     await expect(controller.submit("Chat continues")).resolves.toBe(true);
     expect(chatMessages(fake)).toEqual(["Chat continues"]);
+  });
+
+  it("clears and replaces server-authoritative Plan Creation cards", async () => {
+    const first: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 4,
+      status: "in-progress",
+      answeredSummaries: [],
+      openQuestion: { kind: "goal-question", prompt: "First goal?", candidates: [] },
+    };
+    const replacement: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000001",
+      version: 1,
+      status: "in-progress",
+      answeredSummaries: [],
+      openQuestion: { kind: "goal-question", prompt: "Replacement goal?", candidates: [] },
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: first })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: replacement })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null });
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+
+    await controller.start();
+    expect(controls.at(-1)?.planCreation?.value).toEqual(first);
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+    expect(controls.at(-1)?.planCreation?.value).toEqual(replacement);
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(3));
+    expect(controls.at(-1)?.planCreation?.value).toBeNull();
+  });
+
+  it("keeps interrupted recovery inert while a Plan Creation question is open", async () => {
+    const planCreation: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      answeredSummaries: [],
+      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null })
+      .mockResolvedValueOnce({ deliveries: [], planCreation });
+    const resumeChatQueue = vi.fn(async () =>
+      Promise.reject(new CoachClientDisconnectedError(1006, "synthetic")),
+    );
+    const fake = client(replies(), { listPlanningRequests, resumeChatQueue });
+    const { controller, provider, states, controls } = subject(fake);
+
+    await controller.start();
+    await controller.submit("Interrupt this message");
+    expect(states.at(-1)).toMatchObject({ status: "interrupted", retryRequired: null });
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(controls.at(-1)?.planCreation?.value).toEqual(planCreation));
+
+    await controller.retryInterrupted();
+
+    expect(provider.reconnect).not.toHaveBeenCalled();
+    expect(resumeChatQueue).toHaveBeenCalledOnce();
   });
 
   it("keeps the last safe Plan cards when relaunch recovery cannot deliver", async () => {

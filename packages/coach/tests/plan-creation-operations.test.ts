@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PlanCreationRepository, PlanCreationSnapshot } from "@enduragent/kernel/planning";
 import { PlanCreationStoreError } from "@enduragent/kernel/planning";
+import { PlanCreationCardModelSchema } from "@enduragent/coach-contract";
 import {
   createPlanCreationOperations,
   expectedPlanCreationAnswerKind,
@@ -78,6 +79,20 @@ describe("Plan Creation operations", () => {
       answeredSummaries: [{ title: "Goal" }, { title: "Success", detail: "Finish fast" }],
       openQuestion: null,
     });
+  });
+
+  it("round trips the longest accepted Fitness Goal through the Card contract", () => {
+    const outcome = "x".repeat(2_000);
+    const projected = projectPlanCreationCard(
+      snapshot([
+        answer(1, "goal", {
+          kind: "goal",
+          goal: { kind: "fitness", outcome },
+        }),
+      ]),
+    );
+
+    expect(PlanCreationCardModelSchema.parse(projected).answeredSummaries[0]?.detail).toBe(outcome);
   });
 
   it("seeds a create and maps created, resumed, replayed, and conflict starts", async () => {
@@ -177,6 +192,10 @@ describe("Plan Creation operations", () => {
       status: "answered",
       planCreation: { version: 2 },
     });
+    current = { ...snapshot([eventGoal]), seed: null };
+    expect(await host.hasOpenQuestion()).toBe(true);
+    current = { ...snapshot(), status: "review" };
+    expect(await host.hasOpenQuestion()).toBe(false);
     current = snapshot([eventGoal, eventSuccess]);
     expect(await host.hasOpenQuestion()).toBe(false);
   });
