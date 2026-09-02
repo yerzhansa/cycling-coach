@@ -152,6 +152,7 @@ describe("Plan inspection live fixture", () => {
     expect(limited.anchorWeek.callout).toBeNull();
 
     const incompleteContext = TRAINING_INCOMPLETE_ATHLETE_STATE.trainingContext;
+    if (incompleteContext === undefined) throw new Error("expected training context");
     const incomplete = incompleteContext?.trainingHistory;
     expect(incomplete?.kind).toBe("computed");
     if (incomplete?.kind !== "computed") throw new TypeError("expected history");
