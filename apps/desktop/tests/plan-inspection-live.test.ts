@@ -7,6 +7,7 @@ import {
   PlanReadModelSchema,
   ResumePlanningRequestsRpcResultSchema,
   ChatAttachmentComposerReadModelSchema,
+  TrainingHistoryPanelSchema,
 } from "@enduragent/coach-contract";
 import { describe, expect, it } from "vitest";
 import { PLAN_QA_ATHLETE_STATE } from "./helpers/inspection-athlete-states.js";
@@ -17,8 +18,16 @@ import {
   PLAN_INSPECTION_SCENARIO_ID,
   PLAN_INSPECTION_TURNS,
   TRAINING_CURRENT_INSPECTION_FIXTURE,
+  TRAINING_INCOMPLETE_INSPECTION_FIXTURE,
+  TRAINING_LIMITED_INSPECTION_FIXTURE,
+  TRAINING_NO_POWER_INSPECTION_FIXTURE,
+  TRAINING_STALE_INSPECTION_FIXTURE,
 } from "./helpers/plan-inspection-live.js";
 import { TRAINING_CURRENT_ATHLETE_STATE } from "./helpers/training-current-athlete-state.js";
+import { TRAINING_INCOMPLETE_ATHLETE_STATE } from "./helpers/training-incomplete-athlete-state.js";
+import { TRAINING_LIMITED_ATHLETE_STATE } from "./helpers/training-limited-athlete-state.js";
+import { TRAINING_NO_POWER_ATHLETE_STATE } from "./helpers/training-no-power-athlete-state.js";
+import { TRAINING_STALE_ATHLETE_STATE } from "./helpers/training-stale-athlete-state.js";
 
 function request(method: string, params: Record<string, unknown> = {}) {
   return { jsonrpc: "2.0", method, params };
@@ -37,6 +46,10 @@ describe("Plan inspection live fixture", () => {
   it.each([
     [PLAN_CURRENT_INSPECTION_FIXTURE, PLAN_QA_ATHLETE_STATE, 1],
     [TRAINING_CURRENT_INSPECTION_FIXTURE, TRAINING_CURRENT_ATHLETE_STATE, 7],
+    [TRAINING_NO_POWER_INSPECTION_FIXTURE, TRAINING_NO_POWER_ATHLETE_STATE, 6],
+    [TRAINING_LIMITED_INSPECTION_FIXTURE, TRAINING_LIMITED_ATHLETE_STATE, 2],
+    [TRAINING_INCOMPLETE_INSPECTION_FIXTURE, TRAINING_INCOMPLETE_ATHLETE_STATE, 2],
+    [TRAINING_STALE_INSPECTION_FIXTURE, TRAINING_STALE_ATHLETE_STATE, 2],
   ])("returns schema-valid athlete state for %s", async (name, expected, expectedRideCount) => {
     const athleteState = inspectionAthleteState(name);
     const script = createPlanInspectionFixtureScript(athleteState);
@@ -48,6 +61,9 @@ describe("Plan inspection live fixture", () => {
         ? state.trainingContext.recentRides.items
         : [],
     ).toHaveLength(expectedRideCount);
+    expect(() =>
+      TrainingHistoryPanelSchema.parse(state.trainingContext?.trainingHistory),
+    ).not.toThrow();
   });
 
   it("refuses an unknown fixture at direct-execution selection", () => {
@@ -78,6 +94,51 @@ describe("Plan inspection live fixture", () => {
     expect(context.trainingHistory.anchorWeek.callout?.kind).toBe("longest-ride-28d");
     expect(context.performanceProgress.kind).toBe("computed");
     expect(context.cyclingLoad).toMatchObject({ kind: "computed", value: 307 });
+  });
+
+  it("preserves the four Training data-state contracts", () => {
+    const noPower = TRAINING_NO_POWER_ATHLETE_STATE.trainingContext;
+    expect(noPower?.performanceProgress).toEqual({
+      kind: "unavailable",
+      reason: "insufficient-data",
+    });
+    expect(noPower?.trainingHistory.kind).toBe("computed");
+    if (noPower?.trainingHistory.kind !== "computed") throw new TypeError("expected history");
+    expect(noPower.trainingHistory.anchorWeek.rides.items).not.toHaveLength(0);
+    expect(
+      noPower.trainingHistory.anchorWeek.rides.items.every(
+        (ride) => ride.averagePowerWatts === null,
+      ),
+    ).toBe(true);
+
+    const limited = TRAINING_LIMITED_ATHLETE_STATE.trainingContext?.trainingHistory;
+    expect(limited?.kind).toBe("computed");
+    if (limited?.kind !== "computed") throw new TypeError("expected history");
+    expect(limited.anchorWeek.trend).toEqual({
+      kind: "unavailable",
+      reason: "limited-history",
+    });
+    expect(limited.anchorWeek.callout).toBeNull();
+
+    const incomplete = TRAINING_INCOMPLETE_ATHLETE_STATE.trainingContext?.trainingHistory;
+    expect(incomplete?.kind).toBe("computed");
+    if (incomplete?.kind !== "computed") throw new TypeError("expected history");
+    expect(incomplete.coverage.kind).toBe("incomplete");
+    expect(incomplete.anchorWeek.coverage.kind).toBe("incomplete");
+    expect(incomplete.anchorWeek.totals.ridingSeconds.kind).toBe("partial");
+    expect(incomplete.anchorWeek.trend).toEqual({
+      kind: "unavailable",
+      reason: "incomplete-source",
+    });
+    expect(incomplete.anchorWeek.callout).toBeNull();
+
+    const stale = TRAINING_STALE_ATHLETE_STATE.trainingContext?.trainingHistory;
+    expect(stale?.kind).toBe("stale");
+    if (stale?.kind !== "stale") throw new TypeError("expected stale history");
+    expect(stale.lastGood.displayMode).toBe("last-recorded");
+    expect(stale.lastGood.anchorWeek.calendarState).toBe("closed");
+    expect(stale.lastGood.anchorWeek.callout).toBeNull();
+    expect(stale.lastGood.previousWeek).toBeNull();
   });
 
   it("uses privacy-safe ordinary Main Chat turns", async () => {

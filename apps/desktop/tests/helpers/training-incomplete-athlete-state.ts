@@ -1,0 +1,133 @@
+import { createInspectionAthleteState } from "./inspection-athlete-states.js";
+import { TRAINING_CURRENT_ATHLETE_STATE } from "./training-current-athlete-state.js";
+
+const currentTrainingContext = TRAINING_CURRENT_ATHLETE_STATE.trainingContext;
+if (currentTrainingContext === undefined) throw new TypeError("expected Training context");
+
+const AS_OF = "1998-08-30T18:00:00.000Z";
+
+const recordedRides = [
+  {
+    id: "9999999999999999999999999999999999999999999999999999999999999999",
+    title: "Park tempo",
+    subSport: "road",
+    startEpochSeconds: 903_686_400,
+    timezoneOffsetSeconds: 21_600,
+    localDate: "1998-08-21",
+    ridingSeconds: 4_680,
+    ridingTimeBasis: "moving",
+    elapsedSeconds: 4_860,
+    distanceMeters: 38_000,
+    load: 74,
+    averagePowerWatts: 203,
+    averageHeartRateBpm: 147,
+    perceivedExertion: null,
+    energyKilojoules: 949,
+  },
+  {
+    id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    title: "Country endurance",
+    subSport: "road",
+    startEpochSeconds: 903_513_600,
+    timezoneOffsetSeconds: 21_600,
+    localDate: "1998-08-19",
+    ridingSeconds: 6_420,
+    ridingTimeBasis: "moving",
+    elapsedSeconds: 6_600,
+    distanceMeters: 54_000,
+    load: 86,
+    averagePowerWatts: 177,
+    averageHeartRateBpm: 136,
+    perceivedExertion: null,
+    energyKilojoules: 1_137,
+  },
+];
+
+export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
+  {
+    ...currentTrainingContext,
+    performanceProgress: { kind: "unavailable", reason: "temporary-failure" },
+    recentRides: {
+      kind: "computed",
+      asOf: "1998-08-21T18:00:00.000Z",
+      windowDays: 28,
+      items: recordedRides.map((ride) => ({
+        id: ride.id,
+        subSport: ride.subSport,
+        startEpochSeconds: ride.startEpochSeconds,
+        timezoneOffsetSeconds: ride.timezoneOffsetSeconds,
+        localDate: ride.localDate,
+        elapsedSeconds: ride.elapsedSeconds,
+        movingSeconds: ride.ridingSeconds,
+        distanceMeters: ride.distanceMeters,
+      })),
+    },
+    trainingHistory: {
+      kind: "computed",
+      asOf: AS_OF,
+      calendarTimeZone: "Asia/Almaty",
+      displayMode: "current",
+      coverage: {
+        kind: "incomplete",
+        provenStart: "1998-05-01",
+        provenThrough: "1998-08-21",
+        observedThrough: "1998-08-21",
+        committedAt: "1998-08-21T17:55:00.000Z",
+        reason: "source-degraded",
+      },
+      anchorWeek: {
+        id: "anchor",
+        window: { start: "1998-08-24", end: "1998-08-30" },
+        calendarState: "open",
+        coverage: {
+          kind: "incomplete",
+          recordedThrough: "1998-08-21",
+          reason: "source-degraded",
+        },
+        totals: {
+          rideCount: { kind: "partial", value: 0, reason: "incomplete-coverage" },
+          ridingSeconds: { kind: "partial", value: 0, reason: "incomplete-coverage" },
+          distanceMeters: { kind: "partial", value: 0, reason: "incomplete-coverage" },
+          load: { kind: "partial", value: 0, reason: "incomplete-coverage" },
+        },
+        rides: {
+          count: { kind: "at-least", value: 0 },
+          items: [],
+          truncated: true,
+        },
+        trend: { kind: "unavailable", reason: "incomplete-source" },
+        callout: null,
+      },
+      previousWeek: {
+        id: "previous",
+        window: { start: "1998-08-17", end: "1998-08-23" },
+        calendarState: "closed",
+        coverage: {
+          kind: "incomplete",
+          recordedThrough: "1998-08-21",
+          reason: "source-degraded",
+        },
+        totals: {
+          rideCount: { kind: "partial", value: 2, reason: "incomplete-coverage" },
+          ridingSeconds: { kind: "partial", value: 11_100, reason: "incomplete-coverage" },
+          distanceMeters: { kind: "partial", value: 92_000, reason: "incomplete-coverage" },
+          load: { kind: "partial", value: 160, reason: "incomplete-coverage" },
+        },
+        rides: {
+          count: { kind: "at-least", value: 2 },
+          items: recordedRides,
+          truncated: true,
+        },
+        trend: { kind: "unavailable", reason: "incomplete-source" },
+        callout: null,
+      },
+    },
+    cyclingLoad: { kind: "unknown", reason: "source-restricted" },
+  },
+  {
+    lastUpdated: AS_OF,
+    freshness: "flag",
+    degraded: true,
+    lastSynced: "1998-08-21T17:55:00.000Z",
+  },
+);

@@ -3,13 +3,21 @@ import { AthleteStateSchema, type AthleteState } from "@enduragent/coach-contrac
 const LAST_UPDATED = "1998-08-22T08:00:00.000Z";
 const LAST_SYNCED = "1998-08-22T07:55:00.000Z";
 
-export function createInspectionAthleteState(trainingContext: unknown): AthleteState {
+type InspectionAthleteStateMetadata = Pick<
+  AthleteState,
+  "lastUpdated" | "freshness" | "degraded" | "lastSynced"
+>;
+
+export function createInspectionAthleteState(
+  trainingContext: unknown,
+  metadata: Partial<InspectionAthleteStateMetadata> = {},
+): AthleteState {
   return AthleteStateSchema.parse({
     schemaVersion: "1",
-    lastUpdated: LAST_UPDATED,
-    freshness: "fresh",
-    degraded: false,
-    lastSynced: LAST_SYNCED,
+    lastUpdated: metadata.lastUpdated ?? LAST_UPDATED,
+    freshness: metadata.freshness ?? "fresh",
+    degraded: metadata.degraded ?? false,
+    lastSynced: metadata.lastSynced === undefined ? LAST_SYNCED : metadata.lastSynced,
     athleteProfile: {},
     currentStatus: {},
     derivedMetrics: {},
