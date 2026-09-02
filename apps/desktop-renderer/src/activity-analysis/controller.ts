@@ -201,7 +201,12 @@ export function createRideAnalysisController(input: {
     },
     load,
     invalidate() {
+      const reloadSelectedActivity = state.activityId !== null && state.status !== "idle";
+      generation += 1;
+      operation?.abort();
+      operation = undefined;
       cache.clear();
+      if (reloadSelectedActivity) void load(DEFAULT_RIDE_ANALYSIS_SECTIONS);
     },
     dispose() {
       if (disposed) return;

@@ -248,4 +248,34 @@ describe("ride analysis controller", () => {
     await controller.start();
     expect(call).toHaveBeenCalledTimes(2);
   });
+
+  it("restarts in-flight analysis after cache invalidation", async () => {
+    let resolveFirst!: (value: ActivityAnalysisResult) => void;
+    let callCount = 0;
+    const refreshedRevision = "e".repeat(64);
+    const call = vi.fn(() => {
+      callCount += 1;
+      if (callCount > 1) return Promise.resolve({ ...result(), revision: refreshedRevision });
+      return new Promise<ActivityAnalysisResult>((resolve) => {
+        resolveFirst = resolve;
+      });
+    }) as unknown as CoachClient["call"];
+    const { controller, states } = setup(call);
+
+    await controller.select(FIRST);
+    const pending = controller.start();
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(1));
+    controller.invalidate();
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+    resolveFirst(result());
+    await pending;
+
+    await vi.waitFor(() =>
+      expect(states.at(-1)).toMatchObject({
+        activityId: FIRST,
+        status: "ready",
+        revision: refreshedRevision,
+      }),
+    );
+  });
 });
