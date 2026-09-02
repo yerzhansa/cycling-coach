@@ -118,6 +118,20 @@ describe("Plan inspection live fixture", () => {
       kind: "unavailable",
       reason: "limited-history",
     });
+    expect(limited.anchorWeek.rides.items).toHaveLength(1);
+    expect(limited.anchorWeek.totals).toEqual({
+      rideCount: { kind: "computed", value: 1 },
+      ridingSeconds: { kind: "computed", value: 5_340 },
+      distanceMeters: { kind: "computed", value: 41_000 },
+      load: { kind: "computed", value: 78 },
+    });
+    expect(limited.previousWeek?.rides.items).toHaveLength(1);
+    expect(limited.previousWeek?.totals).toEqual({
+      rideCount: { kind: "computed", value: 1 },
+      ridingSeconds: { kind: "computed", value: 4_080 },
+      distanceMeters: { kind: "computed", value: 30_000 },
+      load: { kind: "computed", value: 54 },
+    });
     expect(limited.anchorWeek.callout).toBeNull();
 
     const incomplete = TRAINING_INCOMPLETE_ATHLETE_STATE.trainingContext?.trainingHistory;
@@ -125,7 +139,25 @@ describe("Plan inspection live fixture", () => {
     if (incomplete?.kind !== "computed") throw new TypeError("expected history");
     expect(incomplete.coverage.kind).toBe("incomplete");
     expect(incomplete.anchorWeek.coverage.kind).toBe("incomplete");
-    expect(incomplete.anchorWeek.totals.ridingSeconds.kind).toBe("partial");
+    expect(incomplete.anchorWeek.coverage).toEqual({
+      kind: "incomplete",
+      recordedThrough: "1998-08-28",
+      reason: "source-degraded",
+    });
+    expect(incomplete.anchorWeek.totals).toEqual({
+      rideCount: { kind: "partial", value: 2, reason: "incomplete-coverage" },
+      ridingSeconds: { kind: "partial", value: 11_100, reason: "incomplete-coverage" },
+      distanceMeters: { kind: "partial", value: 92_000, reason: "incomplete-coverage" },
+      load: { kind: "partial", value: 160, reason: "incomplete-coverage" },
+    });
+    expect(incomplete.anchorWeek.rides).toMatchObject({
+      count: { kind: "at-least", value: 2 },
+      truncated: true,
+    });
+    expect(incomplete.anchorWeek.rides.items.map((ride) => ride.title)).toEqual([
+      "Park tempo",
+      "Country endurance",
+    ]);
     expect(incomplete.anchorWeek.trend).toEqual({
       kind: "unavailable",
       reason: "incomplete-source",

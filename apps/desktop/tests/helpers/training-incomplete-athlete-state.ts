@@ -5,15 +5,16 @@ const currentTrainingContext = TRAINING_CURRENT_ATHLETE_STATE.trainingContext;
 if (currentTrainingContext === undefined) throw new TypeError("expected Training context");
 
 const AS_OF = "1998-08-30T18:00:00.000Z";
+const RECORDED_THROUGH = "1998-08-28";
 
 const recordedRides = [
   {
     id: "9999999999999999999999999999999999999999999999999999999999999999",
     title: "Park tempo",
     subSport: "road",
-    startEpochSeconds: 903_686_400,
+    startEpochSeconds: 904_291_200,
     timezoneOffsetSeconds: 21_600,
-    localDate: "1998-08-21",
+    localDate: "1998-08-28",
     ridingSeconds: 4_680,
     ridingTimeBasis: "moving",
     elapsedSeconds: 4_860,
@@ -28,9 +29,9 @@ const recordedRides = [
     id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     title: "Country endurance",
     subSport: "road",
-    startEpochSeconds: 903_513_600,
+    startEpochSeconds: 904_118_400,
     timezoneOffsetSeconds: 21_600,
-    localDate: "1998-08-19",
+    localDate: "1998-08-26",
     ridingSeconds: 6_420,
     ridingTimeBasis: "moving",
     elapsedSeconds: 6_600,
@@ -49,7 +50,7 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
     performanceProgress: { kind: "unavailable", reason: "temporary-failure" },
     recentRides: {
       kind: "computed",
-      asOf: "1998-08-21T18:00:00.000Z",
+      asOf: "1998-08-28T18:00:00.000Z",
       windowDays: 28,
       items: recordedRides.map((ride) => ({
         id: ride.id,
@@ -70,15 +71,38 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
       coverage: {
         kind: "incomplete",
         provenStart: "1998-05-01",
-        provenThrough: "1998-08-21",
-        observedThrough: "1998-08-21",
-        committedAt: "1998-08-21T17:55:00.000Z",
+        provenThrough: RECORDED_THROUGH,
+        observedThrough: RECORDED_THROUGH,
+        committedAt: "1998-08-28T17:55:00.000Z",
         reason: "source-degraded",
       },
       anchorWeek: {
         id: "anchor",
         window: { start: "1998-08-24", end: "1998-08-30" },
         calendarState: "open",
+        coverage: {
+          kind: "incomplete",
+          recordedThrough: RECORDED_THROUGH,
+          reason: "source-degraded",
+        },
+        totals: {
+          rideCount: { kind: "partial", value: 2, reason: "incomplete-coverage" },
+          ridingSeconds: { kind: "partial", value: 11_100, reason: "incomplete-coverage" },
+          distanceMeters: { kind: "partial", value: 92_000, reason: "incomplete-coverage" },
+          load: { kind: "partial", value: 160, reason: "incomplete-coverage" },
+        },
+        rides: {
+          count: { kind: "at-least", value: 2 },
+          items: recordedRides,
+          truncated: true,
+        },
+        trend: { kind: "unavailable", reason: "incomplete-source" },
+        callout: null,
+      },
+      previousWeek: {
+        id: "previous",
+        window: { start: "1998-08-17", end: "1998-08-23" },
+        calendarState: "closed",
         coverage: {
           kind: "incomplete",
           recordedThrough: "1998-08-21",
@@ -98,29 +122,6 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
         trend: { kind: "unavailable", reason: "incomplete-source" },
         callout: null,
       },
-      previousWeek: {
-        id: "previous",
-        window: { start: "1998-08-17", end: "1998-08-23" },
-        calendarState: "closed",
-        coverage: {
-          kind: "incomplete",
-          recordedThrough: "1998-08-21",
-          reason: "source-degraded",
-        },
-        totals: {
-          rideCount: { kind: "partial", value: 2, reason: "incomplete-coverage" },
-          ridingSeconds: { kind: "partial", value: 11_100, reason: "incomplete-coverage" },
-          distanceMeters: { kind: "partial", value: 92_000, reason: "incomplete-coverage" },
-          load: { kind: "partial", value: 160, reason: "incomplete-coverage" },
-        },
-        rides: {
-          count: { kind: "at-least", value: 2 },
-          items: recordedRides,
-          truncated: true,
-        },
-        trend: { kind: "unavailable", reason: "incomplete-source" },
-        callout: null,
-      },
     },
     cyclingLoad: { kind: "unknown", reason: "source-restricted" },
   },
@@ -128,6 +129,6 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
     lastUpdated: AS_OF,
     freshness: "flag",
     degraded: true,
-    lastSynced: "1998-08-21T17:55:00.000Z",
+    lastSynced: "1998-08-28T17:55:00.000Z",
   },
 );
