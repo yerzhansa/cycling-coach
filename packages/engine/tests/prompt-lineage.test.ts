@@ -29,7 +29,7 @@ const base: PromptLineageInput = {
 describe("computePromptLineage", () => {
   it("pins lineage for the ungated (immediate-execute) host rule-block set", () => {
     const lineage = computePromptLineage({ ...base, ruleBlocks: staticRuleBlocks() });
-    expect(lineage.templateHash).toBe("9c0a1e6d6d4f7fde");
+    expect(lineage.templateHash).toBe("12abc74c24275aa4");
   });
 
   it("pins a distinct lineage for the confirmation-gated host rule-block set", () => {
@@ -37,7 +37,7 @@ describe("computePromptLineage", () => {
       ...base,
       ruleBlocks: staticRuleBlocks(30, { confirmationGate: true }),
     });
-    expect(gated.templateHash).toBe("fcb3dbaee6aef545");
+    expect(gated.templateHash).toBe("7d59087f4adf4b0d");
     expect(gated.templateHash).not.toBe(
       computePromptLineage({ ...base, ruleBlocks: staticRuleBlocks() }).templateHash,
     );

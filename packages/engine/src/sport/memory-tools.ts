@@ -197,7 +197,11 @@ export function createMemoryTools(
     }),
 
     plan_save: tool({
-      description: "Save or update the current training plan",
+      description:
+        "Save or update the athlete's training plan after they approve it. Pass the full " +
+        "plan object (name, plus primaryGoal, totalWeeks, status, and any phase/week " +
+        "structure); the write replaces the stored plan, so carry forward unchanged fields. " +
+        "The host may hold this write for athlete confirmation (pendingConfirmation).",
       inputSchema: zodSchema(
         z.object({
           plan: PlanSaveInputSchema.describe("The training plan object to save"),
