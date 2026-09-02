@@ -2229,9 +2229,9 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         step: { current: 1, total: 9 },
         prompt: "Goal?",
         candidates: [],
-        manualOption: {
-          label: "Something else",
-          description: "Name an event.",
+        eventNotListedOption: {
+          label: "Event not listed",
+          detail: "Tell me the event name and its exact date.",
           editorLabel: "Name the event.",
           placeholder: "Event name",
           nameLabel: "Event name",
@@ -2239,9 +2239,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         },
         fitnessOption: {
           label: "Improve without an event",
-          description: "Build fitness.",
-          editorLabel: "Fitness Goal",
-          placeholder: "Describe the goal",
+          detail: "Build fitness for a fixed number of weeks.",
+        },
+        authoredOption: {
+          label: "Something else",
+          detail: "Tell me the event name and its exact date.",
+          editorLabel: "Name the event.",
+          placeholder: "Event name",
         },
       },
     };
@@ -2261,9 +2265,9 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
             step: { current: 1, total: 9 },
             prompt: "Goal?",
             candidates: [],
-            manualOption: {
-              label: "Something else",
-              description: "Name an event.",
+            eventNotListedOption: {
+              label: "Event not listed",
+              detail: "Tell me the event name and its exact date.",
               editorLabel: "Name the event.",
               placeholder: "Event name",
               nameLabel: "Event name",
@@ -2271,9 +2275,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
             },
             fitnessOption: {
               label: "Improve without an event",
-              description: "Build fitness.",
-              editorLabel: "Fitness Goal",
-              placeholder: "Describe the goal",
+              detail: "Build fitness for a fixed number of weeks.",
+            },
+            authoredOption: {
+              label: "Something else",
+              detail: "Tell me the event name and its exact date.",
+              editorLabel: "Name the event.",
+              placeholder: "Event name",
             },
           },
           answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build power" } },
@@ -2284,26 +2292,30 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         step: { current: 2, total: 9 },
         prompt: "Success?",
         input: {
-          kind: "authored",
+          kind: "fitness-choice",
           options: [
             {
-              text: "Train consistently",
+              choice: "train-consistently",
               label: "Train consistently",
-              description: "Repeat planned weeks.",
+              detail: "Complete most planned weeks without forcing missed Workouts back in.",
             },
-            { text: "Climb stronger", label: "Climb stronger", description: "Climb steadily." },
             {
-              text: "Ride farther comfortably",
+              choice: "climb-stronger",
+              label: "Climb stronger",
+              detail: "Hold a steadier effort on longer climbs.",
+            },
+            {
+              choice: "ride-farther",
               label: "Ride farther comfortably",
-              description: "Build endurance.",
+              detail: "Finish longer rides with stable energy and form.",
             },
           ],
           authored: {
             label: "Something else",
-            description: "Answer in your own words.",
+            detail: "Describe what success should feel like.",
             editorLabel: "Write your answer.",
-            placeholder: "Describe success",
           },
+          placeholder: "Describe success",
         },
       },
     };

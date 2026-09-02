@@ -7,13 +7,13 @@ const PlanCreationCivilDateSchema = TrainingExportCivilDateSchema;
 
 export const PLAN_CREATION_ANSWER_KEYS = [
   "goal",
-  "success",
   "plan-length",
-  "start-timing",
   "schedule-mode",
   "availability",
+  "start-timing",
   "commitments",
   "baseline",
+  "success",
   "restriction",
 ] as const;
 
@@ -73,11 +73,22 @@ export const PlanCreationGoalSchema = z.discriminatedUnion("kind", [
       date: PlanCreationCivilDateSchema,
     })
     .strict(),
-  z.object({ kind: z.literal("fitness"), outcome: z.string().min(1).max(2_000) }).strict(),
+  z
+    .object({
+      kind: z.literal("fitness"),
+      outcome: z.string().min(1).max(2_000).optional(),
+    })
+    .strict(),
 ]);
 export type PlanCreationGoal = z.infer<typeof PlanCreationGoalSchema>;
 
 export const PlanCreationSuccessSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("fitness-choice"),
+      choice: z.enum(["train-consistently", "climb-stronger", "ride-farther"]),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("event-finish"),
@@ -169,7 +180,7 @@ const PlanCreationQuestionStepSchema = z
 const PlanCreationAuthoredOptionSchema = z
   .object({
     label: z.literal("Something else"),
-    description: z.string().min(1).max(240),
+    detail: z.string().min(1).max(240),
     editorLabel: z.string().min(1).max(240),
     placeholder: z.string().min(1).max(240),
   })
@@ -182,18 +193,23 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
       step: PlanCreationQuestionStepSchema,
       prompt: z.string().min(1).max(240),
       candidates: z.array(GoalEventCandidateSchema).max(10),
-      manualOption: PlanCreationAuthoredOptionSchema.extend({
-        nameLabel: z.string().min(1).max(128),
-        dateLabel: z.string().min(1).max(128),
-      }).strict(),
+      eventNotListedOption: z
+        .object({
+          label: z.literal("Event not listed"),
+          detail: z.string().min(1).max(240),
+          editorLabel: z.string().min(1).max(240),
+          placeholder: z.string().min(1).max(240),
+          nameLabel: z.string().min(1).max(128),
+          dateLabel: z.string().min(1).max(128),
+        })
+        .strict(),
       fitnessOption: z
         .object({
           label: z.string().min(1).max(128),
-          description: z.string().min(1).max(240),
-          editorLabel: z.string().min(1).max(240),
-          placeholder: z.string().min(1).max(240),
+          detail: z.string().min(1).max(240),
         })
         .strict(),
+      authoredOption: PlanCreationAuthoredOptionSchema,
     })
     .strict(),
   z
@@ -211,7 +227,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
                   .object({
                     choice: z.enum(["finish-comfortably", "finish-fast", "race-for-result"]),
                     label: z.string().min(1).max(128),
-                    description: z.string().min(1).max(240),
+                    detail: z.string().min(1).max(240),
                   })
                   .strict(),
               )
@@ -221,19 +237,26 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
           .strict(),
         z
           .object({
-            kind: z.literal("authored"),
+            kind: z.literal("fitness-choice"),
             options: z
               .array(
                 z
                   .object({
-                    text: z.string().min(1).max(2_000),
+                    choice: z.enum(["train-consistently", "climb-stronger", "ride-farther"]),
                     label: z.string().min(1).max(128),
-                    description: z.string().min(1).max(240),
+                    detail: z.string().min(1).max(240),
                   })
                   .strict(),
               )
-              .length(3),
-            authored: PlanCreationAuthoredOptionSchema,
+              .length(3)
+              .refine((options) =>
+                completeOptionSet(
+                  options.map((option) => option.choice),
+                  ["train-consistently", "climb-stronger", "ride-farther"],
+                ),
+              ),
+            authored: PlanCreationAuthoredOptionSchema.omit({ placeholder: true }).strict(),
+            placeholder: z.string().min(1).max(240),
           })
           .strict(),
       ]),
@@ -250,7 +273,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
             .object({
               weeks: PlanCreationPlanLengthWeeksSchema,
               label: z.string().min(1).max(128),
-              description: z.string().min(1).max(240),
+              detail: z.string().min(1).max(240),
             })
             .strict(),
         )
@@ -275,7 +298,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
             .object({
               timing: z.enum(["as-soon-as-possible", "earliest"]),
               label: z.string().min(1).max(128),
-              description: z.string().min(1).max(240),
+              detail: z.string().min(1).max(240),
             })
             .strict(),
         )
@@ -300,7 +323,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
             .object({
               mode: z.enum(["fixed", "flexible"]),
               label: z.string().min(1).max(128),
-              description: z.string().min(1).max(240),
+              detail: z.string().min(1).max(240),
             })
             .strict(),
         )
@@ -319,6 +342,46 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
       step: PlanCreationQuestionStepSchema,
       prompt: z.string().min(1).max(240),
       mode: z.enum(["fixed", "flexible"]),
+      weeklyHoursOptions: z
+        .array(
+          z
+            .object({
+              id: z.enum(["hours-6", "hours-8", "hours-10"]),
+              weeklyHoursLimit: z.union([z.literal(6), z.literal(8), z.literal(10)]),
+              label: z.string().min(1).max(128),
+              detail: z.string().min(1).max(240),
+            })
+            .strict(),
+        )
+        .length(3)
+        .refine(
+          (options) =>
+            completeOptionSet(
+              options.map((option) => option.id),
+              ["hours-6", "hours-8", "hours-10"],
+            ) &&
+            completeOptionSet(
+              options.map((option) => option.weeklyHoursLimit),
+              [6, 8, 10],
+            ),
+        ),
+      longestWorkoutLabel: z.string().min(1).max(128),
+      weekdayOptions: z
+        .array(
+          z
+            .object({
+              weekday: PlanCreationWeekdaySchema,
+              label: z.string().min(1).max(32),
+            })
+            .strict(),
+        )
+        .length(7)
+        .refine((options) =>
+          completeOptionSet(
+            options.map((option) => option.weekday),
+            [1, 2, 3, 4, 5, 6, 7],
+          ),
+        ),
       derivedPoolNote: z.string().min(1).max(240),
     })
     .strict(),
@@ -330,7 +393,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
       noneOption: z
         .object({
           label: z.string().min(1).max(128),
-          description: z.string().min(1).max(240),
+          detail: z.string().min(1).max(240),
         })
         .strict(),
       authoredOption: PlanCreationAuthoredOptionSchema,
@@ -347,7 +410,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
             .object({
               baseline: z.enum(["regular", "occasional", "starting-again"]),
               label: z.string().min(1).max(128),
-              description: z.string().min(1).max(240),
+              detail: z.string().min(1).max(240),
             })
             .strict(),
         )
@@ -371,7 +434,7 @@ export const PlanCreationOpenQuestionSchema = z.discriminatedUnion("kind", [
             .object({
               kind: z.enum(["none", "no-training", "no-hard-training", "max-duration"]),
               label: z.string().min(1).max(128),
-              description: z.string().min(1).max(240),
+              detail: z.string().min(1).max(240),
             })
             .strict(),
         )
@@ -394,9 +457,7 @@ export const PlanCreationAnswerSummarySchema = z
     detail: z.string().min(1).max(2_000),
     source: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("athlete") }).strict(),
-      z
-        .object({ kind: z.literal("derived"), label: z.string().min(1).max(128) })
-        .strict(),
+      z.object({ kind: z.literal("derived"), label: z.string().min(1).max(128) }).strict(),
     ]),
     question: PlanCreationOpenQuestionSchema,
     answer: PlanCreationAnswerInputSchema,

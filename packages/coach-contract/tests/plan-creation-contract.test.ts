@@ -18,7 +18,7 @@ const creationId = "01J00000000000000000000000";
 const step = { current: 1, total: 9 } as const;
 const authoredOption = {
   label: "Something else",
-  description: "Answer in your own words.",
+  detail: "Answer in your own words.",
   editorLabel: "Write your answer.",
   placeholder: "Type an answer",
 } as const;
@@ -27,17 +27,19 @@ const goalQuestion = {
   step,
   prompt: "Goal?",
   candidates: [],
-  manualOption: {
-    ...authoredOption,
+  eventNotListedOption: {
+    label: "Event not listed",
+    detail: "Tell me the event name and its exact date.",
+    editorLabel: "Name the event and include its exact date.",
+    placeholder: "Event name",
     nameLabel: "Event name",
     dateLabel: "Event date",
   },
   fitnessOption: {
     label: "Improve without an event",
-    description: "Build fitness for a fixed number of weeks.",
-    editorLabel: "Fitness Goal",
-    placeholder: "Describe the goal",
+    detail: "Build fitness for a fixed number of weeks.",
   },
+  authoredOption,
 };
 const card = {
   creationId,
@@ -51,6 +53,8 @@ const answers = [
   { kind: "goal", goal: { kind: "event-candidate", candidateId: creationId } },
   { kind: "goal", goal: { kind: "event-manual", name: "Tour", date: "1998-10-18" } },
   { kind: "goal", goal: { kind: "fitness", outcome: "Build power" } },
+  { kind: "goal", goal: { kind: "fitness" } },
+  { kind: "success", success: { kind: "fitness-choice", choice: "climb-stronger" } },
   { kind: "success", success: { kind: "event-finish", choice: "finish-fast" } },
   { kind: "success", success: { kind: "authored", text: "Ride well" } },
 ] as const;
@@ -124,10 +128,10 @@ const newQuestions = [
     step,
     prompt: "How long should this Plan be?",
     options: [
-      { weeks: 4, label: "4 weeks", description: "A short block." },
-      { weeks: 8, label: "8 weeks", description: "One training cycle." },
-      { weeks: 12, label: "12 weeks", description: "Steady progression." },
-      { weeks: 16, label: "16 weeks", description: "The longest build." },
+      { weeks: 4, label: "4 weeks", detail: "A short block." },
+      { weeks: 8, label: "8 weeks", detail: "One training cycle." },
+      { weeks: 12, label: "12 weeks", detail: "Steady progression." },
+      { weeks: 16, label: "16 weeks", detail: "The longest build." },
     ],
   },
   {
@@ -139,9 +143,9 @@ const newQuestions = [
       {
         timing: "as-soon-as-possible",
         label: "As soon as possible",
-        description: "Start at the earliest suitable week.",
+        detail: "Start at the earliest suitable week.",
       },
-      { timing: "earliest", label: "From a date", description: "Set an earliest date." },
+      { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
     ],
     dateLabel: "Earliest start date",
   },
@@ -150,11 +154,11 @@ const newQuestions = [
     step,
     prompt: "How should Workouts fit your week?",
     options: [
-      { mode: "fixed", label: "Fixed", description: "Put each Workout on a usable day." },
+      { mode: "fixed", label: "Fixed", detail: "Put each Workout on a usable day." },
       {
         mode: "flexible",
         label: "Flexible",
-        description: "Choose from an ordered weekly pool.",
+        detail: "Choose from an ordered weekly pool.",
       },
     ],
   },
@@ -163,13 +167,28 @@ const newQuestions = [
     step,
     prompt: "How much time is available?",
     mode: "flexible",
+    weeklyHoursOptions: [
+      { id: "hours-6", weeklyHoursLimit: 6, label: "5–6 hours", detail: "Usual volume." },
+      { id: "hours-8", weeklyHoursLimit: 8, label: "7–8 hours", detail: "A small step." },
+      { id: "hours-10", weeklyHoursLimit: 10, label: "9+ hours", detail: "More volume." },
+    ],
+    longestWorkoutLabel: "Longest ride in hours",
+    weekdayOptions: [
+      { weekday: 1, label: "Mon" },
+      { weekday: 2, label: "Tue" },
+      { weekday: 3, label: "Wed" },
+      { weekday: 4, label: "Thu" },
+      { weekday: 5, label: "Fri" },
+      { weekday: 6, label: "Sat" },
+      { weekday: 7, label: "Sun" },
+    ],
     derivedPoolNote: "This weekly limit creates a pool of four Workouts.",
   },
   {
     kind: "commitments-question",
     step,
     prompt: "Any fixed commitments or other training?",
-    noneOption: { label: "Nothing fixed", description: "There is nothing fixed to add." },
+    noneOption: { label: "Nothing fixed", detail: "There is nothing fixed to add." },
     authoredOption: authoredOption,
   },
   {
@@ -177,16 +196,16 @@ const newQuestions = [
     step,
     prompt: "What has training looked like recently?",
     options: [
-      { baseline: "regular", label: "Regular", description: "Training has been consistent." },
+      { baseline: "regular", label: "Regular", detail: "Training has been consistent." },
       {
         baseline: "occasional",
         label: "Occasional",
-        description: "Training has happened some weeks.",
+        detail: "Training has happened some weeks.",
       },
       {
         baseline: "starting-again",
         label: "Starting again",
-        description: "Training has paused for a while.",
+        detail: "Training has paused for a while.",
       },
     ],
   },
@@ -195,10 +214,10 @@ const newQuestions = [
     step,
     prompt: "Is any Training Restriction active?",
     options: [
-      { kind: "none", label: "None", description: "No restriction." },
-      { kind: "no-training", label: "No training", description: "No Workouts." },
-      { kind: "no-hard-training", label: "No hard training", description: "No intensity." },
-      { kind: "max-duration", label: "Maximum duration", description: "Set a limit." },
+      { kind: "none", label: "None", detail: "No restriction." },
+      { kind: "no-training", label: "No training", detail: "No Workouts." },
+      { kind: "no-hard-training", label: "No hard training", detail: "No intensity." },
+      { kind: "max-duration", label: "Maximum duration", detail: "Set a limit." },
     ],
   },
 ] as const;
@@ -264,20 +283,25 @@ const summaryFixtures = [
       step: { current: 2, total: 9 },
       prompt: "Success?",
       input: {
-        kind: "authored",
+        kind: "fitness-choice",
         options: [
-          { text: "Train consistently", label: "Train consistently", description: "Repeat weeks." },
-          { text: "Climb stronger", label: "Climb stronger", description: "Climb steadily." },
+          { choice: "train-consistently", label: "Train consistently", detail: "Repeat weeks." },
+          { choice: "climb-stronger", label: "Climb stronger", detail: "Climb steadily." },
           {
-            text: "Ride farther comfortably",
+            choice: "ride-farther",
             label: "Ride farther comfortably",
-            description: "Build endurance.",
+            detail: "Build endurance.",
           },
         ],
-        authored: authoredOption,
+        authored: {
+          label: "Something else",
+          detail: "Answer in your own words.",
+          editorLabel: "Write your answer.",
+        },
+        placeholder: "Type an answer",
       },
     },
-    answer: answers[4],
+    answer: answers[6],
   },
   {
     answerKey: "plan-length",
@@ -395,6 +419,27 @@ describe("Plan Creation contract", () => {
     ).toBe(false);
   });
 
+  it("allows an optional end date only on operational Training Restrictions", () => {
+    for (const restriction of [
+      { kind: "no-training" },
+      { kind: "no-training", endDate: "1998-09-14" },
+      { kind: "no-hard-training" },
+      { kind: "no-hard-training", endDate: "1998-09-14" },
+      { kind: "max-duration", hours: 1.5 },
+      { kind: "max-duration", hours: 1.5, endDate: "1998-09-14" },
+    ]) {
+      expect(
+        PlanCreationAnswerInputSchema.safeParse({ kind: "restriction", restriction }).success,
+      ).toBe(true);
+    }
+    expect(
+      PlanCreationAnswerInputSchema.safeParse({
+        kind: "restriction",
+        restriction: { kind: "none", endDate: "1998-09-14" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts every essential open question kind", () => {
     newQuestions.forEach((question) =>
       expect(PlanCreationOpenQuestionSchema.parse(question)).toEqual(question),
@@ -408,13 +453,13 @@ describe("Plan Creation contract", () => {
   it("accepts the nine answer summary keys in flow order", () => {
     expect(PLAN_CREATION_ANSWER_KEYS).toEqual([
       "goal",
-      "success",
       "plan-length",
-      "start-timing",
       "schedule-mode",
       "availability",
+      "start-timing",
       "commitments",
       "baseline",
+      "success",
       "restriction",
     ]);
     summaryFixtures.forEach((summary) =>
@@ -453,7 +498,7 @@ describe("Plan Creation contract", () => {
           ...summaryFixtures[1].question,
         },
       }),
-    ).toMatchObject({ version: 2, openQuestion: { input: { kind: "authored" } } });
+    ).toMatchObject({ version: 2, openQuestion: { input: { kind: "fitness-choice" } } });
     expect(
       PlanCreationCardModelSchema.parse({
         ...card,
@@ -467,13 +512,13 @@ describe("Plan Creation contract", () => {
               {
                 choice: "finish-comfortably",
                 label: "Finish comfortably",
-                description: "Enjoy the finish.",
+                detail: "Enjoy the finish.",
               },
-              { choice: "finish-fast", label: "Finish fast", description: "Finish strongly." },
+              { choice: "finish-fast", label: "Finish fast", detail: "Finish strongly." },
               {
                 choice: "race-for-result",
                 label: "Race for a result",
-                description: "Race strongly.",
+                detail: "Race strongly.",
               },
             ],
             authored: authoredOption,

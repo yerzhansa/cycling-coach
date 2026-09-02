@@ -23,9 +23,13 @@ export function PlanCreationDock(props: {
   if (!loaded) return null;
   if (model === null) {
     return (
-      <div className="flex min-w-0 justify-end rounded-card border border-line bg-surface px-4 py-3">
+      <div
+        className="flex min-w-0 justify-end rounded-card border border-line bg-surface px-4 py-3"
+        data-parity="start.row"
+      >
         <Button
           variant="outline"
+          data-parity="start.button"
           disabled={busy || actions === null || decisionPending}
           onClick={() => actions?.startPlanCreation()}
         >

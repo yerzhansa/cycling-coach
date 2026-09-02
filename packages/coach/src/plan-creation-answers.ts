@@ -104,13 +104,15 @@ export const readPlanCreationAnswers = (
   snapshot: PlanCreationSnapshot,
 ): readonly StoredPlanCreationAnswer[] => snapshot.answers.map(parseStoredAnswer);
 
-const goalKind = (
+type PlanCreationGoalFamily = "event" | "fitness";
+
+const goalFamily = (
   answer: Extract<PlanCreationAnswerInput, { kind: "goal" }>,
-): PlanCreationGoal["kind"] => answer.goal.kind;
+): PlanCreationGoalFamily => (answer.goal.kind === "fitness" ? "fitness" : "event");
 
 const currentGoalRunStart = (
   answers: readonly StoredPlanCreationAnswer[],
-): { readonly kind: PlanCreationGoal["kind"]; readonly sequence: number } | undefined => {
+): { readonly family: PlanCreationGoalFamily; readonly sequence: number } | undefined => {
   const goals = answers.filter(
     (
       stored,
@@ -120,14 +122,36 @@ const currentGoalRunStart = (
   );
   const current = goals.at(-1);
   if (current === undefined) return undefined;
-  const kind = goalKind(current.answer);
+  const family = goalFamily(current.answer);
   let sequence = current.record.sequence;
   for (let index = goals.length - 2; index >= 0; index -= 1) {
     const prior = goals[index]!;
-    if (goalKind(prior.answer) !== kind) break;
+    if (goalFamily(prior.answer) !== family) break;
     sequence = prior.record.sequence;
   }
-  return { kind, sequence };
+  return { family, sequence };
+};
+
+const currentScheduleModeRunStart = (
+  answers: readonly StoredPlanCreationAnswer[],
+): { readonly mode: "fixed" | "flexible"; readonly sequence: number } | undefined => {
+  const modes = answers.filter(
+    (
+      stored,
+    ): stored is StoredPlanCreationAnswer & {
+      readonly answer: Extract<PlanCreationAnswerInput, { kind: "schedule-mode" }>;
+    } => stored.answer.kind === "schedule-mode",
+  );
+  const current = modes.at(-1);
+  if (current === undefined) return undefined;
+  const mode = current.answer.mode;
+  let sequence = current.record.sequence;
+  for (let index = modes.length - 2; index >= 0; index -= 1) {
+    const prior = modes[index]!;
+    if (prior.answer.mode !== mode) break;
+    sequence = prior.record.sequence;
+  }
+  return { mode, sequence };
 };
 
 export function resolvePlanCreationAnswerFlow(
@@ -137,28 +161,29 @@ export function resolvePlanCreationAnswerFlow(
   const latest = new Map<PlanCreationAnswerKey, StoredPlanCreationAnswer>();
   for (const stored of answers) latest.set(stored.answer.kind, stored);
   const goalRun = currentGoalRunStart(answers);
+  const scheduleModeRun = currentScheduleModeRunStart(answers);
   const order: readonly PlanCreationAnswerKey[] =
-    goalRun?.kind === "fitness"
+    goalRun?.family === "fitness"
       ? [
           "goal",
-          "success",
           "plan-length",
-          "start-timing",
           "schedule-mode",
           "availability",
+          "start-timing",
           "commitments",
           "baseline",
+          "success",
           "restriction",
         ]
       : goalRun !== undefined
         ? [
             "goal",
-            "success",
-            "start-timing",
             "schedule-mode",
             "availability",
+            "start-timing",
             "commitments",
             "baseline",
+            "success",
             "restriction",
           ]
         : ["goal"];
@@ -168,10 +193,14 @@ export function resolvePlanCreationAnswerFlow(
     if (stored === undefined) continue;
     if (key === "success") {
       const matchesGoal =
-        goalRun?.kind === "fitness"
-          ? stored.answer.kind === "success" && stored.answer.success.kind === "authored"
+        goalRun?.family === "fitness"
+          ? stored.answer.kind === "success" &&
+            (stored.answer.success.kind === "fitness-choice" ||
+              stored.answer.success.kind === "authored")
           : goalRun !== undefined
-            ? stored.answer.kind === "success"
+            ? stored.answer.kind === "success" &&
+              (stored.answer.success.kind === "event-finish" ||
+                stored.answer.success.kind === "authored")
             : false;
       if (!matchesGoal || goalRun === undefined || stored.record.sequence <= goalRun.sequence) {
         continue;
@@ -179,16 +208,16 @@ export function resolvePlanCreationAnswerFlow(
     }
     if (
       key === "plan-length" &&
-      (goalRun?.kind !== "fitness" || stored.record.sequence <= goalRun.sequence)
+      (goalRun?.family !== "fitness" || stored.record.sequence <= goalRun.sequence)
     ) {
       continue;
     }
     if (key === "availability") {
-      const scheduleMode = latest.get("schedule-mode")?.answer;
       if (
         stored.answer.kind !== "availability" ||
-        scheduleMode?.kind !== "schedule-mode" ||
-        stored.answer.mode !== scheduleMode.mode
+        scheduleModeRun === undefined ||
+        stored.answer.mode !== scheduleModeRun.mode ||
+        stored.record.sequence <= scheduleModeRun.sequence
       ) {
         continue;
       }
@@ -217,7 +246,9 @@ const baselineDetail = (baseline: "regular" | "occasional" | "starting-again"): 
 };
 
 function goalDetail(snapshot: PlanCreationSnapshot, goal: PlanCreationGoal): string {
-  if (goal.kind === "fitness") return goal.outcome;
+  if (goal.kind === "fitness") {
+    return goal.outcome ?? "Build fitness for a fixed number of weeks.";
+  }
   if (goal.kind === "event-manual") return `${goal.name} · ${goal.date}`;
   const candidate = snapshot.seed?.eventCandidates.find(
     (item) => item.candidateId === goal.candidateId,
@@ -228,6 +259,11 @@ function goalDetail(snapshot: PlanCreationSnapshot, goal: PlanCreationGoal): str
 
 const successDetail = (answer: Extract<PlanCreationAnswerInput, { kind: "success" }>): string => {
   if (answer.success.kind === "authored") return answer.success.text;
+  if (answer.success.kind === "fitness-choice") {
+    if (answer.success.choice === "train-consistently") return "Train consistently";
+    if (answer.success.choice === "climb-stronger") return "Climb stronger";
+    return "Ride farther comfortably";
+  }
   if (answer.success.choice === "finish-comfortably") return "Finish comfortably";
   if (answer.success.choice === "finish-fast") return "Finish fast";
   return "Race for a result";
@@ -328,9 +364,9 @@ function questionForKey(
         step,
         prompt: "What do you want this Plan to prepare you for?",
         candidates: [...(snapshot.seed?.eventCandidates ?? [])],
-        manualOption: {
-          label: "Something else",
-          description: "Name an event and include its exact date.",
+        eventNotListedOption: {
+          label: "Event not listed",
+          detail: "Tell me the event name and its exact date.",
           editorLabel: "Name the event and include its exact date.",
           placeholder: "Event name",
           nameLabel: "Event name",
@@ -338,9 +374,13 @@ function questionForKey(
         },
         fitnessOption: {
           label: "Improve without an event",
-          description: "Build fitness for a fixed number of weeks.",
-          editorLabel: "What do you want to improve?",
-          placeholder: "Describe your Fitness Goal",
+          detail: "Build fitness for a fixed number of weeks.",
+        },
+        authoredOption: {
+          label: "Something else",
+          detail: "Tell me the event name and its exact date.",
+          editorLabel: "Name the event and include its exact date.",
+          placeholder: "Event name",
         },
       };
     case "success":
@@ -350,31 +390,30 @@ function questionForKey(
             step,
             prompt: "What would success mean for this Fitness Goal?",
             input: {
-              kind: "authored",
+              kind: "fitness-choice",
               options: [
                 {
-                  text: "Train consistently",
+                  choice: "train-consistently",
                   label: "Train consistently",
-                  description:
-                    "Complete most planned weeks without forcing missed Workouts back in.",
+                  detail: "Complete most planned weeks without forcing missed Workouts back in.",
                 },
                 {
-                  text: "Climb stronger",
+                  choice: "climb-stronger",
                   label: "Climb stronger",
-                  description: "Hold a steadier effort on longer climbs.",
+                  detail: "Hold a steadier effort on longer climbs.",
                 },
                 {
-                  text: "Ride farther comfortably",
+                  choice: "ride-farther",
                   label: "Ride farther comfortably",
-                  description: "Finish longer rides with stable energy and form.",
+                  detail: "Finish longer rides with stable energy and form.",
                 },
               ],
               authored: {
                 label: "Something else",
-                description: "Answer in your own words.",
+                detail: "Answer in your own words.",
                 editorLabel: "Describe what success looks like at the end of this Plan.",
-                placeholder: "Describe what success would look like",
               },
+              placeholder: "Describe what success would look like",
             },
           }
         : {
@@ -387,22 +426,22 @@ function questionForKey(
                 {
                   choice: "finish-comfortably",
                   label: "Finish comfortably",
-                  description: "Complete the event with enough left to enjoy the final hour.",
+                  detail: "Complete the event with enough left to enjoy the final hour.",
                 },
                 {
                   choice: "finish-fast",
                   label: "Finish fast",
-                  description: "Hold a strong pace and finish the final climbs well.",
+                  detail: "Hold a strong pace and finish the final climbs well.",
                 },
                 {
                   choice: "race-for-result",
                   label: "Race for a result",
-                  description: "Prepare for the strongest result your current training supports.",
+                  detail: "Prepare for the strongest result your current training supports.",
                 },
               ],
               authored: {
                 label: "Something else",
-                description: "Answer in your own words.",
+                detail: "Answer in your own words.",
                 editorLabel: "Describe what a successful event would feel like.",
                 placeholder: "Describe what success would look like",
               },
@@ -414,10 +453,10 @@ function questionForKey(
         step,
         prompt: "How long should this Fitness Plan be?",
         options: [
-          { weeks: 4, label: "4 weeks", description: "A short, focused block." },
-          { weeks: 8, label: "8 weeks", description: "One full training cycle." },
-          { weeks: 12, label: "12 weeks", description: "Room for steady progression." },
-          { weeks: 16, label: "16 weeks", description: "The longest steady build." },
+          { weeks: 4, label: "4 weeks", detail: "A short, focused block." },
+          { weeks: 8, label: "8 weeks", detail: "One full training cycle." },
+          { weeks: 12, label: "12 weeks", detail: "Room for steady progression." },
+          { weeks: 16, label: "16 weeks", detail: "The longest steady build." },
         ],
       };
     case "start-timing":
@@ -430,12 +469,12 @@ function questionForKey(
           {
             timing: "as-soon-as-possible",
             label: "As soon as possible",
-            description: "Start with the earliest suitable training week.",
+            detail: "Start with the earliest suitable training week.",
           },
           {
             timing: "earliest",
             label: "From a date",
-            description: "Set the earliest date this Plan may begin.",
+            detail: "Set the earliest date this Plan may begin.",
           },
         ],
         dateLabel: "Earliest start date",
@@ -444,17 +483,17 @@ function questionForKey(
       return {
         kind: "schedule-mode-question",
         step,
-        prompt: "Should this Plan use a Fixed or Flexible Schedule?",
+        prompt: "How should Workouts fit into your week?",
         options: [
           {
             mode: "fixed",
-            label: "Fixed Schedule",
-            description: "Place each Workout on one of your available weekdays.",
+            label: "Same days every week",
+            detail: "Workouts land on the days you pick.",
           },
           {
             mode: "flexible",
-            label: "Flexible Schedule",
-            description: "Choose from an ordered Workout pool during each week.",
+            label: "My week varies",
+            detail: "Pick from a weekly pool when you ride.",
           },
         ],
       };
@@ -466,6 +505,36 @@ function questionForKey(
         step,
         prompt: "How much training fits in a usual week?",
         mode: scheduleMode.mode,
+        weeklyHoursOptions: [
+          {
+            id: "hours-6",
+            weeklyHoursLimit: 6,
+            label: "5–6 hours",
+            detail: "Roughly your last four weeks.",
+          },
+          {
+            id: "hours-8",
+            weeklyHoursLimit: 8,
+            label: "7–8 hours",
+            detail: "A small, sustainable step up · from your last 4 weeks.",
+          },
+          {
+            id: "hours-10",
+            weeklyHoursLimit: 10,
+            label: "9+ hours",
+            detail: "Only if your schedule truly allows it.",
+          },
+        ],
+        longestWorkoutLabel: "Longest ride in hours",
+        weekdayOptions: [
+          { weekday: 1, label: "Mon" },
+          { weekday: 2, label: "Tue" },
+          { weekday: 3, label: "Wed" },
+          { weekday: 4, label: "Thu" },
+          { weekday: 5, label: "Fri" },
+          { weekday: 6, label: "Sat" },
+          { weekday: 7, label: "Sun" },
+        ],
         derivedPoolNote:
           scheduleMode.mode === "flexible"
             ? "Your weekly limit sets 3 Workouts up to 6 h, 4 up to 8 h, or 5 above 8 h."
@@ -479,11 +548,11 @@ function questionForKey(
         prompt: "Any fixed commitments, other training, or time off to account for?",
         noneOption: {
           label: "Nothing fixed",
-          description: "No fixed commitments, other training, or time off to account for.",
+          detail: "No fixed commitments, other training, or time off to account for.",
         },
         authoredOption: {
           label: "Something else",
-          description: "Add scheduling details in your own words.",
+          detail: "Add scheduling details in your own words.",
           editorLabel: "Scheduling details",
           placeholder: "Add only the scheduling details this Plan should account for",
         },
@@ -497,17 +566,17 @@ function questionForKey(
           {
             baseline: "regular",
             label: "Regular",
-            description: "I have been training consistently.",
+            detail: "I have been training consistently.",
           },
           {
             baseline: "occasional",
             label: "Occasional",
-            description: "I have trained some weeks but not consistently.",
+            detail: "I have trained some weeks but not consistently.",
           },
           {
             baseline: "starting-again",
             label: "Starting again",
-            description: "I need a conservative return to regular training.",
+            detail: "I need a conservative return to regular training.",
           },
         ],
       };
@@ -520,22 +589,22 @@ function questionForKey(
           {
             kind: "none",
             label: "No training restrictions",
-            description: "No temporary operational limit needs to shape this Plan.",
+            detail: "No temporary operational limit needs to shape this Plan.",
           },
           {
             kind: "no-training",
-            label: "No training",
-            description: "Keep all Workouts out until the restriction changes.",
+            label: "No training for now",
+            detail: "Keep all Workouts out until the restriction changes.",
           },
           {
             kind: "no-hard-training",
             label: "No hard training for now",
-            description: "Keep intensity out until the restriction changes.",
+            detail: "Keep intensity out until the restriction changes.",
           },
           {
             kind: "max-duration",
             label: "I have a duration limit",
-            description: "Set the longest Workout the Plan may use.",
+            detail: "Set the longest Workout the Plan may use.",
           },
         ],
       };
@@ -584,7 +653,7 @@ export function validPlanCreationAnswer(
   if (answer.kind === "success") {
     const goal = requireGoal(flow);
     return goal.kind === "fitness"
-      ? answer.success.kind === "authored"
+      ? answer.success.kind === "fitness-choice" || answer.success.kind === "authored"
       : answer.success.kind === "event-finish" || answer.success.kind === "authored";
   }
   if (answer.kind === "plan-length") return requireGoal(flow).kind === "fitness";

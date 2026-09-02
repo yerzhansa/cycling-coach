@@ -25,6 +25,7 @@ export interface ComposerHandle {
 
 export function Composer(props: {
   readonly handle: RefObject<ComposerHandle | null>;
+  readonly draftMemory?: RefObject<string>;
   readonly inputId?: string;
   readonly hidden?: boolean;
   readonly leadingAction?: ReactNode;
@@ -41,7 +42,7 @@ export function Composer(props: {
 }): ReactElement {
   const form = useRef<HTMLFormElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(props.draftMemory?.current ?? "");
   const [selected, setSelected] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -81,15 +82,19 @@ export function Composer(props: {
     if (input === null || input.value === restored.text) return;
     if (input.value.length > 0 && restored.state !== "restored") return;
     input.value = restored.text;
+    if (props.draftMemory !== undefined) props.draftMemory.current = restored.text;
     setDraft(restored.text);
-  }, [attachmentSurface, props.surface]);
+  }, [attachmentSurface, props.draftMemory, props.surface]);
 
   useEffect(
     () => () => {
+      if (props.surface === undefined && textarea.current !== null) {
+        actions?.saveAttachmentDraftText(textarea.current.value);
+      }
       if (saveTimer.current !== null) clearTimeout(saveTimer.current);
       saveTimer.current = null;
     },
-    [],
+    [actions, props.surface],
   );
 
   useImperativeHandle(
@@ -106,6 +111,7 @@ export function Composer(props: {
           input.value = "";
           input.focus();
         }
+        if (props.draftMemory !== undefined) props.draftMemory.current = "";
         setDraft("");
         setSelected(0);
         setDismissed(false);
@@ -143,6 +149,7 @@ export function Composer(props: {
       if (!acknowledged) return;
       if (input.value === value) {
         input.value = "";
+        if (props.draftMemory !== undefined) props.draftMemory.current = "";
         setDraft("");
         setSelected(0);
         setDismissed(false);
@@ -205,6 +212,7 @@ export function Composer(props: {
     <form
       ref={form}
       className="composer relative"
+      data-parity="composer"
       data-chat-attachment-dropzone={
         props.surface === undefined && !inputDisabled && canChat ? "true" : undefined
       }
@@ -233,6 +241,8 @@ export function Composer(props: {
         <textarea
           id={inputId}
           ref={textarea}
+          data-parity="composer.textarea"
+          defaultValue={props.draftMemory?.current ?? ""}
           className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[3px] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
           rows={2}
           placeholder={
@@ -248,6 +258,7 @@ export function Composer(props: {
           aria-activedescendant={open ? `${listboxId}-option-${active}` : undefined}
           onChange={(event) => {
             const value = event.currentTarget.value;
+            if (props.draftMemory !== undefined) props.draftMemory.current = value;
             setDraft(value);
             setSelected(0);
             setDismissed(false);

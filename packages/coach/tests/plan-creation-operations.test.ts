@@ -34,7 +34,7 @@ const eventGoal: PlanCreationAnswerInput = {
 };
 const fitnessGoal: PlanCreationAnswerInput = {
   kind: "goal",
-  goal: { kind: "fitness", outcome: "Build power" },
+  goal: { kind: "fitness" },
 };
 const eventSuccess: PlanCreationAnswerInput = {
   kind: "success",
@@ -42,7 +42,7 @@ const eventSuccess: PlanCreationAnswerInput = {
 };
 const fitnessSuccess: PlanCreationAnswerInput = {
   kind: "success",
-  success: { kind: "authored", text: "Ride strongly for four hours" },
+  success: { kind: "fitness-choice", choice: "climb-stronger" },
 };
 const startTiming: PlanCreationAnswerInput = {
   kind: "start-timing",
@@ -195,21 +195,21 @@ describe("Plan Creation operations", () => {
     expect(questionKind(projectPlanCreationCard(test.current(), { today }))).toBe("goal-question");
     const answers = [
       eventGoal,
-      eventSuccess,
-      startTiming,
       fixedMode,
       fixedAvailability,
+      startTiming,
       noCommitments,
       regularBaseline,
+      eventSuccess,
       noRestriction,
     ];
     const expectedQuestions = [
-      "success-question",
-      "start-timing-question",
       "schedule-mode-question",
       "availability-question",
+      "start-timing-question",
       "commitments-question",
       "baseline-question",
+      "success-question",
       "restriction-question",
       null,
     ];
@@ -224,18 +224,77 @@ describe("Plan Creation operations", () => {
       openQuestion: null,
       answeredSummaries: [
         { answerKey: "goal" },
-        { answerKey: "success" },
-        { answerKey: "start-timing" },
         { answerKey: "schedule-mode" },
         {
           answerKey: "availability",
           detail: "Up to 8 h a week, longest Workout 3 h, Tue Thu Sat",
         },
+        { answerKey: "start-timing" },
         { answerKey: "commitments" },
         { answerKey: "baseline" },
+        { answerKey: "success" },
         { answerKey: "restriction", detail: "No training restrictions" },
       ],
     });
+  });
+
+  it("accepts every Training Restriction shape and projects its optional end date", async () => {
+    const priorAnswers = [
+      eventGoal,
+      fixedMode,
+      fixedAvailability,
+      startTiming,
+      noCommitments,
+      regularBaseline,
+      eventSuccess,
+    ];
+    const cases: readonly [PlanCreationAnswerInput, string][] = [
+      [noRestriction, "No training restrictions"],
+      [
+        { kind: "restriction", restriction: { kind: "no-training" } },
+        "No training",
+      ],
+      [
+        {
+          kind: "restriction",
+          restriction: { kind: "no-training", endDate: "1998-09-14" },
+        },
+        "No training until 1998-09-14",
+      ],
+      [
+        { kind: "restriction", restriction: { kind: "no-hard-training" } },
+        "No hard training",
+      ],
+      [
+        {
+          kind: "restriction",
+          restriction: { kind: "no-hard-training", endDate: "1998-09-14" },
+        },
+        "No hard training until 1998-09-14",
+      ],
+      [
+        { kind: "restriction", restriction: { kind: "max-duration", hours: 1.5 } },
+        "Maximum Workout duration 1.5 h",
+      ],
+      [
+        {
+          kind: "restriction",
+          restriction: { kind: "max-duration", hours: 1.5, endDate: "1998-09-14" },
+        },
+        "Maximum Workout duration 1.5 h until 1998-09-14",
+      ],
+    ];
+    for (const [answer, detail] of cases) {
+      const test = harness(snapshot(priorAnswers.map((value, index) => stored(index + 1, value))));
+      const model = await answered(test.submit(answer));
+      expect(model).toMatchObject({
+        readiness: "ready",
+        openQuestion: null,
+        answeredSummaries: expect.arrayContaining([
+          expect.objectContaining({ answerKey: "restriction", detail, answer }),
+        ]),
+      });
+    }
   });
 
   it("asks every Fitness Goal question in flow order and discloses the flexible pool", async () => {
@@ -246,21 +305,21 @@ describe("Plan Creation operations", () => {
     const test = harness(snapshot(), { read: evidence });
     const answers = [
       fitnessGoal,
-      fitnessSuccess,
       { kind: "plan-length", weeks: 12 } as const,
-      startTiming,
       flexibleMode,
       flexibleAvailability,
+      startTiming,
       noCommitments,
+      fitnessSuccess,
       noRestriction,
     ];
     const expectedQuestions = [
-      "success-question",
       "plan-length-question",
-      "start-timing-question",
       "schedule-mode-question",
       "availability-question",
+      "start-timing-question",
       "commitments-question",
+      "success-question",
       "restriction-question",
       null,
     ];
@@ -275,7 +334,12 @@ describe("Plan Creation operations", () => {
       }
     }
     expect(evidence).toHaveBeenCalledOnce();
-    expect(JSON.parse(test.current().answers.at(-2)?.valueJson ?? "null")).toEqual({
+    expect(
+      JSON.parse(
+        test.current().answers.find((answer) => answer.answerKey === "baseline")?.valueJson ??
+          "null",
+      ),
+    ).toEqual({
       answer: regularBaseline,
       source: { kind: "derived", label: "synced training history" },
     });
@@ -283,16 +347,16 @@ describe("Plan Creation operations", () => {
       readiness: "ready",
       answeredSummaries: [
         { answerKey: "goal" },
-        { answerKey: "success" },
         { answerKey: "plan-length", detail: "12 weeks" },
-        { answerKey: "start-timing" },
         { answerKey: "schedule-mode", detail: "Flexible Schedule" },
         {
           answerKey: "availability",
           detail: "Up to 8 h a week, longest Workout 3 h, 4 Workouts in the flexible pool",
         },
+        { answerKey: "start-timing" },
         { answerKey: "commitments" },
         { answerKey: "baseline" },
+        { answerKey: "success" },
         { answerKey: "restriction" },
       ],
     });
@@ -301,36 +365,48 @@ describe("Plan Creation operations", () => {
   it("accepts Edit for a valid earlier key, appends, and projects only its latest row", async () => {
     const test = harness();
     await answered(test.submit(fitnessGoal));
-    await answered(test.submit(fitnessSuccess));
     await answered(test.submit({ kind: "plan-length", weeks: 8 }));
     const edited = await answered(test.submit({ kind: "plan-length", weeks: 16 }));
     expect(test.current().answers.map((row) => row.answerKey)).toEqual([
       "goal",
-      "success",
       "plan-length",
       "plan-length",
     ]);
-    expect(test.current().answers.at(-1)).toMatchObject({ sequence: 4, creationVersion: 5 });
+    expect(test.current().answers.at(-1)).toMatchObject({ sequence: 3, creationVersion: 4 });
     expect(
       edited.answeredSummaries.filter((summary) => summary.answerKey === "plan-length"),
     ).toMatchObject([{ answerKey: "plan-length", title: "Plan length", detail: "16 weeks" }]);
-    expect(questionKind(edited)).toBe("start-timing-question");
+    expect(questionKind(edited)).toBe("schedule-mode-question");
   });
 
   it("invalidates success and Plan length only when the goal kind changes", async () => {
     const test = harness();
-    await answered(test.submit(fitnessGoal));
-    await answered(test.submit(fitnessSuccess));
-    await answered(test.submit({ kind: "plan-length", weeks: 12 }));
+    for (const answer of [
+      fitnessGoal,
+      { kind: "plan-length", weeks: 12 } as const,
+      fixedMode,
+      fixedAvailability,
+      startTiming,
+      noCommitments,
+      regularBaseline,
+      fitnessSuccess,
+    ]) {
+      await answered(test.submit(answer));
+    }
     const sameKind = await answered(
       test.submit({ kind: "goal", goal: { kind: "fitness", outcome: "Build endurance" } }),
     );
     expect(sameKind.answeredSummaries.map((summary) => summary.answerKey)).toEqual([
       "goal",
-      "success",
       "plan-length",
+      "schedule-mode",
+      "availability",
+      "start-timing",
+      "commitments",
+      "baseline",
+      "success",
     ]);
-    expect(questionKind(sameKind)).toBe("start-timing-question");
+    expect(questionKind(sameKind)).toBe("restriction-question");
 
     const changedKind = await answered(
       test.submit({
@@ -338,28 +414,44 @@ describe("Plan Creation operations", () => {
         goal: { kind: "event-manual", name: "Autumn ride", date: "1998-11-08" },
       }),
     );
-    expect(changedKind.answeredSummaries.map((summary) => summary.answerKey)).toEqual(["goal"]);
+    expect(changedKind.answeredSummaries.map((summary) => summary.answerKey)).toEqual([
+      "goal",
+      "schedule-mode",
+      "availability",
+      "start-timing",
+      "commitments",
+      "baseline",
+    ]);
     expect(questionKind(changedKind)).toBe("success-question");
     const reconfirmed = await answered(test.submit(eventSuccess));
     expect(reconfirmed.answeredSummaries.map((summary) => summary.answerKey)).toEqual([
       "goal",
+      "schedule-mode",
+      "availability",
+      "start-timing",
+      "commitments",
+      "baseline",
       "success",
     ]);
-    expect(questionKind(reconfirmed)).toBe("start-timing-question");
+    expect(questionKind(reconfirmed)).toBe("restriction-question");
     const changedEventKind = await answered(test.submit(eventGoal));
     expect(changedEventKind.answeredSummaries.map((summary) => summary.answerKey)).toEqual([
       "goal",
+      "schedule-mode",
+      "availability",
+      "start-timing",
+      "commitments",
+      "baseline",
+      "success",
     ]);
-    expect(questionKind(changedEventKind)).toBe("success-question");
+    expect(questionKind(changedEventKind)).toBe("restriction-question");
   });
 
-  it("re-asks availability after Schedule mode changes and rejects a mismatched mode", async () => {
+  it("re-asks availability across a Schedule mode flip away and back", async () => {
     const test = harness();
     for (const value of [
       fitnessGoal,
-      fitnessSuccess,
       { kind: "plan-length", weeks: 8 } as const,
-      startTiming,
       flexibleMode,
       flexibleAvailability,
     ]) {
@@ -376,7 +468,14 @@ describe("Plan Creation operations", () => {
       reason: "invalid-answer",
       planCreation: { openQuestion: { kind: "availability-question", mode: "fixed" } },
     });
-    expect(test.current().answers).toHaveLength(7);
+    expect(test.current().answers).toHaveLength(5);
+    await answered(test.submit(fixedAvailability));
+    expect(questionKind(await answered(test.submit(flexibleMode)))).toBe("availability-question");
+    const flippedBack = await answered(test.submit(fixedMode));
+    expect(questionKind(flippedBack)).toBe("availability-question");
+    expect(flippedBack.answeredSummaries.map((summary) => summary.answerKey)).not.toContain(
+      "availability",
+    );
   });
 
   it("rejects Event Goal Plan length and other out-of-order keys", async () => {
@@ -386,30 +485,44 @@ describe("Plan Creation operations", () => {
       reason: "answer-not-expected",
     });
     await answered(test.submit(eventGoal));
-    expect(questionKind(await answered(test.submit(fitnessSuccess)))).toBe("start-timing-question");
     await expect(test.submit({ kind: "plan-length", weeks: 8 })).resolves.toMatchObject({
       status: "rejected",
       reason: "answer-not-expected",
-      planCreation: { openQuestion: { kind: "start-timing-question" } },
+      planCreation: { openQuestion: { kind: "schedule-mode-question" } },
     });
-    expect(test.current().answers).toHaveLength(2);
+    for (const answer of [
+      fixedMode,
+      fixedAvailability,
+      startTiming,
+      noCommitments,
+      regularBaseline,
+    ]) {
+      await answered(test.submit(answer));
+    }
+    await expect(test.submit(fitnessSuccess)).resolves.toMatchObject({
+      status: "rejected",
+      reason: "invalid-answer",
+      planCreation: { openQuestion: { kind: "success-question" } },
+    });
+    expect(test.current().answers).toHaveLength(6);
   });
 
   it("rejects an earliest start before the host civil date", async () => {
     const test = harness();
     await answered(test.submit(eventGoal));
-    await answered(test.submit(eventSuccess));
+    await answered(test.submit(fixedMode));
+    await answered(test.submit(fixedAvailability));
     await expect(
       test.submit({ kind: "start-timing", timing: { kind: "earliest", date: "1998-09-01" } }),
     ).resolves.toMatchObject({
       status: "rejected",
       reason: "invalid-answer",
       planCreation: {
-        version: 3,
+        version: 4,
         openQuestion: { kind: "start-timing-question", earliestAllowed: today },
       },
     });
-    expect(test.recordAnswer).toHaveBeenCalledTimes(2);
+    expect(test.recordAnswer).toHaveBeenCalledTimes(3);
   });
 
   it("replays an identical answer result without appending another row", async () => {
@@ -443,7 +556,9 @@ describe("Plan Creation operations", () => {
       source: { kind: "athlete" },
     });
     expect(projectPlanCreationCard(test.current(), { today })).toMatchObject({
-      answeredSummaries: [{ answerKey: "goal", detail: "Build power" }],
+      answeredSummaries: [
+        { answerKey: "goal", detail: "Build fitness for a fixed number of weeks." },
+      ],
     });
     const legacy = snapshot([
       {
@@ -464,9 +579,7 @@ describe("Plan Creation operations", () => {
   ])("derives a %s-hour flexible week as a %s-Workout pool", (weeklyHoursLimit, poolSize) => {
     const answers: PlanCreationAnswerInput[] = [
       fitnessGoal,
-      fitnessSuccess,
       { kind: "plan-length", weeks: 8 },
-      startTiming,
       flexibleMode,
       {
         kind: "availability",
@@ -552,11 +665,11 @@ describe("Plan Creation operations", () => {
   it("projects only valid latest answers in flow order", () => {
     const answers = [
       stored(1, fitnessGoal),
-      stored(2, fitnessSuccess),
-      stored(3, { kind: "plan-length", weeks: 8 }),
-      stored(4, startTiming),
-      stored(5, flexibleMode),
-      stored(6, flexibleAvailability),
+      stored(2, { kind: "plan-length", weeks: 8 }),
+      stored(3, flexibleMode),
+      stored(4, flexibleAvailability),
+      stored(5, startTiming),
+      stored(6, fitnessSuccess),
       stored(7, fixedMode),
     ];
     const current = snapshot(answers);
@@ -565,10 +678,10 @@ describe("Plan Creation operations", () => {
       readiness: "incomplete",
       answeredSummaries: [
         { answerKey: "goal" },
-        { answerKey: "success" },
         { answerKey: "plan-length" },
-        { answerKey: "start-timing" },
         { answerKey: "schedule-mode", detail: "Fixed Schedule" },
+        { answerKey: "start-timing" },
+        { answerKey: "success", detail: "Climb stronger" },
       ],
       openQuestion: { kind: "availability-question", mode: "fixed" },
     });

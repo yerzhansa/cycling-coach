@@ -50,6 +50,7 @@ export function ChatView(): ReactElement {
   const surface = useRef<HTMLElement>(null);
   const conversation = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const composerDraft = useRef("");
   const [contextOpen, setContextOpen] = useState(true);
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [compact, setCompact] = useState(false);
@@ -220,7 +221,9 @@ export function ChatView(): ReactElement {
               <AttachmentPanel />
               <QueuedMessages />
             </div>
-            <Composer handle={composer} hidden={decisionCustomOpen || planCreationEditorOpen} />
+            {decisionCustomOpen || planCreationEditorOpen ? null : (
+              <Composer handle={composer} draftMemory={composerDraft} />
+            )}
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>
         </div>

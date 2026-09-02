@@ -2,141 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Browser, type Page, type PlaywrightWorkerArgs } from "@playwright/test";
-import {
-  createPlanCreationRepository,
-  type PlanCreationRepository,
-} from "@enduragent/kernel/planning";
-import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
-import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
-import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
-import {
-  createPlanCreationOperations,
-  type PlanCreationHost,
-} from "../../../../packages/coach/src/plan-creation-operations.js";
-import {
-  launchDesktopFixture,
-  type DesktopFixtureScript,
-  type RunningDesktopFixture,
-} from "../helpers/desktop-fixture.js";
-import { createPlanQaFixtureScript } from "../helpers/plan-qa-live.js";
+import { launchDesktopFixture, type RunningDesktopFixture } from "../helpers/desktop-fixture.js";
+import { PlanCreationBackend } from "../helpers/plan-creation-backend.js";
 
 const token = "c".repeat(43);
-const emptyAttachmentComposer = {
-  schemaVersion: 1,
-  capabilities: {
-    schemaVersion: 1,
-    active: { provider: "test", model: "text-only", transport: "test" },
-    documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
-    completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
-    plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
-    images: {
-      enabled: false,
-      mediaTypes: [],
-      reason: "model_incompatible",
-      source: "maintained_catalogue",
-      checkedAt: "1998-09-02T00:00:00.000Z",
-    },
-  },
-  draft: null,
-} as const;
-
-interface ScriptRequest {
-  readonly method: string;
-  readonly params: unknown;
-}
-
-const response = (value: unknown): readonly string[] => [JSON.stringify(value)];
-
-class PlanCreationBackend {
-  readonly script: DesktopFixtureScript;
-  private store: (SqlStore & MigratorStore) | undefined;
-  private repository: PlanCreationRepository | undefined;
-  private host: PlanCreationHost | undefined;
-  private sequence = 0;
-  private instant = 883_612_800_000;
-
-  constructor(private readonly databasePath: string) {
-    const base = createPlanQaFixtureScript();
-    this.script = {
-      onRequest: async (value) => {
-        const request = value as ScriptRequest;
-        if (request.method === "getChatAttachmentComposer") {
-          return response(emptyAttachmentComposer);
-        }
-        if (request.method === "resumePlanningRequests") return response({ deliveries: [] });
-        if (request.method === "listPlanningRequests") {
-          return response({ deliveries: [], planCreation: await this.requireHost().readCard() });
-        }
-        if (request.method === "plan_creation.start") {
-          return response(
-            await this.requireHost()["plan_creation.start"](
-              request.params as Parameters<PlanCreationHost["plan_creation.start"]>[0],
-            ),
-          );
-        }
-        if (request.method === "plan_creation.answer") {
-          return response(
-            await this.requireHost()["plan_creation.answer"](
-              request.params as Parameters<PlanCreationHost["plan_creation.answer"]>[0],
-            ),
-          );
-        }
-        return base.onRequest(value);
-      },
-    };
-  }
-
-  async open(): Promise<void> {
-    this.store = openSqliteStorage(this.databasePath);
-    await runMigrations(this.store, MIGRATIONS);
-    this.repository = createPlanCreationRepository(this.store);
-    this.host = createPlanCreationOperations({
-      repository: this.repository,
-      identity: {
-        deviceId: async () => "fixture-device",
-        newUlid: () => `${++this.sequence}`.padStart(26, "0"),
-        hlcStamp: () => ({ physicalMs: this.instant++, counter: 0 }),
-      },
-      crypto: globalThis.crypto,
-      eventCandidates: { read: async () => [] },
-    });
-  }
-
-  async reopen(): Promise<void> {
-    await this.close();
-    await this.open();
-  }
-
-  async close(): Promise<void> {
-    await this.store?.close();
-    this.store = undefined;
-    this.repository = undefined;
-    this.host = undefined;
-  }
-
-  async inspect() {
-    const store = this.requireStore();
-    return {
-      creation: await store.get("SELECT status,version FROM plan_creation"),
-      answers: await store.all(
-        "SELECT sequence,creation_version,answer_key FROM plan_creation_answer ORDER BY sequence",
-      ),
-      commands: await store.all(
-        "SELECT command_name,status FROM planning_command WHERE command_name IN ('plan_creation.start','plan_creation.answer') ORDER BY created_at_ms,command_id",
-      ),
-    };
-  }
-
-  private requireStore(): SqlStore & MigratorStore {
-    if (this.store === undefined) throw new TypeError("Plan Creation store is closed");
-    return this.store;
-  }
-
-  private requireHost(): PlanCreationHost {
-    if (this.host === undefined) throw new TypeError("Plan Creation host is closed");
-    return this.host;
-  }
-}
 
 interface Scenario {
   readonly backend: PlanCreationBackend;
@@ -150,8 +19,8 @@ type Playwright = PlaywrightWorkerArgs["playwright"];
 
 async function connect(playwright: Playwright, fixture: RunningDesktopFixture) {
   const browser = await playwright.chromium.connectOverCDP(fixture.remoteDebuggingUrl);
-  const context = browser.contexts()[0];
-  const page = context
+  const page = browser
+    .contexts()[0]
     ?.pages()
     .find((candidate) => candidate.url().startsWith("enduragent://app/"));
   if (page === undefined) throw new TypeError("Plan Creation renderer is unavailable");
@@ -164,18 +33,32 @@ async function connect(playwright: Playwright, fixture: RunningDesktopFixture) {
 async function launch(playwright: Playwright): Promise<Scenario> {
   const scratch = await mkdtemp(join(tmpdir(), "plan-creation-"));
   const backend = new PlanCreationBackend(join(scratch, "store.db"));
-  await backend.open();
-  const fixture = await launchDesktopFixture({
-    script: backend.script,
-    token,
-    width: 1180,
-    height: 820,
-    colorScheme: "light",
-    reducedMotion: true,
-    hidden: true,
-    routeChatAttachmentComposer: true,
-  });
-  return { backend, fixture, scratch, ...(await connect(playwright, fixture)) };
+  let fixture: RunningDesktopFixture | undefined;
+  try {
+    await backend.open();
+    fixture = await launchDesktopFixture({
+      script: backend.script,
+      token,
+      width: 1180,
+      height: 820,
+      colorScheme: "light",
+      reducedMotion: true,
+      hidden: true,
+      routeChatAttachmentComposer: true,
+    });
+    return { backend, fixture, scratch, ...(await connect(playwright, fixture)) };
+  } catch (error) {
+    try {
+      await fixture?.close();
+    } finally {
+      try {
+        await backend.close();
+      } finally {
+        await rm(scratch, { recursive: true, force: true });
+      }
+    }
+    throw error;
+  }
 }
 
 async function relaunch(scenario: Scenario, playwright: Playwright): Promise<void> {
@@ -186,74 +69,95 @@ async function relaunch(scenario: Scenario, playwright: Playwright): Promise<voi
 
 async function close(scenario: Scenario): Promise<void> {
   await scenario.browser.close().catch(() => {});
-  await scenario.fixture.close().catch(() => {});
-  await scenario.backend.close().catch(() => {});
-  await rm(scenario.scratch, { recursive: true, force: true });
+  try {
+    await expect(scenario.fixture.close()).resolves.toEqual({ livePids: [], listenerCount: 0 });
+  } finally {
+    try {
+      await scenario.backend.close();
+    } finally {
+      await rm(scenario.scratch, { recursive: true, force: true });
+    }
+  }
 }
 
-async function confirmFitnessGoal(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Start a Plan" }).click();
-  await page.getByRole("button", { name: "Improve without an event" }).click();
-  await page.getByRole("textbox", { name: "Goal outcome" }).fill("Build steady power");
-  await page.getByRole("button", { name: "Confirm goal" }).click();
+async function waitForVersion(backend: PlanCreationBackend, version: number): Promise<void> {
+  await expect.poll(async () => (await backend.card())?.version).toBe(version);
 }
 
-test("persists goal and success and restores the Plan length Card", async ({ playwright }) => {
+async function choose(page: Page, backend: PlanCreationBackend, version: number, answer: string) {
+  await page.locator(`[data-parity="choice.row"][data-answer="${answer}"]`).click();
+  await waitForVersion(backend, version);
+}
+
+async function answerThroughFitnessSuccess(scenario: Scenario): Promise<void> {
+  await scenario.page.getByRole("button", { name: "Start a Plan", exact: true }).click();
+  await waitForVersion(scenario.backend, 1);
+  await choose(scenario.page, scenario.backend, 2, "fitness");
+  await choose(scenario.page, scenario.backend, 3, "8");
+  await choose(scenario.page, scenario.backend, 4, "flexible");
+  await scenario.page.locator('[data-answer="hours-6"]').click();
+  await scenario.page.locator('[data-parity="availability.longest"]').fill("2");
+  await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+  await waitForVersion(scenario.backend, 5);
+  await choose(scenario.page, scenario.backend, 6, "asap");
+  await choose(scenario.page, scenario.backend, 7, "none");
+  await choose(scenario.page, scenario.backend, 8, "regular");
+  await choose(scenario.page, scenario.backend, 9, "train-consistently");
+}
+
+test("persists the Fitness success choice and restores the Restriction Card", async ({
+  playwright,
+}) => {
   const scenario = await launch(playwright);
   try {
-    await confirmFitnessGoal(scenario.page);
+    await answerThroughFitnessSuccess(scenario);
     await expect(
-      scenario.page.getByRole("heading", {
-        name: "What would success mean for this Fitness Goal?",
-      }),
+      scenario.page.locator('[data-parity="question.card"][data-question="restriction"]'),
     ).toBeVisible();
-    await scenario.page.getByRole("button", { name: "Something else", exact: true }).click();
-    await scenario.page
-      .getByRole("textbox", { name: "Success meaning" })
-      .fill("Ride four steady hours");
-    await scenario.page.getByRole("button", { name: "Confirm success" }).click();
-    await expect(scenario.page.getByText("Build steady power", { exact: true })).toBeVisible();
-    await expect(scenario.page.getByText("Ride four steady hours", { exact: true })).toBeVisible();
-    await expect(scenario.page.getByText("2 answers confirmed", { exact: true })).toBeVisible();
-    await expect(
-      scenario.page.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
-    ).toBeVisible();
+    await expect(scenario.page.getByText("Train consistently", { exact: true })).toBeVisible();
     await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeDisabled();
     await relaunch(scenario, playwright);
-    await expect(scenario.page.getByText("Build steady power", { exact: true })).toBeVisible();
-    await expect(scenario.page.getByText("Ride four steady hours", { exact: true })).toBeVisible();
     await expect(
-      scenario.page.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
+      scenario.page.locator('[data-parity="question.card"][data-question="restriction"]'),
     ).toBeVisible();
     await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeDisabled();
-    await expect(scenario.backend.inspect()).resolves.toEqual({
-      creation: { status: "in-progress", version: 3 },
-      answers: [
-        { sequence: 1, creation_version: 2, answer_key: "goal" },
-        { sequence: 2, creation_version: 3, answer_key: "success" },
-      ],
-      commands: [
+    const inspected = await scenario.backend.inspect();
+    expect(inspected.creation).toEqual({ status: "in-progress", version: 9 });
+    expect(inspected.answers).toEqual([
+      { sequence: 1, creation_version: 2, answer_key: "goal" },
+      { sequence: 2, creation_version: 3, answer_key: "plan-length" },
+      { sequence: 3, creation_version: 4, answer_key: "schedule-mode" },
+      { sequence: 4, creation_version: 5, answer_key: "availability" },
+      { sequence: 5, creation_version: 6, answer_key: "start-timing" },
+      { sequence: 6, creation_version: 7, answer_key: "commitments" },
+      { sequence: 7, creation_version: 8, answer_key: "baseline" },
+      { sequence: 8, creation_version: 9, answer_key: "success" },
+    ]);
+    expect(inspected.commands).toHaveLength(9);
+    expect(inspected.commands).toEqual(
+      expect.arrayContaining([
         { command_name: "plan_creation.start", status: "succeeded" },
         { command_name: "plan_creation.answer", status: "succeeded" },
-        { command_name: "plan_creation.answer", status: "succeeded" },
-      ],
-    });
+      ]),
+    );
   } finally {
     await close(scenario);
   }
 });
 
-test("restores the success Card after relaunching between answers", async ({ playwright }) => {
+test("restores the Plan length Card after relaunching between answers", async ({ playwright }) => {
   const scenario = await launch(playwright);
   try {
-    await confirmFitnessGoal(scenario.page);
+    await scenario.page.getByRole("button", { name: "Start a Plan", exact: true }).click();
+    await waitForVersion(scenario.backend, 1);
+    await choose(scenario.page, scenario.backend, 2, "fitness");
     await relaunch(scenario, playwright);
     await expect(
-      scenario.page.getByRole("heading", {
-        name: "What would success mean for this Fitness Goal?",
-      }),
+      scenario.page.locator('[data-parity="question.card"][data-question="plan-length"]'),
     ).toBeVisible();
-    await expect(scenario.page.getByRole("combobox", { name: "Message your coach" })).toBeDisabled();
+    await expect(
+      scenario.page.getByRole("combobox", { name: "Message your coach" }),
+    ).toBeDisabled();
     await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeDisabled();
   } finally {
     await close(scenario);

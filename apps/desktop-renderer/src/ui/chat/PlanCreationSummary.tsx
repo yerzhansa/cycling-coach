@@ -1,5 +1,6 @@
 import type { PlanCreationCardModel } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
+import { Check } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { useEnduragentStore } from "../../state/store";
@@ -13,47 +14,81 @@ export function PlanCreationSummary(props: {
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
   const ready = props.model.readiness === "ready";
   const canContinue = paused && props.model.openQuestion !== null;
+  const total =
+    props.model.openQuestion?.step.total ??
+    props.model.answeredSummaries[0]?.question.step.total ??
+    props.model.answeredSummaries.length;
   return (
     <section className="grid min-w-0 gap-inset" aria-label="Plan Creation progress">
       {props.model.answeredSummaries.length === 0 ? null : (
-        <dl className="m-0 grid gap-2 rounded-card bg-sunk p-3">
+        <div className="grid gap-2">
           {props.model.answeredSummaries.map((summary) => (
-            <div
+            <section
               key={summary.answerKey}
-              className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-inset text-sm"
+              className="grid min-w-0 grid-cols-[var(--ctl-h-sm)_minmax(0,1fr)_auto] items-center gap-inset rounded-card border border-line bg-surface px-4 py-3 text-sm"
+              data-parity="summary.row"
+              aria-label={`${summary.title} answer`}
+              role="status"
             >
+              <span className="grid size-8 place-items-center rounded-full bg-primary/10 text-primary">
+                <Check className="size-4" aria-hidden="true" />
+              </span>
               <div className="grid min-w-0 gap-[calc(var(--inset)/2)]">
-                <dt className="font-medium text-ink-2">
-                  {summary.title} · {summary.source.kind === "athlete" ? "your answer" : summary.source.label}
-                </dt>
-                <dd className="m-0 min-w-0 break-words font-medium">{summary.detail}</dd>
+                <p
+                  className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2"
+                  data-parity="summary.eyebrow"
+                >
+                  Answer recorded
+                </p>
+                <strong className="min-w-0 break-words font-medium" data-parity="summary.label">
+                  {summary.detail}
+                </strong>
+                <p className="m-0 text-xs text-ink-2" data-parity="summary.detail">
+                  {summary.title} ·{" "}
+                  {summary.source.kind === "athlete" ? "your answer" : summary.source.label}
+                </p>
               </div>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
+                data-parity="summary.edit"
                 aria-label={`Edit ${summary.title}`}
                 disabled={actions === null || busy || editingKey !== null}
                 onClick={() => actions?.editPlanCreation(summary.answerKey)}
               >
                 Edit
               </Button>
-            </div>
+            </section>
           ))}
-        </dl>
+        </div>
       )}
-      <Card size="sm" className="min-w-0">
+      <Card size="sm" className="min-w-0" data-parity="progress.card">
         <CardContent className="grid gap-inset">
-          <div className="grid gap-[calc(var(--inset)/2)]">
-            <strong>Plan Creation</strong>
-            <p className="m-0 text-xs text-ink-2">
-              {ready
-                ? "The essentials are complete. Draft preview arrives in a later update."
-                : `${props.model.answeredSummaries.length} ${props.model.answeredSummaries.length === 1 ? "answer" : "answers"} confirmed`}
-            </p>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-inset">
+            <div className="grid gap-[calc(var(--inset)/2)]">
+              <p
+                className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2"
+                data-parity="progress.eyebrow"
+              >
+                Plan creation
+              </p>
+              <strong data-parity="progress.title">New Plan</strong>
+            </div>
+            <span
+              className="self-start rounded-full bg-ink/7 px-2 py-1 text-xs font-medium text-ink-2"
+              data-parity="progress.status"
+            >
+              {ready ? "Ready" : "In progress"}
+            </span>
           </div>
-          {canContinue ? (
-            <div className="flex justify-end">
+          <p className="m-0 text-xs text-ink-2" data-parity="progress.summary">
+            {ready
+              ? "The essentials are complete. Draft preview arrives in a later update."
+              : `${props.model.answeredSummaries.length} of ${total} answered · your active Plan keeps running until you activate the new one.`}
+          </p>
+          <div className="flex justify-end" data-parity="progress.actions">
+            {canContinue ? (
               <Button
                 type="button"
                 variant="outline"
@@ -62,8 +97,8 @@ export function PlanCreationSummary(props: {
               >
                 Continue
               </Button>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     </section>

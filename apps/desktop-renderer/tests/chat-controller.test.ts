@@ -27,6 +27,7 @@ import type {
 import {
   CHAT_CONNECTION_INTERRUPTED_COPY,
   CHAT_EMPTY_RESPONSE_COPY,
+  CHAT_PLAN_CREATION_FAILURE_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
   CHAT_RESPONSE_STOPPED_COPY,
   NEW_CONVERSATION_MEMORY_WARNING_COPY,
@@ -41,18 +42,17 @@ import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn
 
 const questionStep = { current: 1, total: 9 } as const;
 
-function goalQuestion(prompt: string): Extract<
-  NonNullable<PlanCreationCardModel["openQuestion"]>,
-  { readonly kind: "goal-question" }
-> {
+function goalQuestion(
+  prompt: string,
+): Extract<NonNullable<PlanCreationCardModel["openQuestion"]>, { readonly kind: "goal-question" }> {
   return {
     kind: "goal-question",
     step: questionStep,
     prompt,
     candidates: [],
-    manualOption: {
-      label: "Something else",
-      description: "Name an event.",
+    eventNotListedOption: {
+      label: "Event not listed",
+      detail: "Tell me the event name and its exact date.",
       editorLabel: "Name the event.",
       placeholder: "Event name",
       nameLabel: "Event name",
@@ -60,9 +60,13 @@ function goalQuestion(prompt: string): Extract<
     },
     fitnessOption: {
       label: "Improve without an event",
-      description: "Build fitness.",
-      editorLabel: "Fitness Goal",
-      placeholder: "Describe the goal",
+      detail: "Build fitness.",
+    },
+    authoredOption: {
+      label: "Something else",
+      detail: "Name an event.",
+      editorLabel: "Name the event.",
+      placeholder: "Event name",
     },
   };
 }
@@ -73,16 +77,16 @@ function startTimingQuestion(): Extract<
 > {
   return {
     kind: "start-timing-question",
-    step: { current: 4, total: 9 },
+    step: { current: 5, total: 9 },
     prompt: "When could this Plan start?",
     earliestAllowed: "1998-10-01",
     options: [
       {
         timing: "as-soon-as-possible",
         label: "As soon as possible",
-        description: "Start at the earliest suitable week.",
+        detail: "Start at the earliest suitable week.",
       },
-      { timing: "earliest", label: "From a date", description: "Set an earliest date." },
+      { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
     ],
     dateLabel: "Earliest start date",
   };
@@ -96,13 +100,13 @@ function planLengthSummary(weeks: 4 | 8 | 12 | 16): PlanCreationAnswerSummary {
     source: { kind: "athlete" },
     question: {
       kind: "plan-length-question",
-      step: { current: 3, total: 9 },
+      step: { current: 2, total: 9 },
       prompt: "How long should this Fitness Plan be?",
       options: [
-        { weeks: 4, label: "4 weeks", description: "A short block." },
-        { weeks: 8, label: "8 weeks", description: "One training cycle." },
-        { weeks: 12, label: "12 weeks", description: "Steady progression." },
-        { weeks: 16, label: "16 weeks", description: "The longest build." },
+        { weeks: 4, label: "4 weeks", detail: "A short block." },
+        { weeks: 8, label: "8 weeks", detail: "One training cycle." },
+        { weeks: 12, label: "12 weeks", detail: "Steady progression." },
+        { weeks: 16, label: "16 weeks", detail: "The longest build." },
       ],
     },
     answer: { kind: "plan-length", weeks },
@@ -2078,6 +2082,42 @@ describe("chat controller", () => {
       value: changed,
       paused: false,
       editingKey: null,
+    });
+  });
+
+  it("keeps a rejected Edit open with its error and current answer", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const answerPlanCreation = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "stale-version" as const,
+      planCreation: ready,
+    }));
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 16 });
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: ready,
+      paused: false,
+      editingKey: "plan-length",
+      error: CHAT_PLAN_CREATION_FAILURE_COPY,
+    });
+    expect(controls.at(-1)?.planCreation?.value?.answeredSummaries[0]?.answer).toEqual({
+      kind: "plan-length",
+      weeks: 12,
     });
   });
 

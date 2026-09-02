@@ -239,9 +239,9 @@ describe("chat view adapter", () => {
         step: { current: 1, total: 9 },
         prompt: "Goal?",
         candidates: [],
-        manualOption: {
-          label: "Something else" as const,
-          description: "Name an event.",
+        eventNotListedOption: {
+          label: "Event not listed" as const,
+          detail: "Tell me the event name and its exact date.",
           editorLabel: "Name the event.",
           placeholder: "Event name",
           nameLabel: "Event name",
@@ -249,9 +249,13 @@ describe("chat view adapter", () => {
         },
         fitnessOption: {
           label: "Improve without an event",
-          description: "Build fitness.",
-          editorLabel: "Fitness Goal",
-          placeholder: "Describe the goal",
+          detail: "Build fitness for a fixed number of weeks.",
+        },
+        authoredOption: {
+          label: "Something else" as const,
+          detail: "Tell me the event name and its exact date.",
+          editorLabel: "Name the event.",
+          placeholder: "Event name",
         },
       },
     };
@@ -366,9 +370,9 @@ describe("chat view adapter", () => {
               step: { current: 1, total: 9 },
               prompt: "Goal?",
               candidates: [],
-              manualOption: {
-                label: "Something else",
-                description: "Name an event.",
+              eventNotListedOption: {
+                label: "Event not listed",
+                detail: "Tell me the event name and its exact date.",
                 editorLabel: "Name the event.",
                 placeholder: "Event name",
                 nameLabel: "Event name",
@@ -376,9 +380,13 @@ describe("chat view adapter", () => {
               },
               fitnessOption: {
                 label: "Improve without an event",
-                description: "Build fitness.",
-                editorLabel: "Fitness Goal",
-                placeholder: "Describe the goal",
+                detail: "Build fitness for a fixed number of weeks.",
+              },
+              authoredOption: {
+                label: "Something else",
+                detail: "Tell me the event name and its exact date.",
+                editorLabel: "Name the event.",
+                placeholder: "Event name",
               },
             },
           },

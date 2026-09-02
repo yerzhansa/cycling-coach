@@ -1964,6 +1964,8 @@ export function createChatController(input: {
         expectedVersion: planCreation.version,
         answer,
       });
+      const submittedEditingKey = planCreationEditingKey;
+      const submittedEditReturnPaused = planCreationEditReturnPaused;
       planCreationBusy = true;
       planCreationError = null;
       render();
@@ -1978,7 +1980,19 @@ export function createChatController(input: {
         });
         pendingPlanCreationCommand = null;
         installPlanCreation(result.planCreation);
-        if (result.status === "rejected") planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
+        if (result.status === "rejected") {
+          if (
+            submittedEditingKey !== null &&
+            planCreation?.answeredSummaries.some(
+              (summary) => summary.answerKey === submittedEditingKey,
+            ) === true
+          ) {
+            planCreationEditingKey = submittedEditingKey;
+            planCreationEditReturnPaused = submittedEditReturnPaused;
+            planCreationPaused = false;
+          }
+          planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
+        }
       } catch {
         planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
       } finally {
