@@ -6,6 +6,10 @@ import {
   PLAN_CURRENT_INSPECTION_FIXTURE,
   selectInteractiveDevelopmentTemporaryRoot,
   TRAINING_CURRENT_INSPECTION_FIXTURE,
+  TRAINING_INCOMPLETE_INSPECTION_FIXTURE,
+  TRAINING_LIMITED_INSPECTION_FIXTURE,
+  TRAINING_NO_POWER_INSPECTION_FIXTURE,
+  TRAINING_STALE_INSPECTION_FIXTURE,
 } from "../scripts/interactive-development.mjs";
 
 const desktopRoot = join("/private", "tmp", "enduragent", "apps", "desktop");
@@ -58,7 +62,14 @@ describe("interactive desktop development plan", () => {
     expect(value.athleteHome).not.toBe(value.userData);
   });
 
-  it.each([PLAN_CURRENT_INSPECTION_FIXTURE, TRAINING_CURRENT_INSPECTION_FIXTURE])(
+  it.each([
+    PLAN_CURRENT_INSPECTION_FIXTURE,
+    TRAINING_CURRENT_INSPECTION_FIXTURE,
+    TRAINING_NO_POWER_INSPECTION_FIXTURE,
+    TRAINING_LIMITED_INSPECTION_FIXTURE,
+    TRAINING_INCOMPLETE_INSPECTION_FIXTURE,
+    TRAINING_STALE_INSPECTION_FIXTURE,
+  ])(
     "launches the bounded %s inspection fixture through the isolated command",
     (inspectionFixture) => {
       const value = plan({

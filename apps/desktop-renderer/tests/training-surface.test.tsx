@@ -20,6 +20,7 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller";
 import type { TrainingContextViewState } from "../src/training-context/controller";
 import { TrainingView } from "../src/ui/training/TrainingView";
+import { WorkoutArchiveExportControl } from "../src/ui/training/TrainingExportControls";
 import { pinDefaultLocale } from "./intl";
 
 const FIRST_ID = "a".repeat(64);
@@ -357,13 +358,23 @@ describe("training landing page", () => {
     render(<TrainingView />);
 
     expect(screen.getByRole("heading", { level: 1, name: "Training" })).toBeInTheDocument();
-    expect(screen.getByText("Completed riding and recent rides")).toBeInTheDocument();
+    expect(screen.getByText("Jul 6–12")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Import ride files" })).toBeInTheDocument();
     expect(
       [...document.querySelectorAll("[data-panel]")].map((node) => node.getAttribute("data-panel")),
     ).toEqual(["weekly-summary", "recent-rides", "power-progress"]);
-    expect(screen.getByText("2h 25m")).toBeInTheDocument();
-    expect(screen.getByText("66.6 km")).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: "Weekly summary" });
+    expect(within(summary).getByRole("heading", { name: "Weekly summary" })).toHaveClass("sr-only");
+    expect(within(summary).getByText("2h 25m")).toBeInTheDocument();
+    const weekMetrics = within(summary).getByText("66.6 km").parentElement;
+    expect(weekMetrics?.textContent).toBe("2 rides · 66.6 km · Load 119");
+    expect(weekMetrics).not.toHaveClass("flex");
+    expect(weekMetrics).not.toHaveClass("grid");
+    const recent = screen.getByRole("region", { name: "Recent rides" });
+    expect(within(recent).getByText("Newest first")).toBeInTheDocument();
+    expect(recent.querySelector('[data-parity="rides-previous-week"]')).toHaveTextContent(
+      "Previous week",
+    );
     expect(screen.queryByText("9,999")).not.toBeInTheDocument();
     expect(screen.queryByText("Mountain bike ride")).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
@@ -393,13 +404,29 @@ describe("training landing page", () => {
     const previous = within(group).getByRole("button", {
       name: "Previous week",
     });
+    const next = within(group).getByRole("button", { name: "Next week" });
+    expect(group).toHaveClass("gap-inset", "max-[761px]:gap-1");
+    expect(within(group).getAllByRole("button")).toEqual([previous, current, next]);
+    expect(previous).toHaveClass("[&_svg:not([class*='size-'])]:size-3");
+    expect(next).toHaveClass("[&_svg:not([class*='size-'])]:size-3");
+    expect(previous.querySelector("svg")).not.toHaveClass("size-4");
+    expect(next.querySelector("svg")).not.toHaveClass("size-4");
     expect(current).toHaveAttribute("aria-pressed", "true");
-    expect(previous).toHaveAttribute("aria-pressed", "false");
+    expect(previous).not.toHaveAttribute("aria-pressed");
+    expect(previous).toBeEnabled();
+    expect(next).toBeDisabled();
 
-    await user.click(previous);
+    const moreHistory = document.querySelector<HTMLButtonElement>(
+      '[data-parity="rides-previous-week"]',
+    );
+    expect(moreHistory).toBeInTheDocument();
+    if (moreHistory !== null) await user.click(moreHistory);
 
     expect(current).toHaveAttribute("aria-pressed", "false");
-    expect(previous).toHaveAttribute("aria-pressed", "true");
+    expect(previous).toBeDisabled();
+    expect(next).toBeEnabled();
+    expect(screen.getByText("Jun 29–Jul 5")).toBeInTheDocument();
+    expect(document.querySelector('[data-parity="rides-previous-week"]')).not.toBeInTheDocument();
     const periodStatus = screen
       .getAllByRole("status")
       .find((element) => element.id !== "ride-import-status");
@@ -408,6 +435,33 @@ describe("training landing page", () => {
     expect(
       screen.getByText("Power progress needs rides with recorded power in both 28-day windows."),
     ).toBeInTheDocument();
+  });
+
+  it("keeps focus inside the period group after chevron navigation", async () => {
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    const group = screen.getByRole("group", { name: "Completed riding period" });
+    await user.click(within(group).getByRole("button", { name: "Previous week" }));
+    expect(within(group).getByRole("button", { name: "This week" })).toHaveFocus();
+
+    await user.click(within(group).getByRole("button", { name: "Next week" }));
+    expect(within(group).getByRole("button", { name: "This week" })).toHaveFocus();
+  });
+
+  it("moves focus into the period group after the post-list period button unmounts", async () => {
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    const group = screen.getByRole("group", { name: "Completed riding period" });
+    const previous = document.querySelector<HTMLButtonElement>(
+      '[data-parity="rides-previous-week"]',
+    );
+    expect(previous).not.toBeNull();
+    if (previous === null) return;
+    await user.click(previous);
+
+    expect(within(group).getByRole("button", { name: "This week" })).toHaveFocus();
   });
 
   it("distinguishes partial totals, missing recorded values, and complete zero", () => {
@@ -473,11 +527,14 @@ describe("training landing page", () => {
     render(<TrainingView />);
 
     const figure = screen.getByRole("figure", {
-      name: "Six complete weeks of riding time",
+      name: "Weekly time 6 weeks",
     });
     expect(figure.parentElement).toHaveClass("max-[761px]:grid-cols-1", "max-[761px]:gap-[18px]");
     expect(figure).toHaveClass("max-[761px]:border-t", "max-[761px]:pt-3.5");
-    expect(figure.querySelectorAll(".training-trend-bar")).toHaveLength(6);
+    expect(figure.querySelector("figcaption")).toHaveClass("gap-row", "font-normal", "text-ink-3");
+    const bars = figure.querySelectorAll<HTMLElement>(".training-trend-bar");
+    expect(bars).toHaveLength(6);
+    expect(bars.item(3)).toHaveStyle({ height: "75%" });
     expect(figure.querySelector('[aria-hidden="true"]')).toHaveClass("max-[761px]:min-h-[76px]");
     const table = within(figure).getByRole("table", {
       name: "Six complete weeks of riding time data",
@@ -510,22 +567,74 @@ describe("training landing page", () => {
     render(<TrainingView />);
 
     const recent = screen.getByRole("region", { name: "Recent rides" });
-    expect(within(recent).getByText("River tempo")).toBeInTheDocument();
-    const datedRide = within(recent).getByText("Jul 9, 1998 · 10:00 PM");
-    expect(datedRide).toBeInTheDocument();
-    expect(datedRide).toHaveAttribute("datetime", "1998-07-09");
-    expect(within(recent).getByText("1h 25m")).toBeInTheDocument();
-    expect(within(recent).getByText("42.1 km")).toBeInTheDocument();
-    expect(within(recent).getByText("Load 91")).toHaveClass("max-[761px]:hidden");
-    expect(within(recent).getByText("Indoor ride")).toBeInTheDocument();
-    expect(within(recent).getByText("Jul 8, 1998")).toBeInTheDocument();
-    expect(within(recent).queryByText(/Jul 8, 1998 ·/u)).not.toBeInTheDocument();
-    expect(within(recent).getAllByText("Worth a look")).toHaveLength(1);
-    const reason = within(recent).getByText(
+    const firstRide = within(recent).getByRole("button", {
+      name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
+    });
+    const rideDay = firstRide.querySelector('[data-parity="ride-day"]');
+    const rideMeta = firstRide.querySelector('[data-parity="ride-meta"]');
+    const rideStats = firstRide.querySelector('[data-parity="ride-stats"]');
+    expect(firstRide.children[0]).toBe(rideDay);
+    expect(firstRide.children[2]).toBe(rideStats);
+    expect(firstRide).toHaveClass(
+      "grid-cols-[58px_minmax(0,1fr)_auto_18px]",
+      "max-[761px]:grid-cols-[46px_minmax(0,1fr)_18px]",
+      "max-[761px]:gap-row",
+      "group-data-[callout=true]/callout:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
+    );
+    expect(firstRide.closest("li")).toHaveAttribute("data-callout", "true");
+    expect(firstRide.closest("li")).not.toHaveClass(
+      "data-[callout=true]:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
+    );
+    expect(rideDay).toHaveAttribute("datetime", "1998-07-09");
+    expect(rideDay).toHaveTextContent("Thu9");
+    expect(rideDay).toHaveClass("grid", "gap-0.5", "text-xs", "leading-4", "text-ink-3");
+    expect(rideDay?.querySelector("strong")).toHaveTextContent("9");
+    expect(rideMeta).toHaveTextContent("Road · 42.1 km");
+    expect(rideMeta).toHaveClass(
+      "text-xs",
+      "leading-4",
+      "text-ink-3",
+      "max-[761px]:hidden",
+    );
+    expect(rideStats).toHaveClass(
+      "grid-cols-[repeat(2,auto)]",
+      "gap-x-[18px]",
+      "gap-y-1",
+      "max-[761px]:col-start-2",
+      "max-[761px]:row-start-2",
+    );
+    expect(rideStats?.children).toHaveLength(2);
+    expect(rideStats?.children[0]?.tagName).toBe("STRONG");
+    expect(rideStats?.children[0]).toHaveTextContent("1h 25m");
+    expect(rideStats?.children[1]).toHaveTextContent("Load 91");
+    expect(rideStats?.children[1]).not.toHaveClass("max-[761px]:hidden");
+    const reason = within(firstRide).getByText(
       "Longest recorded ride in the 28 days ending Jul 9, 1998",
     );
-    expect(reason).toHaveClass("[overflow-wrap:anywhere]", "whitespace-normal");
-    expect(reason).not.toHaveClass("text-ellipsis", "whitespace-nowrap");
+    expect(reason.previousElementSibling).toBe(rideMeta);
+    expect(reason).toHaveClass(
+      "overflow-hidden",
+      "text-xs",
+      "leading-4",
+      "font-medium",
+      "text-brand",
+      "text-ellipsis",
+      "whitespace-nowrap",
+    );
+    expect(reason).toHaveAttribute(
+      "title",
+      "Longest recorded ride in the 28 days ending Jul 9, 1998",
+    );
+    const arrow = firstRide.lastElementChild;
+    expect(arrow).toHaveClass("text-base", "leading-4", "text-ink-3");
+    const indoorRide = within(recent).getByRole("button", {
+      name: "Open ride review: Indoor ride, Jul 8, 1998",
+    });
+    expect(indoorRide.querySelector('[data-parity="ride-day"]')).toHaveTextContent("Wed8");
+    expect(indoorRide.querySelector('[data-parity="ride-meta"]')).toHaveTextContent(
+      "Indoor · 24.5 km",
+    );
+    expect(within(recent).getAllByText("Worth a look")).toHaveLength(1);
   });
 
   it("uses the units preference across the weekly summary, ride row, and Ride review", async () => {
@@ -539,8 +648,12 @@ describe("training landing page", () => {
 
     expect(document.querySelector('[data-summary-metric="distance"]')).toHaveTextContent("41.4 mi");
     expect(
-      within(screen.getByRole("region", { name: "Recent rides" })).getByText("26.2 mi"),
-    ).toBeInTheDocument();
+      within(screen.getByRole("region", { name: "Recent rides" }))
+        .getByRole("button", {
+          name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
+        })
+        .querySelector('[data-parity="ride-meta"]'),
+    ).toHaveTextContent("Road · 26.2 mi");
 
     await openFirstRide(user);
 
@@ -642,21 +755,55 @@ describe("ride review", () => {
       }),
     );
 
+    expect(screen.getByText("Jul 9, 1998")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to training" })).toHaveClass(
+      "h-ctl-sm",
+      "px-ctl-px-sm",
+      "text-xs",
+      "bg-surface",
+      "text-ink-2",
+    );
     const overview = screen.getByRole("region", { name: "River tempo" });
-    expect(overview).toHaveClass("[&_h2]:leading-8");
-    expect(within(overview).getByText("Road ride")).toBeInTheDocument();
+    expect(overview).toHaveClass("[&_h2]:leading-8", "[&_h2]:mt-2");
+    const eyebrow = within(overview).getByText("Road ride");
+    expect(eyebrow).toHaveClass("m-0", "font-semibold");
+    expect(eyebrow).not.toHaveClass("mb-2", "font-medium");
     const reviewDate = within(overview).getByText("Jul 9, 1998 · 10:00 PM");
     expect(reviewDate).toBeInTheDocument();
     expect(reviewDate).toHaveAttribute("datetime", "1998-07-09");
     expect(within(overview).getByText("1h 25m")).toBeInTheDocument();
     expect(within(overview).getByText("42.1 km")).toBeInTheDocument();
     const rideSummary = overview.querySelector("dl:first-of-type");
-    expect(rideSummary).toHaveClass("mt-[calc(var(--row-inset)+var(--inset))]", "gap-3.5");
-    const recordedMetrics = overview.querySelector("dl:nth-of-type(2)");
-    expect(recordedMetrics).toHaveClass("max-[761px]:grid-cols-2");
-    const metricLabels = [...overview.querySelectorAll("dl:nth-of-type(2) dt")].map(
-      (node) => node.textContent,
+    expect(rideSummary).toHaveClass(
+      "mt-[calc(var(--row-inset)+var(--inset))]",
+      "grid-cols-3",
+      "gap-3.5",
+      "pt-3.5",
+      "max-[520px]:grid-cols-1",
+      "[&_dd]:[overflow-wrap:anywhere]",
     );
+    expect(rideSummary).not.toHaveClass("max-[761px]:grid-cols-1");
+    expect(overview.querySelectorAll("dl")).toHaveLength(1);
+    expect(within(overview).getByText(/Longest recorded ride/u)).toBeInTheDocument();
+
+    const keyStats = screen.getByRole("region", { name: "Key stats" });
+    expect(keyStats).toHaveAttribute("data-parity", "ride-key-stats");
+    const keyStatsHeading = within(keyStats).getByRole("heading", {
+      level: 2,
+      name: "Key stats",
+    });
+    expect(keyStatsHeading).toHaveAttribute("id", "key-stats-title");
+    expect(keyStats).toHaveClass("[&>h2]:mb-row");
+    expect(overview.nextElementSibling).toBe(keyStats);
+    const recordedMetrics = keyStats.querySelector("dl");
+    expect(recordedMetrics).toHaveClass(
+      "my-3.5",
+      "grid-cols-4",
+      "border-y",
+      "py-3.5",
+      "max-[761px]:grid-cols-2",
+    );
+    const metricLabels = [...keyStats.querySelectorAll("dt")].map((node) => node.textContent);
     expect(metricLabels).toEqual([
       "Load",
       "Average power",
@@ -664,8 +811,7 @@ describe("ride review", () => {
       "Perceived exertion (0–10)",
     ]);
     expect(document.body).not.toHaveTextContent(FIRST_ID);
-    expect(within(overview).queryByText("Energy")).not.toBeInTheDocument();
-    expect(within(overview).getByText(/Longest recorded ride/u)).toBeInTheDocument();
+    expect(within(keyStats).queryByText("Energy")).not.toBeInTheDocument();
 
     const disclosure = screen.getByText("Recorded analysis and export").closest("details");
     expect(disclosure).not.toHaveAttribute("open");
@@ -692,6 +838,8 @@ describe("ride review", () => {
     await openFirstRideAnalysis(user);
 
     const panel = screen.getByRole("region", { name: "Export ride" });
+    const formatLabel = within(panel).getByText("File format");
+    expect(formatLabel).toHaveClass("font-medium");
     await user.click(within(panel).getByRole("combobox", { name: "File format" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "FIT",
@@ -712,6 +860,12 @@ describe("ride review", () => {
       });
     });
     expect(within(panel).getByRole("status")).toHaveTextContent("Export saved locally.");
+  });
+
+  it("uses the prototype label weight for workout archive export", () => {
+    render(<WorkoutArchiveExportControl oldest="1998-07-06" newest="1998-07-12" />);
+
+    expect(screen.getByText("Workout format")).toHaveClass("font-medium");
   });
 
   it("shows elapsed fallback as secondary metadata", async () => {
@@ -1362,16 +1516,37 @@ describe("training history states and import status", () => {
     });
     render(<TrainingView />);
 
-    expect(screen.getByRole("button", { name: "Last recorded week" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const periodGroup = screen.getByRole("group", { name: "Completed riding period" });
+    const lastRecorded = within(periodGroup).getByRole("button", {
+      name: "Last recorded week",
+    });
+    expect(lastRecorded).toBeDisabled();
+    expect(lastRecorded).not.toHaveAttribute("aria-pressed");
+    expect(within(periodGroup).getAllByRole("button")).toEqual([lastRecorded]);
+    expect(within(periodGroup).queryByRole("button", { name: "Previous week" })).toBeNull();
+    expect(within(periodGroup).queryByRole("button", { name: "Next week" })).toBeNull();
     expect(
       screen.getByText("Training could not be refreshed. Showing the last recorded data."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "This week" })).not.toBeInTheDocument();
     expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
-    expect(screen.getByText("Recorded through Jul 12, 1998")).toBeInTheDocument();
+    expect(screen.getByText("Recorded through Jul 12, 1998").tagName).toBe("STRONG");
+    expect(screen.getByRole("region", { name: "Recorded rides" })).toBeInTheDocument();
+    const notice = screen
+      .getByText("Training could not be refreshed. Showing the last recorded data.")
+      .closest("p");
+    expect(notice).toHaveClass("text-xs", "leading-4");
+  });
+
+  it("leads a complete last-recorded notice with its recorded-through date", () => {
+    setTraining(ready(history({ displayMode: "last-recorded" })));
+    render(<TrainingView />);
+
+    const coverage = screen.getByText("Recorded through Jul 12, 1998");
+    const notice = screen.getByText("Training may be out of date.").closest("p");
+    expect(coverage.tagName).toBe("STRONG");
+    expect(coverage.parentElement).toBe(notice);
+    expect(coverage.nextElementSibling).toHaveTextContent("Training may be out of date.");
   });
 
   it("combines stale and incomplete history into one warning", () => {
@@ -1397,12 +1572,16 @@ describe("training history states and import status", () => {
     useEnduragentStore.setState({ training: ready(panel) });
     render(<TrainingView />);
 
+    expect(screen.getByText("Recorded through Jul 9, 1998")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Training may be out of date, and some rides may be missing. Showing recorded rides through Jul 9, 1998.",
-      ),
+      screen.getByText("Training may be out of date, and some rides may be missing."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Some rides may be missing.")).not.toBeInTheDocument();
+    const ridesHeading = screen.getByRole("heading", {
+      level: 2,
+      name: "Latest available rides",
+    });
+    expect(ridesHeading).toHaveAttribute("id", "recent-rides-title");
   });
 
   it("renders sparse and unavailable history without substituting legacy data", () => {
