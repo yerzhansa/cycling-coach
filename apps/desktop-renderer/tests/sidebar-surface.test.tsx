@@ -4,10 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
-import {
-  restoreManualSyncFocus,
-  setManualSyncFocusTarget,
-} from "../src/state/manual-sync-focus";
+import { restoreManualSyncFocus, setManualSyncFocusTarget } from "../src/state/manual-sync-focus";
 import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice";
 import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
 import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice";
@@ -16,7 +13,7 @@ import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import { Sidebar } from "../src/ui/sidebar/Sidebar";
-import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restriction-focus";
+import { clearTrainingRestrictionFocusRequest } from "../src/ui/settings/restriction-focus";
 import { planReadModel } from "./plan-fixtures";
 
 function stubActions(): ChatActions {
@@ -411,7 +408,8 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "loading");
     expect(chipSurface()).toHaveClass("min-w-0");
     expect(chipSurface()).toHaveTextContent("Loading training data");
-    expect(screen.getByText("Sync now")).toHaveClass("max-[860px]:hidden");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Loading training data");
 
     update({
       training: {
@@ -428,6 +426,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "synced");
     expect(chipSurface()).toHaveTextContent("Training data synced");
     expect(chipSurface()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
     expect(chip()).toHaveAccessibleName(
       "Sync now · Training data synced · 1998-07-19 07:55:00 UTC",
     );
@@ -435,6 +434,9 @@ describe("sidebar sync chip", () => {
     update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
     expect(chip()).toHaveAttribute("data-status", "syncing");
     expect(chip()).toBeDisabled();
+    expect(chipSurface()).toHaveTextContent("Syncing");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Syncing");
 
     update({
       sync: toManualSyncViewState({
@@ -445,7 +447,10 @@ describe("sidebar sync chip", () => {
       }),
     });
     expect(chip()).toHaveAttribute("data-status", "attention");
+    expect(chipSurface()).toHaveTextContent("Sync needs attention");
     expect(chipSurface()).toHaveTextContent("Try again");
+    expect(screen.getByText("Try again")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Try again · Sync needs attention");
   });
 
   it("keeps Strava remedy navigation independent from syncing", async () => {
@@ -476,6 +481,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "synced");
     expect(chipSurface()).toHaveTextContent("60 hidden by Strava");
     expect(chipSurface()).toHaveTextContent("How to fix this");
+    expect(screen.getByText("Sync again")).toHaveAttribute("data-sync-action");
     expect(chipSurface()).not.toHaveTextContent("1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAttribute("title", "1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAccessibleName(
@@ -501,7 +507,7 @@ describe("sidebar sync chip", () => {
     ).toBeNull();
 
     await user.click(link);
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     clearTrainingRestrictionFocusRequest();
@@ -510,14 +516,14 @@ describe("sidebar sync chip", () => {
     await user.tab();
     expect(link).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     clearTrainingRestrictionFocusRequest();
     update({ activeView: "chat" });
     fireEvent.pointerDown(link, { pointerType: "touch" });
     fireEvent.click(link, { detail: 1 });
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     clearTrainingRestrictionFocusRequest();
@@ -531,7 +537,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toBeDisabled();
     expect(link).toBeEnabled();
     await user.click(link);
-    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(request).not.toHaveBeenCalled();
 
     update({
@@ -556,10 +562,14 @@ describe("sidebar sync chip", () => {
     update({ training: { ...EMPTY_TRAINING_SURFACE, status: "ready" } });
     expect(chip()).toHaveAttribute("data-status", "never");
     expect(chipSurface()).toHaveTextContent("Not synced yet");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Not synced yet");
 
     update({ training: { ...EMPTY_TRAINING_SURFACE, status: "unavailable" } });
     expect(chip()).toHaveAttribute("data-status", "unavailable");
     expect(chipSurface()).toHaveTextContent("Training data unavailable");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Training data unavailable");
   });
 
   it("requests a manual sync and restores keyboard focus to the activator", async () => {
@@ -580,6 +590,24 @@ describe("sidebar sync chip", () => {
     expect(request).toHaveBeenNthCalledWith(2, "keyboard");
     restoreManualSyncFocus();
     expect(document.activeElement).toBe(chip());
+  });
+
+  it("restores keyboard focus to the chip wrapper when the activator becomes disabled", () => {
+    const request = vi.fn();
+    useEnduragentStore.setState({ syncActions: { request } });
+    render(<Sidebar />);
+
+    fireEvent.click(chip());
+    expect(request).toHaveBeenCalledWith("keyboard");
+    update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
+    act(() => {
+      chip().blur();
+      restoreManualSyncFocus();
+    });
+
+    expect(chip()).toBeDisabled();
+    expect(chipSurface()).toHaveAttribute("tabindex", "-1");
+    expect(document.activeElement).toBe(chipSurface());
   });
 
   it("stays inert until the sync controller is bound", () => {

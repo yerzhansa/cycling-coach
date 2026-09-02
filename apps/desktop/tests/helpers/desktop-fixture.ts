@@ -741,7 +741,7 @@ export async function launchDesktopFixture(input: {
       consoleMessages.push(args.map((arg) => String(arg.value ?? "")).join(" "));
     });
     cdp = nextCdp;
-    await Promise.all([
+    const setup = [
       nextCdp.call("Runtime.enable"),
       nextCdp.call("Page.enable"),
       nextCdp.call("Emulation.setEmulatedMedia", {
@@ -753,13 +753,18 @@ export async function launchDesktopFixture(input: {
           },
         ],
       }),
-      nextCdp.call("Emulation.setDeviceMetricsOverride", {
-        width: input.width,
-        height: input.height,
-        deviceScaleFactor: 1,
-        mobile: false,
-      }),
-    ]);
+    ];
+    if (input.hidden !== false) {
+      setup.push(
+        nextCdp.call("Emulation.setDeviceMetricsOverride", {
+          width: input.width,
+          height: input.height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        }),
+      );
+    }
+    await Promise.all(setup);
     await refreshSurfaces();
   };
   const cleanupFixture = async (): Promise<void> => {

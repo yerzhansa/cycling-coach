@@ -4,7 +4,10 @@ import {
   readSelectedSourceRows,
   readSourceArtifactRows,
 } from "@enduragent/kernel/ingest";
-import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
+import {
+  referenceCaptureClock,
+  type ReferenceCaptureManifest,
+} from "@enduragent/kernel/reference/capture";
 import {
   IDENTITY_REFERENCE_BUNDLE_PROJECTION,
   KEEP_ALL_ACTIVITIES,
@@ -132,7 +135,7 @@ export function createLocalBundleProducer(
         } catch {
           curveProjection = {};
         }
-        produced = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow,
+        produced = { captureId: manifest.capture_id, captureClock: referenceCaptureClock(manifest.plan),
           bundle: bundleProjection({ ...bundle, ...curveProjection }) };
       } catch {
         projectionFailed = true;

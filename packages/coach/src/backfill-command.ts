@@ -165,7 +165,8 @@ async function real(options: CommandOptions): Promise<BackfillBenchmarkRecord> {
     finally { phases.push({ name, ms: performance.now() - phaseStarted, count: 1 }); }
   };
   const common = { env, apiKey: process.env.INTERVALS_ICU_API_KEY!, athleteId: process.env.INTERVALS_ICU_ATHLETE_ID!,
-    historyNewestDate: process.env.BACKFILL_HISTORY_NEWEST_DATE!, requestIntervalMs: options.requestIntervalMs,
+    historyNewestDate: process.env.BACKFILL_HISTORY_NEWEST_DATE!, calendarTimeZone: "UTC",
+    requestIntervalMs: options.requestIntervalMs,
     batchSize: options.batchSize, perRequestTimeoutMs: options.perRequestTimeoutMs, backfillPageDeadlineMs: options.pageDeadlineMs,
     sleep, measurePhase, baseFetch };
   const dual = options.dualPresentationAudit ? await runIntervalsDualPresentationAudit(common) : null;

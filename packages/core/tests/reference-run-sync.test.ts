@@ -1418,6 +1418,7 @@ describe("latest derived_metrics structured schema + version gate", () => {
     const runtime = await bootstrapReference({
       dataDir: dir,
       intervals: { apiKey: "test-key" },
+      readCalendarTimeZone: () => "UTC",
       sport: fakeSport(),
       fetchReferenceData: fetchSpy,
     });

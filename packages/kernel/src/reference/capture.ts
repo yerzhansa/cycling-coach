@@ -40,9 +40,38 @@ const nonemptyString = z.string().min(1);
 const civilDate = z.string().refine(realDate, "must be a real civil date");
 const localDateTime = z.string().refine(realLocalDateTime, "must be a real local date-time");
 
+function strictUtf8Length(value: string): number | undefined {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) return undefined;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return undefined;
+      bytes += 4;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return undefined;
+    } else if (codeUnit <= 0x7f) {
+      bytes += 1;
+    } else if (codeUnit <= 0x7ff) {
+      bytes += 2;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+const calendarTimeZone = z.string().min(1).refine((value) => {
+  const bytes = strictUtf8Length(value);
+  return bytes !== undefined && bytes <= 255;
+}, "must be at most 255 UTF-8 bytes");
+
 const CapturePlanSchema = z.object({
   capture_epoch_ms: safeInteger,
   frozenNow: localDateTime,
+  calendar_timezone: calendarTimeZone.optional(),
   window: z.object({ oldest: civilDate, newest: civilDate }).strict(),
   stream_cutoff_epoch_ms: safeInteger,
 }).strict().superRefine((value, context) => {
@@ -240,19 +269,104 @@ export interface ReferenceCaptureEndpointPayload {
   readonly payload: unknown;
 }
 
-export function createReferenceCapturePlan(now: Date): ReferenceCapturePlan {
-  if (!(now instanceof Date)) throw new TypeError("capture clock is invalid");
-  const captureEpochMs = now.getTime();
+function calendarDateTime(now: Date, timeZone: string): {
+  readonly date: string;
+  readonly dateTime: string;
+} {
+  const timeZoneBytes =
+    typeof timeZone === "string" ? strictUtf8Length(timeZone) : undefined;
+  if (timeZoneBytes === undefined || timeZoneBytes > 255 || timeZone.length === 0) {
+    throw new TypeError("capture calendar timezone is invalid");
+  }
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now);
+  } catch {
+    throw new TypeError("capture calendar timezone is invalid");
+  }
+  let year: string | undefined;
+  let month: string | undefined;
+  let day: string | undefined;
+  let hour: string | undefined;
+  let minute: string | undefined;
+  let second: string | undefined;
+  for (const part of parts) {
+    if (part.type === "year") year = part.value;
+    else if (part.type === "month") month = part.value;
+    else if (part.type === "day") day = part.value;
+    else if (part.type === "hour") hour = part.value;
+    else if (part.type === "minute") minute = part.value;
+    else if (part.type === "second") second = part.value;
+  }
+  if (
+    year === undefined ||
+    month === undefined ||
+    day === undefined ||
+    hour === undefined ||
+    minute === undefined ||
+    second === undefined
+  ) {
+    throw new TypeError("capture calendar timezone is invalid");
+  }
+  const date = `${year}-${month}-${day}`;
+  return { date, dateTime: `${date}T${hour}:${minute}:${second}` };
+}
+
+function addCivilDays(value: string, days: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  if (year === undefined || month === undefined || day === undefined) {
+    throw new TypeError("capture calendar date is invalid");
+  }
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+export function createReferenceCapturePlan(input: {
+  readonly now: Date;
+  readonly calendarTimeZone: string;
+}): ReferenceCapturePlan {
+  if (input === null || typeof input !== "object" || !(input.now instanceof Date)) {
+    throw new TypeError("capture clock is invalid");
+  }
+  const captureEpochMs = input.now.getTime();
   if (!Number.isSafeInteger(captureEpochMs)) throw new TypeError("capture clock is invalid");
-  const pad = (value: number): string => String(value).padStart(2, "0");
+  const calendar = calendarDateTime(input.now, input.calendarTimeZone);
   return validateReferenceCapturePlan({
     capture_epoch_ms: captureEpochMs,
-    frozenNow: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+    frozenNow: calendar.dateTime,
+    calendar_timezone: input.calendarTimeZone,
     window: {
-      newest: now.toISOString().slice(0, 10),
-      oldest: new Date(captureEpochMs - REFERENCE_CAPTURE_WINDOW_DAYS * DAY_MS).toISOString().slice(0, 10),
+      newest: calendar.date,
+      oldest: addCivilDays(calendar.date, -REFERENCE_CAPTURE_WINDOW_DAYS),
     },
     stream_cutoff_epoch_ms: captureEpochMs - REFERENCE_CAPTURE_STREAM_WINDOW_DAYS * DAY_MS,
+  });
+}
+
+export function planCalendarTimeZone(plan: ReferenceCapturePlan): string {
+  return plan.calendar_timezone ?? "UTC";
+}
+
+export interface ReferenceCaptureClock {
+  readonly captureEpochMs: number;
+  readonly civilDateTime: string;
+  readonly calendarTimeZone: string;
+}
+
+export function referenceCaptureClock(plan: ReferenceCapturePlan): ReferenceCaptureClock {
+  return Object.freeze({
+    captureEpochMs: plan.capture_epoch_ms,
+    civilDateTime: plan.frozenNow,
+    calendarTimeZone: planCalendarTimeZone(plan),
   });
 }
 

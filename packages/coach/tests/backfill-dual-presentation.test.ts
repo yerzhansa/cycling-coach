@@ -182,7 +182,46 @@ describe("dual-presentation audit", () => {
           })();
         },
       } as IntervalsIcuSource;
-      expect((await runActivityAuditPages({ store, node, source, clock })).artifacts).toBe(3);
+      expect(
+        (
+          await runActivityAuditPages({
+            store,
+            node,
+            source,
+            clock,
+            historyOldestDate: "1998-01-01",
+            historyNewestDate: "1998-12-31",
+            calendarTimeZone: "UTC",
+            cycleId: () => "synthetic-cycle-a",
+          })
+        ).artifacts,
+      ).toBe(3);
+      expect(
+        await store.get(
+          `SELECT authority_kind, authority_id, calendar_timezone, covered_oldest_date_key,
+  covered_newest_date_key, gap_state
+FROM training_history_coverage_commit`,
+        ),
+      ).toEqual({
+        authority_kind: "activity-backfill",
+        authority_id: "synthetic-cycle-a",
+        calendar_timezone: "UTC",
+        covered_oldest_date_key: 19980101,
+        covered_newest_date_key: 19981231,
+        gap_state: "none",
+      });
+      expect(
+        await store.get(
+          `SELECT authority_id, page_ordinal, dropped_source_restricted, dropped_other, terminal
+FROM training_history_backfill_checkpoint`,
+        ),
+      ).toEqual({
+        authority_id: "synthetic-cycle-a",
+        page_ordinal: 0,
+        dropped_source_restricted: 0,
+        dropped_other: 0,
+        terminal: 1,
+      });
 
       const streamItems = [] as {
         readonly activityId: string;
@@ -363,7 +402,16 @@ JOIN session AS s ON s.session_key = st.session_key WHERE s.start_utc < 10000000
         })();
       } } as IntervalsIcuSource;
 
-      const activities = await runActivityAuditPages({ store: target.store, node: target.node, source, clock });
+      const activities = await runActivityAuditPages({
+        store: target.store,
+        node: target.node,
+        source,
+        clock,
+        historyOldestDate: "1998-01-01",
+        historyNewestDate: "1998-12-31",
+        calendarTimeZone: "UTC",
+        cycleId: () => "synthetic-cycle-b",
+      });
       const fit = await runBackfillPages({ store: target.store, node: target.node, source, clock });
       expect(activities.artifacts).toBe(1);
       expect(fit.artifacts).toBe(1);

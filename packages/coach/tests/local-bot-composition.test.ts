@@ -95,7 +95,11 @@ describe("local bot composition", () => {
       const before = await Promise.all(paths.map(digest));
       const snapshot: ProducedLocalBundle = {
         captureId: "12345678-1234-4123-8123-123456789abc",
-        frozenNow: "2023-09-11T00:00:00.000Z",
+        captureClock: {
+          captureEpochMs: Date.parse("2023-09-11T00:00:00.000Z"),
+          civilDateTime: "2023-09-11T00:00:00.000Z",
+          calendarTimeZone: "UTC",
+        },
         bundle: {
           athlete: { sportSettings: [] },
           wellness: [],
@@ -144,7 +148,7 @@ describe("local bot composition", () => {
           ],
         },
       };
-      let clockNow = Date.parse(snapshot.frozenNow);
+      let clockNow = snapshot.captureClock.captureEpochMs;
       const summaries = snapshot.bundle.activities.map((activity, index) => ({
         id: String.fromCharCode(97 + index).repeat(64),
         workoutId: String.fromCharCode(101 + index).repeat(64),

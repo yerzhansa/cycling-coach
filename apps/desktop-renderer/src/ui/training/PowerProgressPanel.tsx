@@ -1,10 +1,7 @@
 import type { PowerProgressComputed, PowerProgressPanel } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
-import {
-  formatDateLabel,
-  formatUtcTimestamp,
-  formatWholeNumber,
-} from "../../training-context/format";
+import { formatCivilDate, formatInstantDateTime } from "../../lib/date";
+import { formatWholeNumber } from "../../training-context/format";
 import {
   POWER_PROGRESS_FRESHNESS_COPY,
   POWER_PROGRESS_REFRESH_FAILURE_COPY,
@@ -185,7 +182,7 @@ export function PowerProgressContent(props: { readonly panel: PowerProgressPanel
           {POWER_PROGRESS_REFRESH_FAILURE_COPY[props.panel.refreshFailure.code]} Showing the last
           complete comparison. Failed{" "}
           <time dateTime={props.panel.refreshFailure.failedAt}>
-            {formatUtcTimestamp(props.panel.refreshFailure.failedAt)}
+            {formatInstantDateTime(props.panel.refreshFailure.failedAt)}
           </time>
           .
         </p>
@@ -194,8 +191,8 @@ export function PowerProgressContent(props: { readonly panel: PowerProgressPanel
         <div>
           <p className={styles.progressLead}>{POWER_PROGRESS_ROTATION_COPY[progress.rotation]}</p>
           <p className={styles.meta}>
-            {formatDateLabel(progress.currentWindow.start)}–
-            {formatDateLabel(progress.currentWindow.end)} · compared with the prior 28 days
+            {formatCivilDate(progress.currentWindow.start)}–
+            {formatCivilDate(progress.currentWindow.end)} · compared with the prior 28 days
           </p>
         </div>
         <p className={styles.badge} data-freshness={progress.freshness}>

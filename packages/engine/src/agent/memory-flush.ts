@@ -69,12 +69,6 @@ illness, experiment outcomes); ledger entries are appended, never replaced.`;
 
 function buildFlushUserPrompt(sections: readonly MemorySectionSpec[], today: string): string {
   const sectionList = sections.map((s) => `- "${s.name}": ${s.description}`).join("\n");
-  // The transitional migration clause helps the LLM redistribute legacy
-  // content (chronic facts in cycling-history, body data in cycling-profile)
-  // to the right destinations after the section rename.
-  // TODO(wave-2-cleanup): remove this clause and the surrounding text
-  // when the `chronic_facts_stuck_in_cycling_history` log event has been
-  // silent for ~30 days post-deploy. Saves ~40 input tokens per flush.
   return `Review this conversation and save athlete details to structured memory
 sections. First read existing memory with memory_read, then write each
 section that has new or updated information.
@@ -103,11 +97,6 @@ detail (specific workouts, day-by-day observations, one-off events) out to the
 event ledger (ledger_append), and keep only the current durable facts in the
 section itself. Nothing is dropped — ledger entries stay reachable through
 memory_query.
-
-Note (transitional, post-migration): if \`cycling-profile\` contains weight,
-age, or available training days, move them to \`person\`. If \`cycling-history\`
-contains chronic conditions or long-term medications (hypertension, lisinopril,
-diabetes), move them to \`medical-history\`.
 
 Today is ${today}.
 

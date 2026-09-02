@@ -361,6 +361,7 @@ describe("incremental backfill pages", () => {
           read: async () => ({ apiKey: String.fromCharCode(116, 101, 115, 116), athleteId: "synthetic-athlete" }),
         },
         historyNewestDate: () => new Date(now).toISOString().slice(0, 10),
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       {
@@ -456,6 +457,7 @@ describe("incremental backfill pages", () => {
         apiKey: String.fromCharCode(116, 101, 115, 116),
         athleteId: "synthetic-athlete",
         historyNewestDate: "2010-12-31",
+        calendarTimeZone: "UTC",
         clock,
         sleep: async () => {},
         baseFetch,
@@ -467,6 +469,7 @@ describe("incremental backfill pages", () => {
         apiKey: String.fromCharCode(116, 101, 115, 116),
         athleteId: "synthetic-athlete",
         historyNewestDate: "2010-12-31",
+        calendarTimeZone: "UTC",
         clock,
         sleep: async () => {},
         baseFetch,
@@ -503,6 +506,7 @@ describe("incremental backfill pages", () => {
           apiKey: String.fromCharCode(116, 101, 115, 116),
           athleteId: "synthetic-athlete",
           historyNewestDate: "2010-12-31",
+          calendarTimeZone: "UTC",
           batchSize: 0,
         }),
       ).rejects.toThrow("invalid batch size");

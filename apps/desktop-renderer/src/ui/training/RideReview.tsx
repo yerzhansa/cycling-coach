@@ -2,16 +2,20 @@ import type {
   ActivityAnalysisData,
   ActivityAnalysisSection,
   AnalysisSection,
-  RecentRide,
-  RecentRidesPanel,
+  TrainingHistoryRide,
   UnitsPreference,
 } from "@enduragent/coach-contract";
-import type { ReactElement, ReactNode, Ref } from "react";
+import { useRef, type ReactElement, type ReactNode, type Ref } from "react";
 import type { RideAnalysisViewState } from "../../activity-analysis/controller";
 import { Button } from "../../components/ui/button";
-import { formatDateLabel } from "../../training-context/format";
+import { formatCivilDate, formatOffsetWallTime } from "../../lib/date";
+import {
+  formatDistance,
+  formatRidingDuration,
+  formatWholeNumber,
+} from "../../training-context/format";
 import { Page } from "../shared/Page";
-import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy";
+import { TRAINING_HISTORY_COPY, analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy";
 import { RideResponseReview } from "./RideResponseReview";
 import { rideStyles as styles } from "./rideStyles";
 import { ActivityExportControl } from "./TrainingExportControls";
@@ -27,52 +31,33 @@ const RIDE_KIND: Readonly<Record<string, string>> = {
   gravel_cycling: "Gravel ride",
 };
 
-const EMPTY_COPY: Readonly<
-  Record<Extract<RecentRidesPanel, { kind: "unknown" }>["reason"], string>
-> = {
-  "not-synced": "Sync or import a cycling ride to review it here.",
-  "no-recent-rides": "No cycling rides are available from the last 28 days.",
-  "temporary-failure": "Recent rides could not be refreshed. Try syncing again.",
-  "source-restricted": "Too many activities are hidden to show a trustworthy ride list.",
-};
-
-function rideKind(ride: RecentRide): string {
+export function trainingRideKind(ride: TrainingHistoryRide): string {
   return ride.subSport === null || ride.subSport === "generic"
     ? "Cycling ride"
     : (RIDE_KIND[ride.subSport] ?? "Cycling ride");
 }
 
-function rideDuration(ride: RecentRide): string {
-  const seconds = ride.elapsedSeconds ?? ride.movingSeconds;
-  if (seconds === null) return "Duration unavailable";
-  const roundedMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(roundedMinutes / 60);
-  const minutes = roundedMinutes % 60;
-  return hours === 0 ? `${minutes}m` : `${hours}h ${minutes}m`;
+function rideDuration(ride: TrainingHistoryRide): string {
+  return ride.ridingSeconds === null ? "Not recorded" : formatRidingDuration(ride.ridingSeconds);
 }
 
-function rideDistance(ride: RecentRide, units: UnitsPreference): string {
-  if (ride.distanceMeters === null) return "Distance unavailable";
-  if (units === "imperial") return `${(ride.distanceMeters / 1_609.344).toFixed(1)} mi`;
-  return `${(ride.distanceMeters / 1_000).toFixed(1)} km`;
+function rideDistance(ride: TrainingHistoryRide, units: UnitsPreference): string {
+  return ride.distanceMeters === null ? "Not recorded" : formatDistance(ride.distanceMeters, units);
 }
 
-function rideTime(ride: RecentRide): string | null {
-  if (ride.timezoneOffsetSeconds === null) return null;
-  const milliseconds = (ride.startEpochSeconds + ride.timezoneOffsetSeconds) * 1_000;
-  const date = new Date(milliseconds);
-  return Number.isFinite(date.getTime()) ? date.toISOString().slice(11, 16) : null;
+export function trainingRideTime(ride: TrainingHistoryRide): string | null {
+  return formatOffsetWallTime(ride.startEpochSeconds, ride.timezoneOffsetSeconds);
 }
 
-function rideDateTime(ride: RecentRide): string {
-  const time = rideTime(ride);
+export function trainingRideDateTime(ride: TrainingHistoryRide): string {
+  const time = trainingRideTime(ride);
   return time === null
-    ? formatDateLabel(ride.localDate)
-    : `${formatDateLabel(ride.localDate)} · ${time}`;
+    ? formatCivilDate(ride.localDate)
+    : `${formatCivilDate(ride.localDate)} · ${time}`;
 }
 
 function RideSummary(props: {
-  readonly ride: RecentRide;
+  readonly ride: TrainingHistoryRide;
   readonly units: UnitsPreference;
 }): ReactElement {
   return (
@@ -80,11 +65,11 @@ function RideSummary(props: {
       <div>
         <dt>Date</dt>
         <dd>
-          <time dateTime={props.ride.localDate}>{rideDateTime(props.ride)}</time>
+          <time dateTime={props.ride.localDate}>{trainingRideDateTime(props.ride)}</time>
         </dd>
       </div>
       <div>
-        <dt>Duration</dt>
+        <dt>Riding time</dt>
         <dd>{rideDuration(props.ride)}</dd>
       </div>
       <div>
@@ -93,6 +78,39 @@ function RideSummary(props: {
       </div>
     </dl>
   );
+}
+
+function recordedRideMetrics(ride: TrainingHistoryRide): readonly {
+  readonly label: string;
+  readonly value: string;
+}[] {
+  const metrics: { label: string; value: string }[] = [];
+  if (ride.load !== null) metrics.push({ label: "Load", value: formatWholeNumber(ride.load) });
+  if (ride.averagePowerWatts !== null) {
+    metrics.push({
+      label: "Average power",
+      value: `${formatWholeNumber(ride.averagePowerWatts)} W`,
+    });
+  }
+  if (ride.averageHeartRateBpm !== null) {
+    metrics.push({
+      label: "Average heart rate",
+      value: `${formatWholeNumber(ride.averageHeartRateBpm)} bpm`,
+    });
+  }
+  if (ride.perceivedExertion !== null) {
+    metrics.push({
+      label: "Perceived exertion (0–10)",
+      value: formatWholeNumber(ride.perceivedExertion),
+    });
+  }
+  if (ride.energyKilojoules !== null) {
+    metrics.push({
+      label: "Energy",
+      value: `${formatWholeNumber(ride.energyKilojoules)} kJ`,
+    });
+  }
+  return metrics.slice(0, 4);
 }
 
 function formatAnalysisDuration(seconds: number): string {
@@ -185,7 +203,9 @@ function DriftEvidence(props: {
           <p className={styles.rideEyebrow}>Observed EF change</p>
           <p
             className={styles.driftValue}
-            aria-label={`Observed efficiency-factor change ${formatDrift(props.data.decouplingPercent)}`}
+            aria-label={`Observed efficiency-factor change ${formatDrift(
+              props.data.decouplingPercent,
+            )}`}
           >
             {formatDrift(props.data.decouplingPercent)}
           </p>
@@ -703,121 +723,105 @@ function BestEffortPanel(props: {
   );
 }
 
-export function RecentRidesStatePanel(props: {
-  readonly panel: RecentRidesPanel;
-  readonly units: UnitsPreference;
-  readonly onOpen: (ride: RecentRide) => void;
-  readonly registerButton: (id: string, node: HTMLButtonElement | null) => void;
-}): ReactElement {
-  return (
-    <section className={styles.panel} data-panel="recent-rides" aria-label="Recent rides">
-      <div className={styles.ridePanelHeading}>
-        <h2 className={styles.panelTitle}>Recent rides</h2>
-        {props.panel.kind === "computed" ? <span>{props.panel.windowDays} days</span> : null}
-      </div>
-      <div className={styles.panelBody}>
-        {props.panel.kind === "unknown" ? (
-          <p className={styles.empty}>{EMPTY_COPY[props.panel.reason]}</p>
-        ) : (
-          <ol className={styles.rideList}>
-            {props.panel.items.map((ride) => {
-              const dateTime = rideDateTime(ride);
-              const duration = rideDuration(ride);
-              const distance = rideDistance(ride, props.units);
-              return (
-                <li key={ride.id} className={styles.rideListItem}>
-                  <Button
-                    ref={(node) => {
-                      props.registerButton(ride.id, node);
-                    }}
-                    type="button"
-                    variant="ghost"
-                    className={styles.rideButton}
-                    aria-label={`Review ${rideKind(ride).toLowerCase()} from ${dateTime}, ${duration}, ${distance}`}
-                    onClick={() => {
-                      props.onOpen(ride);
-                    }}
-                  >
-                    <span className={styles.rideRail} aria-hidden="true" />
-                    <span className={styles.ridePrimary}>
-                      <strong>{rideKind(ride)}</strong>
-                      <time dateTime={ride.localDate}>{dateTime}</time>
-                    </span>
-                    <span className={styles.rideStats}>
-                      <span>{duration}</span>
-                      <span>{distance}</span>
-                    </span>
-                    <span className={styles.rideArrow} aria-hidden="true">
-                      →
-                    </span>
-                  </Button>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </div>
-    </section>
-  );
-}
-
 export function RideDetailView(props: {
-  readonly ride: RecentRide;
+  readonly ride: TrainingHistoryRide;
   readonly units: UnitsPreference;
   readonly analysis: RideAnalysisViewState;
+  readonly calloutReason: string | null;
+  readonly onStartAnalysis: (() => void) | null;
   readonly onRefreshAnalysis: ((sections: readonly ActivityAnalysisSection[]) => void) | null;
   readonly onBack: () => void;
   readonly titleRef: Ref<HTMLHeadingElement>;
 }): ReactElement {
+  const analysisStarted = useRef(false);
+  const metrics = recordedRideMetrics(props.ride);
+  const title = props.ride.title ?? trainingRideKind(props.ride);
   return (
     <Page
-      title="Ride review"
-      subtitle={formatDateLabel(props.ride.localDate)}
+      title={TRAINING_HISTORY_COPY.review}
       titleRef={props.titleRef}
       action={
         <Button type="button" variant="outline" onClick={props.onBack}>
-          Back to training
+          {TRAINING_HISTORY_COPY.back}
         </Button>
       }
     >
       <section className={styles.rideOverview} aria-labelledby="ride-overview-title">
-        <p className={styles.rideEyebrow}>Recent ride</p>
-        <h2 id="ride-overview-title">{rideKind(props.ride)}</h2>
+        <p className={styles.rideEyebrow}>{trainingRideKind(props.ride)}</p>
+        <h2 id="ride-overview-title">{title}</h2>
         <RideSummary ride={props.ride} units={props.units} />
+        {props.ride.ridingTimeBasis === "elapsed" ? (
+          <p className={styles.elapsedFallback}>
+            Elapsed time used because moving time was not recorded.
+          </p>
+        ) : null}
+        {metrics.length === 0 ? null : (
+          <dl className={styles.recordedMetrics}>
+            {metrics.map((metric) => (
+              <div key={metric.label}>
+                <dt>{metric.label}</dt>
+                <dd>{metric.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {props.calloutReason === null ? null : (
+          <p className={styles.calloutReason}>
+            <strong>Worth a look</strong>
+            <span>{props.calloutReason}</span>
+          </p>
+        )}
       </section>
-      <ActivityExportControl canonicalActivityId={props.ride.id} localDate={props.ride.localDate} />
-      <AerobicDriftPanel
-        rideId={props.ride.id}
-        analysis={props.analysis}
-        onRefresh={
-          props.onRefreshAnalysis === null
-            ? null
-            : () => props.onRefreshAnalysis?.(["aerobic-drift"])
-        }
-      />
-      <IntervalReviewPanel
-        rideId={props.ride.id}
-        analysis={props.analysis}
-        units={props.units}
-        onRefresh={
-          props.onRefreshAnalysis === null ? null : () => props.onRefreshAnalysis?.(["intervals"])
-        }
-      />
-      <BestEffortPanel
-        rideId={props.ride.id}
-        analysis={props.analysis}
-        units={props.units}
-        onRefresh={
-          props.onRefreshAnalysis === null
-            ? null
-            : () => props.onRefreshAnalysis?.(["best-efforts"])
-        }
-      />
-      <RideResponseReview
-        rideId={props.ride.id}
-        analysis={props.analysis}
-        onRefresh={props.onRefreshAnalysis}
-      />
+      <details
+        className={styles.recordedDisclosure}
+        onToggle={(event) => {
+          if (!event.currentTarget.open || analysisStarted.current) return;
+          analysisStarted.current = true;
+          props.onStartAnalysis?.();
+        }}
+      >
+        <summary>{TRAINING_HISTORY_COPY.disclosure}</summary>
+        <div className={styles.recordedDisclosureBody}>
+          <ActivityExportControl
+            canonicalActivityId={props.ride.id}
+            localDate={props.ride.localDate}
+          />
+          <AerobicDriftPanel
+            rideId={props.ride.id}
+            analysis={props.analysis}
+            onRefresh={
+              props.onRefreshAnalysis === null
+                ? null
+                : () => props.onRefreshAnalysis?.(["aerobic-drift"])
+            }
+          />
+          <IntervalReviewPanel
+            rideId={props.ride.id}
+            analysis={props.analysis}
+            units={props.units}
+            onRefresh={
+              props.onRefreshAnalysis === null
+                ? null
+                : () => props.onRefreshAnalysis?.(["intervals"])
+            }
+          />
+          <BestEffortPanel
+            rideId={props.ride.id}
+            analysis={props.analysis}
+            units={props.units}
+            onRefresh={
+              props.onRefreshAnalysis === null
+                ? null
+                : () => props.onRefreshAnalysis?.(["best-efforts"])
+            }
+          />
+          <RideResponseReview
+            rideId={props.ride.id}
+            analysis={props.analysis}
+            onRefresh={props.onRefreshAnalysis}
+          />
+        </div>
+      </details>
     </Page>
   );
 }

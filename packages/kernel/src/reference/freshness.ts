@@ -17,6 +17,23 @@ export const CRITICAL_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
+export type ReferenceFreshness = "fresh" | "flag" | "stale" | "critical";
+
+export function referenceFreshnessAt(
+  instant: string,
+  now: Date = new Date(),
+): ReferenceFreshness {
+  const refreshedAt = Date.parse(instant);
+  const evaluatedAt = now.getTime();
+  if (!Number.isFinite(refreshedAt) || !Number.isFinite(evaluatedAt)) return "stale";
+  const elapsed = evaluatedAt - refreshedAt;
+  if (elapsed < -FUTURE_TOLERANCE_MS) return "stale";
+  if (elapsed >= CRITICAL_MS) return "critical";
+  if (elapsed >= STALE_MS) return "stale";
+  if (elapsed >= FRESH_MS) return "flag";
+  return "fresh";
+}
+
 // ─── Retention windows ─────────────────────────────────────────────────
 /** Days of history retained at "latest" granularity (recent activities + wellness). */
 export const LATEST_RETENTION_DAYS = 7;

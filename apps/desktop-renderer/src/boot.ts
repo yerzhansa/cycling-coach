@@ -99,6 +99,9 @@ export function bootRenderer(): Disposer {
     },
   });
   store.getState().bindRideAnalysisActions({
+    start: () => {
+      void rideAnalysisController.start();
+    },
     refresh: (sections) => {
       void rideAnalysisController.load(sections, true);
     },
@@ -138,6 +141,7 @@ export function bootRenderer(): Disposer {
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
     refreshTrainingContext: async () => {
+      rideAnalysisController.invalidate();
       await Promise.all([trainingContextController.refresh(), planController.refresh()]);
     },
   });
@@ -438,7 +442,10 @@ export function bootRenderer(): Disposer {
   const rideImportAdapter = createRideImportAdapter({
     imports: rideImports,
     publish: (next) => store.getState().setRideImport(next),
-    onSucceeded: () => void trainingContextController.refresh(),
+    onSucceeded: () => {
+      rideAnalysisController.invalidate();
+      void trainingContextController.refresh();
+    },
   });
   store.getState().bindRideImportActions(rideImportAdapter.port);
   const onboardingCompletion = createOnboardingCompletionController({

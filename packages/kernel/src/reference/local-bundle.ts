@@ -1,4 +1,4 @@
-import type { ReferenceCaptureManifest, SnapshotRef } from "./capture.js";
+import type { ReferenceCaptureClock, ReferenceCaptureManifest, SnapshotRef } from "./capture.js";
 import type { MetricInput } from "./metrics/metric-input.js";
 import { SPORT_FAMILIES } from "./metrics/sport-families.js";
 import {
@@ -66,7 +66,7 @@ export function projectCyclingReferenceBundle(bundle: ReferenceBundle): Referenc
 
 export interface ProducedLocalBundle {
   readonly captureId: string;
-  readonly frozenNow: string;
+  readonly captureClock: ReferenceCaptureClock;
   readonly bundle: ReferenceBundle;
 }
 

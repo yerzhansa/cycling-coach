@@ -101,7 +101,7 @@ export interface IntervalsIcuSource extends SyncSource {
 }
 
 export interface IntervalsIcuCaptureSource extends IntervalsIcuSource {
-  captureReference(now: Date, budget: SyncBudget): Promise<ReferenceCaptureBatch>;
+  captureReference(plan: ReferenceCapturePlan, budget: SyncBudget): Promise<ReferenceCaptureBatch>;
   deriveReferenceCaptureMembers(
     plan: ReferenceCapturePlan,
     endpointPayloads: readonly ReferenceCaptureEndpointPayload[],

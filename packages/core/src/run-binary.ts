@@ -416,6 +416,7 @@ export async function runBinary(
     (await bootstrapReference({
       dataDir: config.dataDir,
       intervals: config.intervals,
+      readCalendarTimeZone: () => config.session.timezone,
       sport,
     }));
   let runtimeClosed = false;

@@ -4,25 +4,26 @@
 
 - Owned user route: **Training** in Main navigation (`activeView: "training"`). Manifest surfaces: `training-setup`, `first-sync`, `training-import`, `training`, `ride-review`, `power-progress`, `wellness`, `training-export`, and `training-sync`.
 - Setup and first sync: [`setup.md`](setup.md) owns the Setup scenarios; Training owns `training.first-sync.provider-backfill` and `training.first-sync.failure-recovery`.
-- Resident overview and recovery: `training.view.panel-inventory`, `training.view.readiness-states`, `training.view.context-recovery`, `training.view.anchor-load-plan-adherence`, `training.power-progress.comparison`, and `training.wellness.trend`.
-- Ride review, import, export, and sync: `training.ride-review.navigation`, `training.ride-review.local-analysis`, `training.import.progress-results`, `training.export.activity-formats`, `training.export.workout-formats`, `training.sync.lifecycle`, and `training.sync.protocol-failure`.
+- Week-first overview and recovery: `training.view.panel-inventory`, `training.view.readiness-states`, `training.view.context-recovery`, `training.view.anchor-load-plan-adherence`, `training.power-progress.comparison`, and `training.wellness.trend`. Weekly summary owns riding time, rides, distance, Load, and the six-week trend; Recent rides owns the scoped callout.
+- Ride review, import, export, and sync: `training.ride-review.navigation`, `training.ride-review.local-analysis`, `training.import.progress-results`, `training.export.activity-formats`, `training.sync.lifecycle`, and `training.sync.protocol-failure`. Ride review opens inline on the Training route. The sidebar owns Sync now, and Plan proves `training.export.workout-formats` beside its WorkoutMatch list.
 
 Fixture/profile: isolated renderer `ready()` state with shifted fixture dates and no athlete profile or credentials. Supported executors: renderer and desktop `vitest`; native Windows scenarios remain `vm-only`.
 
 ## How to get to it (user POV)
 
 - Complete Setup, then choose **Training** in Main navigation.
-- Use **Sync now** or **Import ride files**, open a ride from **Recent rides** for **Ride review**, and use **Back to training** to return with focus restored.
-- Export a reviewed ride as FIT or GPX, or export the visible planned workouts as a ZWO, MRC, ERG, or FIT archive.
+- Compare **This week** with **Previous week**, read the six-week riding-time trend, and start with the recent ride marked **Worth a look**.
+- Use **Sync now** in the sidebar or **Import ride files** on Training. Open a ride from **Recent rides** for inline **Ride review**, then use **Back to training** to restore focus.
+- Open **Recorded analysis and export** to load recorded analysis or export the ride. Choose **Plan** to export its visible Workouts as a ZWO, MRC, ERG, or FIT archive.
 
 ## Driving it with verify-enduragent
 
 ```bash
-pnpm --filter @enduragent/desktop-renderer exec vitest run tests/training-surface.test.tsx tests/training-context.test.ts tests/training-sync.test.ts tests/training-export.test.ts
-pnpm --filter @enduragent/desktop exec vitest run tests/windows-parity-scenarios.test.ts
+pnpm --filter @enduragent/desktop-renderer exec vitest run tests/plan-surface.test.tsx tests/training-surface.test.tsx tests/training-context.test.ts tests/training-sync.test.ts tests/training-export.test.ts tests/activity-analysis-controller.test.ts tests/ride-interval-evidence.test.tsx tests/ride-import.test.ts tests/ride-import-adapter.test.tsx tests/sidebar-surface.test.tsx
+pnpm --filter @enduragent/desktop exec vitest run tests/verification-feature-selection.test.ts tests/windows-parity-scenarios.test.ts
 ```
 
-Require the renderer run to show the **Training** region and shipped panel order, truthful loading and failure states, context recovery, sync retry and protocol handling, import progress, ride-review navigation, and ride/workout export requests. Require the desktop run to validate the frozen Training manifest and its deterministic citations; it does not execute the mapped behavior.
+Require the renderer run to show **Weekly summary**, **Recent rides**, and **Power progress** in order. Weekly summary must show riding time, rides, distance, Load, and the six-week trend; Recent rides must show recorded facts and at most one **Worth a look** callout. Require truthful partial, zero, stale, sparse, and unavailable states, an import live region that persists through idle and suppressed states, inline Ride review with deferred analysis, recorded evidence, and FIT or GPX export, sidebar sync recovery with a disabled-chip focus fallback, the ride export request, and the Plan WorkoutMatch archive request. The standalone cycling anchor, power zones, Cycling Load, Plan, aggregate Adherence, and Wellness panels must remain absent. Require the desktop run to validate the frozen Training manifest and its deterministic citations; it does not execute the mapped behavior.
 
 ## Gotchas
 

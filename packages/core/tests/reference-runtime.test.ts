@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bootstrapReference, INITIAL_SYNC_FAILED_LOG_PREFIX } from "../src/reference/runtime.js";
+import {
+  bootstrapReference as bootstrapReferenceRuntime,
+  INITIAL_SYNC_FAILED_LOG_PREFIX,
+  type BootstrapReferenceDeps,
+} from "../src/reference/runtime.js";
 import { ReferenceConfigError } from "../src/reference/errors.js";
 import type { ReferenceSportAdapter } from "../src/reference/sport-adapter.js";
 import type { Sport } from "../src/sport.js";
@@ -28,6 +32,15 @@ const fetchedWithAthlete = (id: string) => ({
   ...emptyFetched,
   latest: { ...emptyFetched.latest, athlete_profile: { id } },
 });
+
+function bootstrapReference(
+  deps: Omit<BootstrapReferenceDeps, "readCalendarTimeZone"> & {
+    readonly readCalendarTimeZone?: () => string;
+  },
+) {
+  const { readCalendarTimeZone = () => "UTC", ...rest } = deps;
+  return bootstrapReferenceRuntime({ ...rest, readCalendarTimeZone });
+}
 
 describe("bootstrapReference (behavioral)", () => {
   let dataDir: string;
@@ -104,6 +117,29 @@ describe("bootstrapReference (behavioral)", () => {
       { apiKey: "", athleteId: "fake-athlete-first" },
       { apiKey: "placeholder", athleteId: "fake-athlete-second" },
     ]);
+    runtime.scheduler.stop();
+  });
+
+  it("resolves the live calendar zone for every run", async () => {
+    let calendarTimeZone = "UTC";
+    const observed: string[] = [];
+    const runtime = await bootstrapReference({
+      dataDir,
+      intervals: { apiKey: "placeholder" },
+      readCalendarTimeZone: () => calendarTimeZone,
+      sport: fakeSport(),
+      fetchReferenceData: async (_signal, _credentials, zone = "missing") => {
+        observed.push(zone);
+        return emptyFetched;
+      },
+      startScheduler: false,
+    });
+
+    await runtime.runScheduledOnce();
+    calendarTimeZone = "Australia/Sydney";
+    await runtime.services.runSync({ chatId: "fake-chat" });
+
+    expect(observed).toEqual(["UTC", "Australia/Sydney"]);
     runtime.scheduler.stop();
   });
 

@@ -9,6 +9,8 @@ export * from "./dedup-confirmation-repository.js";
 export * from "./intake-repository.js";
 export * from "./activity-repository.js";
 export * from "./canonical-activity-reader.js";
+export * from "./training-history-reader.js";
+export * from "./training-history-coverage.js";
 export * from "./activity-analysis-projection-repository.js";
 export * from "./trusted-activity-source-resolver.js";
 export * from "./analytics-curve-repository.js";

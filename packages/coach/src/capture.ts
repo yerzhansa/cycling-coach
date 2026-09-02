@@ -4,12 +4,24 @@ import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
   assertReferenceCaptureReplayable,
+  createReferenceCapturePlan,
+  planCalendarTimeZone,
   serializeReferenceCaptureManifest,
+  serializeReferenceCapturePlan,
   validateReferenceCaptureManifest,
   type RecordRef,
   type ReferenceCaptureManifest,
+  type ReferenceCapturePlan,
 } from "@enduragent/kernel/reference/capture";
-import { H, createIntervalsSourceRepository, type PhysicalRequestLedger, type SourceArtifactDraft, type SyncBudget } from "@enduragent/kernel/store";
+import {
+  H,
+  createIntervalsSourceRepository,
+  createTrainingCoverageRepository,
+  type CoverageCommitInput,
+  type PhysicalRequestLedger,
+  type SourceArtifactDraft,
+  type SyncBudget,
+} from "@enduragent/kernel/store";
 import {
   loadReferenceCaptureSidecars,
   readVerifiedReferenceSnapshot,
@@ -44,6 +56,7 @@ export interface RunReferenceCaptureOptions {
   readonly writerContext?: CoachStoreWriterContext;
   readonly apiKey: string;
   readonly athleteId: string;
+  readonly calendarTimeZone: string;
   readonly reviewedOn: string;
   readonly reason: ReferenceCaptureReview["reason"];
   readonly replacesCaptureId?: string;
@@ -101,8 +114,13 @@ export async function runReferenceCapture(
     maxRequests: REQUEST_ATTEMPTS * (3 + REFERENCE_CAPTURE_STREAM_LIMIT),
     maxArtifacts: 10_000,
   };
+  let plan: ReferenceCapturePlan;
   let review: ReferenceCaptureReview;
   try {
+    plan = createReferenceCapturePlan({
+      now,
+      calendarTimeZone: options.calendarTimeZone,
+    });
     review = validateReferenceCaptureReview({ schema_version: 1, capture_id: captureId,
       reviewed_on: options.reviewedOn, replaces_capture_id: options.replacesCaptureId ?? null,
       reason: options.reason });
@@ -116,7 +134,7 @@ export async function runReferenceCapture(
     const source = createIntervalsBackfillSource({
       apiKey: options.apiKey,
       athleteId: options.athleteId,
-      historyNewestDate: now.toISOString().slice(0, 10),
+      historyNewestDate: plan.window.newest,
       minRequestIntervalMs: DEFAULT_REQUEST_INTERVAL_MS,
       archive: node.archive,
       clock: { now: () => now.getTime(), monotonicNow },
@@ -125,20 +143,61 @@ export async function runReferenceCapture(
       ...(options.attemptLedger === undefined ? {} : { attemptLedger: options.attemptLedger }),
     }) as IntervalsIcuCaptureSource;
     let batch: ReferenceCaptureBatch;
-    try { batch = await source.captureReference(now, budget); }
+    try {
+      batch = await source.captureReference(plan, budget);
+      if (serializeReferenceCapturePlan(batch.plan) !== serializeReferenceCapturePlan(plan)) {
+        throw new TypeError("reference capture plan changed");
+      }
+      if (
+        !Number.isSafeInteger(batch.dropped_activity_rows.sourceRestricted) ||
+        batch.dropped_activity_rows.sourceRestricted < 0 ||
+        !Number.isSafeInteger(batch.dropped_activity_rows.other) ||
+        batch.dropped_activity_rows.other < 0
+      ) {
+        throw new TypeError("reference capture dropped activity counts are invalid");
+      }
+    }
     catch (error) { throw new ReferenceCaptureRunError("capture", { cause: error }); }
 
     const repository = createIntervalsSourceRepository(store, (fields) => {
       if (fields.length === 0) throw new TypeError("empty key tuple");
       return H(crypto, ...(fields as [string | number, ...(string | number)[]]));
     });
+    const coverage = createTrainingCoverageRepository();
+    const coverageCommit: CoverageCommitInput = {
+      source: "intervals-icu",
+      lane: "activities",
+      authorityKind: "reference-capture",
+      authorityId: captureId,
+      calendarTimeZone: planCalendarTimeZone(plan),
+      coveredOldest: plan.window.oldest,
+      coveredNewest: plan.window.newest,
+      committedEpochSeconds: Math.floor(plan.capture_epoch_ms / 1_000),
+      gapState:
+        batch.dropped_activity_rows.sourceRestricted > 0 ||
+        batch.dropped_activity_rows.other > 0
+          ? "undated-dropped-rows"
+          : "none",
+    };
     const wellnessArtifactKeys = new Map<string, string>();
     try {
       if (batch.records.activities.length > 0) {
-        await node.importBatchWithReport({ files: [],
-          platform_records: batch.records.activities.map((record) => record.landing.platform) });
+        await node.importBatchWithReport(
+          {
+            files: [],
+            platform_records: batch.records.activities.map((record) => record.landing.platform),
+          },
+          {
+            finalizeBatchInTransaction: async (transactionStore) => {
+              await coverage.appendCommitInTransaction(transactionStore, coverageCommit);
+            },
+          },
+        );
       }
       await store.transaction(async () => {
+        if (batch.records.activities.length === 0) {
+          await coverage.appendCommitInTransaction(store, coverageCommit);
+        }
         for (const record of batch.records.settings) {
           const evidence = await repository.recordArtifact(sourceArtifact(record));
           await repository.recordGenericLanding({ externalId: record.landing.sourceRecordExternalId,

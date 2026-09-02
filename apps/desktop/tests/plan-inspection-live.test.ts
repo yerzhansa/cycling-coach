@@ -1,4 +1,5 @@
 import {
+  AthleteStateSchema,
   GetRuntimeConfigRpcResultSchema,
   GetSetupStatusRpcResultSchema,
   GetTranscriptPageRpcResultSchema,
@@ -8,11 +9,16 @@ import {
   ChatAttachmentComposerReadModelSchema,
 } from "@enduragent/coach-contract";
 import { describe, expect, it } from "vitest";
+import { PLAN_QA_ATHLETE_STATE } from "./helpers/inspection-athlete-states.js";
 import {
   createPlanInspectionFixtureScript,
+  inspectionAthleteState,
+  PLAN_CURRENT_INSPECTION_FIXTURE,
   PLAN_INSPECTION_SCENARIO_ID,
   PLAN_INSPECTION_TURNS,
+  TRAINING_CURRENT_INSPECTION_FIXTURE,
 } from "./helpers/plan-inspection-live.js";
+import { TRAINING_CURRENT_ATHLETE_STATE } from "./helpers/training-current-athlete-state.js";
 
 function request(method: string, params: Record<string, unknown> = {}) {
   return { jsonrpc: "2.0", method, params };
@@ -28,6 +34,52 @@ async function result(
 }
 
 describe("Plan inspection live fixture", () => {
+  it.each([
+    [PLAN_CURRENT_INSPECTION_FIXTURE, PLAN_QA_ATHLETE_STATE, 1],
+    [TRAINING_CURRENT_INSPECTION_FIXTURE, TRAINING_CURRENT_ATHLETE_STATE, 7],
+  ])("returns schema-valid athlete state for %s", async (name, expected, expectedRideCount) => {
+    const athleteState = inspectionAthleteState(name);
+    const script = createPlanInspectionFixtureScript(athleteState);
+    const state = AthleteStateSchema.parse(await result(script, "getAthleteState"));
+    expect(state).toEqual(expected);
+    expect(state.trainingContext?.recentRides.kind).toBe("computed");
+    expect(
+      state.trainingContext?.recentRides.kind === "computed"
+        ? state.trainingContext.recentRides.items
+        : [],
+    ).toHaveLength(expectedRideCount);
+  });
+
+  it("refuses an unknown fixture at direct-execution selection", () => {
+    expect(() => inspectionAthleteState("arbitrary-script")).toThrow(
+      "unknown desktop inspection fixture",
+    );
+  });
+
+  it("provides the populated Training inspection story", async () => {
+    const script = createPlanInspectionFixtureScript(TRAINING_CURRENT_ATHLETE_STATE);
+    const state = AthleteStateSchema.parse(await result(script, "getAthleteState"));
+    const context = state.trainingContext;
+
+    expect(context?.recentRides.kind).toBe("computed");
+    expect(context?.recentRides.kind === "computed" ? context.recentRides.items : []).toHaveLength(
+      7,
+    );
+    expect(context?.trainingHistory.kind).toBe("computed");
+    if (context?.trainingHistory.kind !== "computed") throw new TypeError("expected history");
+    expect(context.trainingHistory.anchorWeek.rides.items).toHaveLength(4);
+    expect(context.trainingHistory.previousWeek?.rides.items).toHaveLength(3);
+    expect(context.trainingHistory.anchorWeek.trend.kind).toBe("computed");
+    expect(
+      context.trainingHistory.anchorWeek.trend.kind === "computed"
+        ? context.trainingHistory.anchorWeek.trend.buckets
+        : [],
+    ).toHaveLength(6);
+    expect(context.trainingHistory.anchorWeek.callout?.kind).toBe("longest-ride-28d");
+    expect(context.performanceProgress.kind).toBe("computed");
+    expect(context.cyclingLoad).toMatchObject({ kind: "computed", value: 307 });
+  });
+
   it("uses privacy-safe ordinary Main Chat turns", async () => {
     const script = createPlanInspectionFixtureScript();
     const transcript = GetTranscriptPageRpcResultSchema.parse(

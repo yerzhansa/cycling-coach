@@ -1,3 +1,4 @@
+import type { TrainingHistoryComputed } from "@enduragent/coach-contract";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,8 +21,9 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { toManualSyncViewState } from "../src/training-context/manual-sync";
 import {
   clearTrainingRestrictionFocusRequest,
+  requestTrainingRestrictionFocus,
   takeTrainingRestrictionFocusRequest,
-} from "../src/ui/training/restriction-focus";
+} from "../src/ui/settings/restriction-focus";
 import { planReadModel } from "./plan-fixtures";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
@@ -46,14 +48,54 @@ const REQUIRED_ONBOARDING = Object.freeze({
 
 const SELECTED_RIDE = Object.freeze({
   id: "a".repeat(64),
+  title: null,
   subSport: "road",
   startEpochSeconds: 900_000_000,
   timezoneOffsetSeconds: 0,
   localDate: "1998-07-09",
+  ridingSeconds: 3_500,
+  ridingTimeBasis: "moving" as const,
   elapsedSeconds: 3_600,
-  movingSeconds: 3_500,
   distanceMeters: 32_000,
+  load: null,
+  averagePowerWatts: null,
+  averageHeartRateBpm: null,
+  perceivedExertion: null,
+  energyKilojoules: null,
 });
+
+const SELECTED_RIDE_HISTORY = {
+  kind: "computed",
+  asOf: "1998-07-19T08:00:00.000Z",
+  calendarTimeZone: "UTC",
+  displayMode: "current",
+  coverage: {
+    kind: "contiguous",
+    start: "1998-06-01",
+    through: "1998-07-19",
+    committedAt: "1998-07-19T07:55:00.000Z",
+  },
+  anchorWeek: {
+    id: "anchor",
+    window: { start: "1998-07-06", end: "1998-07-12" },
+    calendarState: "closed",
+    coverage: { kind: "complete" },
+    totals: {
+      rideCount: { kind: "computed", value: 1 },
+      ridingSeconds: { kind: "computed", value: 3_500 },
+      distanceMeters: { kind: "computed", value: 32_000 },
+      load: { kind: "unavailable", reason: "no-recorded-value" },
+    },
+    rides: {
+      count: { kind: "exact", value: 1 },
+      items: [SELECTED_RIDE],
+      truncated: false,
+    },
+    trend: { kind: "unavailable", reason: "limited-history" },
+    callout: null,
+  },
+  previousWeek: null,
+} as const satisfies TrainingHistoryComputed;
 
 function stubActions(): ChatActions {
   return {
@@ -332,7 +374,7 @@ describe("shell", () => {
     expect(trainingButton).toHaveFocus();
   });
 
-  it("moves focus from a mounted ride review to the Training action card", async () => {
+  it("moves focus from a mounted ride review to the Settings action card", async () => {
     const user = userEvent.setup();
     const request = vi.fn();
     useEnduragentStore.setState({
@@ -345,6 +387,10 @@ describe("shell", () => {
           lastSynced: "1998-07-19T07:55:00.000Z",
           freshness: "fresh",
           degraded: false,
+        },
+        trainingContext: {
+          ...EMPTY_TRAINING_SURFACE.trainingContext,
+          trainingHistory: SELECTED_RIDE_HISTORY,
         },
       },
       selectedRide: SELECTED_RIDE,
@@ -365,20 +411,21 @@ describe("shell", () => {
     remedy.focus();
     await user.keyboard("{Enter}");
 
+    const settings = await screen.findByRole("region", { name: "Settings" });
     const card = await waitFor(() => {
-      const element = document.querySelector<HTMLElement>("#strava-restricted-activities");
+      const element = settings.querySelector<HTMLElement>("#strava-restricted-activities");
       expect(element).not.toBeNull();
-      return element as HTMLElement;
+      return element;
     });
     await waitFor(() => {
       expect(card).toHaveFocus();
     });
-    expect(useEnduragentStore.getState().activeView).toBe("training");
-    expect(useEnduragentStore.getState().selectedRide).toBeNull();
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
+    expect(useEnduragentStore.getState().selectedRide).toEqual(SELECTED_RIDE);
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("preserves a selected ride and does not arm focus when navigation is blocked", async () => {
+  it("focuses the Settings action card when saving keeps Settings active", async () => {
     const user = userEvent.setup();
     const request = vi.fn();
     useEnduragentStore.setState({
@@ -398,12 +445,42 @@ describe("shell", () => {
     });
     render(<Shell onReady={() => {}} />);
 
+    const settings = await screen.findByRole("region", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "60 hidden by Strava. How to fix this" }));
 
+    const card = await waitFor(() => {
+      const element = settings.querySelector<HTMLElement>("#strava-restricted-activities");
+      expect(element).not.toBeNull();
+      return element;
+    });
+    await waitFor(() => {
+      expect(card).toHaveFocus();
+    });
     expect(useEnduragentStore.getState().activeView).toBe("settings");
     expect(useEnduragentStore.getState().selectedRide).toEqual(SELECTED_RIDE);
     expect(takeTrainingRestrictionFocusRequest()).toBe(false);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("drops an unconsumed repair-focus request when navigation leaves Settings", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({
+      activeView: "settings",
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+    });
+    render(<Shell onReady={() => {}} />);
+    await screen.findByRole("region", { name: "Settings" });
+
+    requestTrainingRestrictionFocus();
+    await user.click(screen.getByRole("button", { name: "Training" }));
+    await screen.findByRole("region", { name: "Training" });
+
+    expect(takeTrainingRestrictionFocusRequest()).toBe(false);
   });
 
   it("keeps the chat surface mounted while another view is shown", async () => {

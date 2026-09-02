@@ -217,6 +217,7 @@ async function runRealWindow(): Promise<WindowEvidence> {
   const home = resolveAthleteHome(env);
   let runtime: StoreRuntime | undefined;
   const reference = await bootstrapReference({ dataDir: config.dataDir, intervals: config.intervals,
+    readCalendarTimeZone: () => config.session.timezone,
     sport: cyclingSport, startScheduler: false, attemptLedgerForRun: () => {
       if (runtime === undefined) throw new Error("Store runtime is unavailable.");
       return runtime.attemptLedgerForRun();

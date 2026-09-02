@@ -14,8 +14,18 @@ import {
   AdherencePanelSchema,
   CyclingLoadPanelSchema,
   CyclingTrainingContextSchema,
+  CompletedActivityWeekSchema,
+  DistanceMetricValueSchema,
+  DurationMetricValueSchema,
+  LoadMetricValueSchema,
   PowerProgressPanelSchema,
   RecentRidesPanelSchema,
+  RideCountMetricValueSchema,
+  RidingTimeTrendSchema,
+  TrainingHistoryPanelSchema,
+  TrainingHistoryProjectionSchema,
+  TrainingHistoryRideSchema,
+  TrainingRideCalloutSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
   ChatRequestSchema,
   ChatResponseSchema,
@@ -97,6 +107,118 @@ const computedPowerProgress = {
   asOf: "1998-07-06T09:00:00.000Z",
 } as const;
 
+const trainingHistoryRides = [
+  {
+    id: "a".repeat(64),
+    title: "Long endurance ride",
+    subSport: "road",
+    startEpochSeconds: 899_800_000,
+    timezoneOffsetSeconds: 21_600,
+    localDate: "1998-07-10",
+    ridingSeconds: 7_200,
+    ridingTimeBasis: "moving",
+    elapsedSeconds: 7_500,
+    distanceMeters: 60_000,
+    load: 110,
+    averagePowerWatts: 210,
+    averageHeartRateBpm: 145,
+    perceivedExertion: 6,
+    energyKilojoules: 1_500,
+  },
+  {
+    id: "b".repeat(64),
+    title: null,
+    subSport: null,
+    startEpochSeconds: 899_700_000,
+    timezoneOffsetSeconds: null,
+    localDate: "1998-07-08",
+    ridingSeconds: 3_600,
+    ridingTimeBasis: "elapsed",
+    elapsedSeconds: 3_600,
+    distanceMeters: null,
+    load: null,
+    averagePowerWatts: null,
+    averageHeartRateBpm: null,
+    perceivedExertion: null,
+    energyKilojoules: null,
+  },
+] as const;
+
+const trainingHistoryCallout = {
+  kind: "longest-ride-28d",
+  rideId: trainingHistoryRides[0].id,
+  durationSeconds: trainingHistoryRides[0].ridingSeconds,
+  window: { start: "1998-06-09", end: "1998-07-06" },
+  comparisonRideCount: 4,
+} as const;
+
+const computedTrainingHistory = {
+  kind: "computed",
+  asOf: "1998-07-12T23:59:59.000Z",
+  calendarTimeZone: "UTC",
+  displayMode: "current",
+  coverage: {
+    kind: "contiguous",
+    start: "1998-05-18",
+    through: "1998-07-12",
+    committedAt: "1998-07-12T22:00:00.000Z",
+  },
+  anchorWeek: {
+    id: "anchor",
+    window: { start: "1998-07-06", end: "1998-07-12" },
+    calendarState: "closed",
+    coverage: { kind: "complete" },
+    totals: {
+      rideCount: { kind: "computed", value: 2 },
+      ridingSeconds: { kind: "computed", value: 10_800 },
+      distanceMeters: {
+        kind: "partial",
+        value: 60_000,
+        reason: "missing-recorded-value",
+        knownRideMissingValueCount: 1,
+      },
+      load: {
+        kind: "partial",
+        value: 110,
+        reason: "missing-recorded-value",
+        knownRideMissingValueCount: 1,
+      },
+    },
+    rides: {
+      count: { kind: "exact", value: 2 },
+      items: trainingHistoryRides,
+      truncated: false,
+    },
+    trend: {
+      kind: "computed",
+      buckets: [
+        { window: { start: "1998-05-18", end: "1998-05-24" }, rideCount: 1, ridingSeconds: 3_600 },
+        { window: { start: "1998-05-25", end: "1998-05-31" }, rideCount: 2, ridingSeconds: 7_200 },
+        { window: { start: "1998-06-01", end: "1998-06-07" }, rideCount: 1, ridingSeconds: 4_000 },
+        { window: { start: "1998-06-08", end: "1998-06-14" }, rideCount: 3, ridingSeconds: 9_000 },
+        { window: { start: "1998-06-15", end: "1998-06-21" }, rideCount: 2, ridingSeconds: 6_000 },
+        { window: { start: "1998-06-22", end: "1998-06-28" }, rideCount: 1, ridingSeconds: 3_000 },
+      ],
+    },
+    callout: trainingHistoryCallout,
+  },
+  previousWeek: {
+    id: "previous",
+    window: { start: "1998-06-29", end: "1998-07-05" },
+    calendarState: "closed",
+    coverage: { kind: "complete" },
+    totals: {
+      rideCount: { kind: "computed", value: 0 },
+      ridingSeconds: { kind: "computed", value: 0 },
+      distanceMeters: { kind: "computed", value: 0 },
+      load: { kind: "computed", value: 0 },
+    },
+    rides: { count: { kind: "exact", value: 0 }, items: [], truncated: false },
+    trend: { kind: "unavailable", reason: "limited-history" },
+    callout: null,
+  },
+} as const;
+
 function cloneState(): Record<string, unknown> {
   return structuredClone(validState) as unknown as Record<string, unknown>;
 }
@@ -115,7 +237,7 @@ describe("exit codes", () => {
 
 describe("protocol version", () => {
   it("is 33", () => {
-    expect(PROTOCOL_VERSION).toBe(33);
+    expect(PROTOCOL_VERSION).toBe(34);
   });
 
   it("requires Stop to name the exact active turn", () => {
@@ -375,6 +497,7 @@ describe("AthleteState", () => {
           { metric: "resting-hr", unit: "bpm", points: [] },
         ],
       },
+      trainingHistory: { kind: "unavailable", reason: "not-synced" },
     } as const;
     expect(CyclingTrainingContextSchema.parse(computed)).toEqual(computed);
     const { recentRides: _recentRides, ...olderContext } = computed;
@@ -394,6 +517,234 @@ describe("AthleteState", () => {
         adherence: { ...computed.adherence, ratio: 1.1 },
       }).success,
     ).toBe(false);
+    const { trainingHistory: _trainingHistory, ...withoutTrainingHistory } = computed;
+    expect(CyclingTrainingContextSchema.safeParse(withoutTrainingHistory).success).toBe(false);
+  });
+
+  it("round trips a computed training-history panel", () => {
+    expect(TrainingHistoryProjectionSchema.parse(computedTrainingHistory)).toEqual(
+      computedTrainingHistory,
+    );
+    expect(TrainingHistoryPanelSchema.parse(computedTrainingHistory)).toEqual(
+      computedTrainingHistory,
+    );
+  });
+
+  it("keeps stale state out of the training-history projection", () => {
+    const lastGood = {
+      ...computedTrainingHistory,
+      anchorWeek: { ...computedTrainingHistory.anchorWeek, callout: null },
+    } as const;
+    const stale = {
+      kind: "stale",
+      failedAt: "1998-07-13T00:05:00.000Z",
+      reason: "temporary-failure",
+      lastGood,
+    } as const;
+    expect(TrainingHistoryPanelSchema.parse(stale)).toEqual(stale);
+    expect(TrainingHistoryProjectionSchema.safeParse(stale).success).toBe(false);
+  });
+
+  it("accepts pre-1970 Monday weeks and rejects pre-1970 non-Monday starts", () => {
+    const emptyWeek = computedTrainingHistory.previousWeek;
+    const preEpochMonday = {
+      ...emptyWeek,
+      window: { start: "1969-12-29", end: "1970-01-04" },
+    };
+    expect(CompletedActivityWeekSchema.safeParse(preEpochMonday).success).toBe(true);
+    const preEpochTuesday = {
+      ...emptyWeek,
+      window: { start: "1969-12-30", end: "1970-01-05" },
+    };
+    expect(CompletedActivityWeekSchema.safeParse(preEpochTuesday).success).toBe(false);
+  });
+
+  it("rejects non-adjacent previous weeks and non-contiguous trend buckets", () => {
+    const detachedPrevious = {
+      ...computedTrainingHistory,
+      previousWeek: {
+        ...computedTrainingHistory.previousWeek,
+        window: { start: "1998-06-22", end: "1998-06-28" },
+      },
+    };
+    expect(TrainingHistoryProjectionSchema.safeParse(detachedPrevious).success).toBe(false);
+    const buckets = computedTrainingHistory.anchorWeek.trend.buckets;
+    const gappedTrend = {
+      kind: "computed",
+      buckets: [
+        ...buckets.slice(0, 5),
+        { ...buckets[5], window: { start: "1998-07-06", end: "1998-07-12" } },
+      ],
+    };
+    expect(RidingTimeTrendSchema.safeParse(gappedTrend).success).toBe(false);
+    const descendingTrend = {
+      kind: "computed",
+      buckets: [...buckets].reverse(),
+    };
+    expect(RidingTimeTrendSchema.safeParse(descendingTrend).success).toBe(false);
+    const offMondayTrend = {
+      kind: "computed",
+      buckets: buckets.map((bucket, index) =>
+        index === 2
+          ? { ...bucket, window: { start: "1998-06-02", end: "1998-06-08" } }
+          : bucket,
+      ),
+    };
+    expect(RidingTimeTrendSchema.safeParse(offMondayTrend).success).toBe(false);
+  });
+
+  it("rejects invalid completed-week windows, rides, ordering, and truncation", () => {
+    const week = computedTrainingHistory.anchorWeek;
+    const invalidWeeks = [
+      { ...week, window: { start: "1998-07-07", end: "1998-07-13" } },
+      {
+        ...week,
+        rides: {
+          ...week.rides,
+          items: [week.rides.items[0], { ...week.rides.items[1], localDate: "1998-07-13" }],
+        },
+      },
+      {
+        ...week,
+        rides: {
+          ...week.rides,
+          items: [week.rides.items[0], { ...week.rides.items[1], id: week.rides.items[0].id }],
+        },
+      },
+      { ...week, rides: { ...week.rides, items: [...week.rides.items].reverse() } },
+      { ...week, rides: { ...week.rides, truncated: true } },
+      { ...week, rides: { ...week.rides, count: { kind: "exact", value: 1 } } },
+    ];
+    for (const invalidWeek of invalidWeeks) {
+      expect(CompletedActivityWeekSchema.safeParse(invalidWeek).success).toBe(false);
+    }
+  });
+
+  it("parses every metric envelope arm and rejects unknown keys", () => {
+    const metricCases = [
+      {
+        schema: RideCountMetricValueSchema,
+        accepted: [
+          { kind: "computed", value: 2 },
+          { kind: "partial", value: 2, reason: "incomplete-coverage" },
+          { kind: "unavailable", reason: "incomplete-coverage" },
+        ],
+      },
+      {
+        schema: DurationMetricValueSchema,
+        accepted: [
+          { kind: "computed", value: 3_600 },
+          {
+            kind: "partial",
+            value: 3_600,
+            reason: "missing-recorded-value",
+            knownRideMissingValueCount: 1,
+          },
+          { kind: "partial", value: 3_600, reason: "incomplete-coverage" },
+          { kind: "unavailable", reason: "no-recorded-value" },
+        ],
+      },
+      {
+        schema: DistanceMetricValueSchema,
+        accepted: [
+          { kind: "computed", value: 40_000 },
+          {
+            kind: "partial",
+            value: 40_000,
+            reason: "missing-recorded-value",
+            knownRideMissingValueCount: 1,
+          },
+          { kind: "partial", value: 40_000, reason: "incomplete-coverage" },
+          { kind: "unavailable", reason: "invalid-recorded-value" },
+        ],
+      },
+      {
+        schema: LoadMetricValueSchema,
+        accepted: [
+          { kind: "computed", value: 80 },
+          {
+            kind: "partial",
+            value: 80,
+            reason: "missing-recorded-value",
+            knownRideMissingValueCount: 1,
+          },
+          { kind: "partial", value: 80, reason: "incomplete-coverage" },
+          { kind: "unavailable", reason: "no-recorded-value" },
+        ],
+      },
+    ];
+    for (const { schema, accepted } of metricCases) {
+      for (const value of accepted) {
+        expect(schema.parse(value)).toEqual(value);
+        expect(schema.safeParse({ ...value, extra: true }).success).toBe(false);
+      }
+    }
+    expect(
+      RideCountMetricValueSchema.safeParse({
+        kind: "partial",
+        value: 2,
+        reason: "missing-recorded-value",
+        knownRideMissingValueCount: 1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a riding-time basis whenever riding seconds are present", () => {
+    expect(
+      TrainingHistoryRideSchema.safeParse({
+        ...trainingHistoryRides[0],
+        ridingTimeBasis: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires callout windows to contain exactly 28 civil dates", () => {
+    expect(TrainingRideCalloutSchema.parse(trainingHistoryCallout)).toEqual(
+      trainingHistoryCallout,
+    );
+    expect(
+      TrainingRideCalloutSchema.safeParse({
+        ...trainingHistoryCallout,
+        window: { start: "1998-06-10", end: "1998-07-06" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires both last-good week callouts to be null", () => {
+    const lastGood = {
+      ...computedTrainingHistory,
+      anchorWeek: { ...computedTrainingHistory.anchorWeek, callout: null },
+    } as const;
+    const previousRide = {
+      ...trainingHistoryRides[1],
+      localDate: "1998-07-03",
+    } as const;
+    const previousCallout = {
+      ...trainingHistoryCallout,
+      rideId: previousRide.id,
+      durationSeconds: previousRide.ridingSeconds,
+      window: { start: "1998-06-08", end: "1998-07-05" },
+    } as const;
+    const withPreviousCallout = {
+      ...lastGood,
+      previousWeek: {
+        ...lastGood.previousWeek,
+        rides: { count: { kind: "exact", value: 1 }, items: [previousRide], truncated: false },
+        callout: previousCallout,
+      },
+    } as const;
+    expect(TrainingHistoryPanelSchema.safeParse(computedTrainingHistory).success).toBe(true);
+    expect(TrainingHistoryPanelSchema.safeParse(withPreviousCallout).success).toBe(true);
+    for (const invalidLastGood of [computedTrainingHistory, withPreviousCallout]) {
+      expect(
+        TrainingHistoryPanelSchema.safeParse({
+          kind: "stale",
+          failedAt: "1998-07-13T00:05:00.000Z",
+          reason: "temporary-failure",
+          lastGood: invalidLastGood,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("bounds Power Progress and preserves explicit unavailable and stale states", () => {

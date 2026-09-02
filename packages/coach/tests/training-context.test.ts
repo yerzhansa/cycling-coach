@@ -3,6 +3,7 @@ import type {
   DroppedActivities,
   PowerProgressPanel,
   RecentRidesPanel,
+  TrainingHistoryPanel,
 } from "@enduragent/coach-contract";
 import type { CyclingFtpAnchorResult } from "@enduragent/kernel/anchors";
 import {
@@ -60,6 +61,11 @@ const recentRides: RecentRidesPanel = {
       distanceMeters: 40_000,
     },
   ],
+};
+
+const trainingHistory: TrainingHistoryPanel = {
+  kind: "unavailable",
+  reason: "coverage-unavailable",
 };
 
 function activity(overrides: Record<string, unknown> = {}) {
@@ -132,6 +138,7 @@ function project(overrides: Partial<Parameters<typeof projectCyclingTrainingCont
     wellness: [wellness("2026-07-17")],
     performanceProgress,
     recentRides,
+    trainingHistory,
     ...overrides,
   });
 }
@@ -243,6 +250,7 @@ describe("cycling training context projection", () => {
       reason: "source-restricted",
     });
     expect(result.recentRides).toEqual({ kind: "unknown", reason: "source-restricted" });
+    expect(result.trainingHistory).toEqual(trainingHistory);
     expect(result.adherence).toEqual({ kind: "unknown", reason: "source-restricted" });
   });
 
