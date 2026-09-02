@@ -29,8 +29,10 @@ function syncChipStatus(
   if (sync.busy) return "syncing";
   if (sync.tone === "failure" || sync.tone === "partial") return "attention";
   if (training.status === "loading") return "loading";
+  if (training.status === "refresh-unavailable") return "attention";
+  if (training.status === "unavailable") return "unavailable";
   if (training.metadata !== null && training.metadata.lastSynced !== null) return "synced";
-  return training.status === "unavailable" ? "unavailable" : "never";
+  return "never";
 }
 
 const HEADLINE: Readonly<Record<SyncChipStatus, string>> = {
@@ -51,7 +53,8 @@ export function SyncChip(): ReactElement {
   const wrapper = useRef<HTMLDivElement>(null);
   const status = syncChipStatus(training, sync);
   const synced = training.metadata?.lastSynced ?? null;
-  const detail = status === "synced" && synced !== null ? formatUtcTimestamp(synced) : null;
+  const syncedDetail = status === "synced" && synced !== null ? formatUtcTimestamp(synced) : null;
+  const detail = sync.message === "" ? syncedDetail : sync.message;
   const restriction = sourceRestrictionSummary(sync.droppedActivities, "STRAVA");
   const restrictionLabel =
     restriction === null
@@ -80,7 +83,7 @@ export function SyncChip(): ReactElement {
         size="default"
         className="sync-chip absolute inset-0 z-0 h-auto w-full p-0"
         data-status={status}
-        title={restriction === null || detail === null ? undefined : detail}
+        title={restriction === null || syncedDetail === null ? undefined : syncedDetail}
         disabled={sync.disabled || actions === null}
         aria-label={[sync.label, HEADLINE[status], detail].filter(Boolean).join(" · ")}
         onClick={(event) => {
@@ -103,17 +106,16 @@ export function SyncChip(): ReactElement {
         <span className="block whitespace-normal" data-sync-headline="" aria-hidden="true">
           {HEADLINE[status]}
         </span>
-        {restriction === null ? (
-          detail === null ? null : (
-            <span
-              className="mt-px block whitespace-normal text-ink-3"
-              data-sync-detail=""
-              aria-hidden="true"
-            >
-              {detail}
-            </span>
-          )
-        ) : (
+        <span
+          className={cn(detail === null ? "sr-only" : "mt-px block whitespace-normal text-ink-3")}
+          data-sync-detail=""
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {detail}
+        </span>
+        {restriction === null ? null : (
           <InfoTip
             label="Why are activities hidden?"
             lead={STRAVA_RESTRICTION_DESKTOP_COPY.tooltipLead(restriction.count)}

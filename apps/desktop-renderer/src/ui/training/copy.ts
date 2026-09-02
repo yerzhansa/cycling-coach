@@ -174,6 +174,8 @@ export function trainingStatusCopy(status: TrainingContextStatus): string {
   return "";
 }
 
+export const TRAINING_DEGRADED_COPY = "Data may be incomplete";
+
 export function stalenessCopy(band: CyclingAnchor["stalenessBand"], ageDays: number): string {
   const days = Math.floor(ageDays);
   if (band === "fresh") return "Fresh";
