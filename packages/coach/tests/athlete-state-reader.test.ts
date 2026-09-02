@@ -236,7 +236,7 @@ describe("persisted athlete state source", () => {
       cyclingFtpAnchorResolver: resolver,
       trainingHistorySource: {
         readTrainingHistory: async () => {
-          if (fail) throw new Error("synthetic");
+          if (fail) return { kind: "unavailable", reason: "temporary-failure" };
           return computedTrainingHistory();
         },
       },
@@ -272,7 +272,7 @@ describe("persisted athlete state source", () => {
     });
   });
 
-  it("passes domain unavailable projections through without consuming last-good history", async () => {
+  it("uses last-good history for returned temporary failures only", async () => {
     const root = await home();
     await writeJson(root, "latest.json", latest("fresh", T1));
     let response: TrainingHistoryProjection | "throw" = computedTrainingHistory();
@@ -287,19 +287,23 @@ describe("persisted athlete state source", () => {
       },
       sourceOwner: () => "synthetic-athlete",
       calendarTimeZone: () => "UTC",
+      now: () => new Date(T1),
     });
 
     await reader.getAthleteState();
-    for (const reason of [
-      "coverage-unavailable",
-      "temporary-failure",
-      "invalid-data",
-    ] as const) {
+    for (const reason of ["coverage-unavailable", "invalid-data"] as const) {
       response = { kind: "unavailable", reason };
       expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual(
         response,
       );
     }
+    response = { kind: "unavailable", reason: "temporary-failure" };
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toMatchObject({
+      kind: "stale",
+      failedAt: T1,
+      reason: "temporary-failure",
+      lastGood: { anchorWeek: { callout: null }, previousWeek: { callout: null } },
+    });
     response = "throw";
     expect((await reader.getAthleteState()).trainingContext?.trainingHistory.kind).toBe(
       "stale",

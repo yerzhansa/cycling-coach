@@ -1093,6 +1093,110 @@ describe("ride review", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Training" })).toHaveFocus();
     expect(useEnduragentStore.getState().selectedRide).toBeNull();
   });
+
+  it("retains a selected ride outside the authoritative returned weeks", () => {
+    const selected = ride({
+      id: PREVIOUS_ID,
+      title: "Earlier endurance",
+      localDate: "1998-07-02",
+    });
+    act(() => useEnduragentStore.getState().openRide(selected));
+    const emptyWeek = (
+      id: "anchor" | "previous",
+      window: { readonly start: string; readonly end: string },
+    ): CompletedActivityWeek =>
+      week(id, {
+        window,
+        totals: {
+          rideCount: { kind: "computed", value: 0 },
+          ridingSeconds: { kind: "computed", value: 0 },
+          distanceMeters: { kind: "computed", value: 0 },
+          load: { kind: "computed", value: 0 },
+        },
+        rides: { count: { kind: "exact", value: 0 }, items: [], truncated: false },
+        callout: null,
+      });
+
+    setTraining(
+      ready(
+        history({
+          anchorWeek: emptyWeek("anchor", {
+            start: "1998-07-13",
+            end: "1998-07-19",
+          }),
+          previousWeek: emptyWeek("previous", {
+            start: "1998-07-06",
+            end: "1998-07-12",
+          }),
+        }),
+      ),
+    );
+    render(<TrainingView />);
+
+    expect(useEnduragentStore.getState().selectedRide).toEqual(selected);
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Earlier endurance" }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["unavailable", { kind: "unavailable", reason: "temporary-failure" }],
+    [
+      "stale",
+      {
+        kind: "stale",
+        failedAt: "1998-07-12T08:15:00.000Z",
+        reason: "temporary-failure",
+        lastGood: history(),
+      },
+    ],
+    [
+      "incomplete",
+      history({
+        anchorWeek: week("anchor", {
+          coverage: {
+            kind: "incomplete",
+            recordedThrough: "1998-07-08",
+            reason: "coverage-lag",
+          },
+          totals: {
+            rideCount: { kind: "partial", value: 1, reason: "incomplete-coverage" },
+            ridingSeconds: { kind: "partial", value: 3_600, reason: "incomplete-coverage" },
+            distanceMeters: { kind: "partial", value: 24_500, reason: "incomplete-coverage" },
+            load: { kind: "partial", value: 28, reason: "incomplete-coverage" },
+          },
+          rides: {
+            count: { kind: "at-least", value: 1 },
+            items: [ride({ id: SECOND_ID })],
+            truncated: true,
+          },
+          callout: null,
+        }),
+      }),
+    ],
+    [
+      "truncated",
+      history({
+        anchorWeek: week("anchor", {
+          rides: {
+            count: { kind: "at-least", value: 1 },
+            items: [ride({ id: SECOND_ID })],
+            truncated: true,
+          },
+          callout: null,
+        }),
+      }),
+    ],
+  ] as const)("retains a selected ride when history is %s", (_label, panel) => {
+    const selected = ride();
+    act(() => useEnduragentStore.getState().openRide(selected));
+
+    setTraining(ready(panel));
+    render(<TrainingView />);
+
+    expect(useEnduragentStore.getState().selectedRide).toEqual(selected);
+    expect(screen.getByRole("heading", { level: 2, name: "River tempo" })).toBeInTheDocument();
+  });
 });
 
 describe("power progress", () => {

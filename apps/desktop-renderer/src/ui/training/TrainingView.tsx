@@ -416,18 +416,6 @@ function UnavailableHistory(): ReactElement {
   );
 }
 
-function historyRide(
-  history: TrainingHistoryComputed | null,
-  rideId: string | null,
-): TrainingHistoryRide | null {
-  if (history === null || rideId === null) return null;
-  return (
-    history.anchorWeek.rides.items.find((ride) => ride.id === rideId) ??
-    history.previousWeek?.rides.items.find((ride) => ride.id === rideId) ??
-    null
-  );
-}
-
 function reviewCalloutReason(history: TrainingHistoryComputed, rideId: string): string | null {
   const anchor = calloutReason(history.anchorWeek, rideId);
   if (anchor !== null) return anchor;
@@ -448,15 +436,11 @@ export function TrainingView(): ReactElement {
   const panel = training.trainingContext.trainingHistory;
   const history = effectiveHistory(panel);
   const retained = panel.kind === "stale";
-  const resolvedRide = historyRide(history, selectedRide?.id ?? null);
+  const resolvedRide = selectedRide;
 
   useEffect(() => {
     if (period === "previous" && history?.previousWeek === null) setPeriod("anchor");
   }, [history?.previousWeek, period]);
-
-  useEffect(() => {
-    if (selectedRide !== null && resolvedRide === null) closeRide();
-  }, [closeRide, resolvedRide, selectedRide]);
 
   useLayoutEffect(() => {
     const currentRideId = resolvedRide?.id ?? null;
@@ -486,14 +470,14 @@ export function TrainingView(): ReactElement {
     [label, warning],
   );
 
-  if (resolvedRide !== null && history !== null) {
+  if (resolvedRide !== null) {
     return (
       <RideDetailView
         key={resolvedRide.id}
         ride={resolvedRide}
         units={training.unitsPreference.value}
         analysis={rideAnalysis}
-        calloutReason={reviewCalloutReason(history, resolvedRide.id)}
+        calloutReason={history === null ? null : reviewCalloutReason(history, resolvedRide.id)}
         onStartAnalysis={rideAnalysisActions === null ? null : () => rideAnalysisActions.start()}
         onRefreshAnalysis={
           rideAnalysisActions === null ? null : (sections) => rideAnalysisActions.refresh(sections)

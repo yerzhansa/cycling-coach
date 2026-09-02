@@ -1,5 +1,6 @@
 import {
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
+  type CompletedActivityWeek,
   type TrainingHistoryRide,
 } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
@@ -25,19 +26,35 @@ export interface TrainingSlice {
   closeRide: () => void;
 }
 
+function provesRideAbsent(
+  week: CompletedActivityWeek | null,
+  localDate: string,
+): boolean {
+  return (
+    week !== null &&
+    localDate >= week.window.start &&
+    localDate <= week.window.end &&
+    week.coverage.kind === "complete" &&
+    week.rides.count.kind === "exact" &&
+    !week.rides.truncated
+  );
+}
+
 function reconciledRide(
   current: TrainingHistoryRide | null,
   next: TrainingContextViewState,
 ): TrainingHistoryRide | null {
   if (current === null) return null;
   const panel = next.trainingContext.trainingHistory;
-  if (panel.kind === "unavailable") return null;
-  const history = panel.kind === "stale" ? panel.lastGood : panel;
-  return (
-    history.anchorWeek.rides.items.find((ride) => ride.id === current.id) ??
-    history.previousWeek?.rides.items.find((ride) => ride.id === current.id) ??
-    null
-  );
+  if (panel.kind !== "computed") return current;
+  const refreshed =
+    panel.anchorWeek.rides.items.find((ride) => ride.id === current.id) ??
+    panel.previousWeek?.rides.items.find((ride) => ride.id === current.id);
+  if (refreshed !== undefined) return refreshed;
+  return provesRideAbsent(panel.anchorWeek, current.localDate) ||
+    provesRideAbsent(panel.previousWeek, current.localDate)
+    ? null
+    : current;
 }
 
 export const createTrainingSlice: StateCreator<EnduragentState, [], [], TrainingSlice> = (
