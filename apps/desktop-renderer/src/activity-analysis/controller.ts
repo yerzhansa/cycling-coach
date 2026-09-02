@@ -51,7 +51,9 @@ export interface RideAnalysisView {
 
 export interface RideAnalysisController {
   select(activityId: string | null): Promise<void>;
+  start(): Promise<void>;
   load(sections: readonly ActivityAnalysisSection[], refresh?: boolean): Promise<void>;
+  invalidate(): void;
   dispose(): void;
 }
 
@@ -65,6 +67,7 @@ export function createRideAnalysisController(input: {
   let failedClient: CoachClient | undefined;
   let reconnectRequired = false;
   let state: RideAnalysisViewState = EMPTY_RIDE_ANALYSIS;
+  const cache = new Map<string, RideAnalysisViewState>();
 
   const render = (next: RideAnalysisViewState): void => {
     state = next;
@@ -123,14 +126,16 @@ export function createRideAnalysisController(input: {
         return;
       }
       const retain = state.revision === null || state.revision === result.revision;
-      render({
+      const next: RideAnalysisViewState = {
         activityId: selectedActivityId,
         status: "ready",
         revision: result.revision,
         sections: retain ? { ...state.sections, ...result.sections } : result.sections,
         loadingSections: [],
         failedSections: state.failedSections.filter((section) => !requested.includes(section)),
-      });
+      };
+      cache.set(selectedActivityId, next);
+      render(next);
     } catch (error) {
       if (
         disposed ||
@@ -169,17 +174,35 @@ export function createRideAnalysisController(input: {
         render(EMPTY_RIDE_ANALYSIS);
         return;
       }
+      const cached = cache.get(selected);
+      if (cached !== undefined) {
+        render(cached);
+        return;
+      }
       render({
         activityId: selected,
-        status: "loading",
+        status: "idle",
         revision: null,
         sections: {},
-        loadingSections: DEFAULT_RIDE_ANALYSIS_SECTIONS,
+        loadingSections: [],
         failedSections: [],
       });
+    },
+    async start() {
+      if (
+        disposed ||
+        state.activityId === null ||
+        state.status === "loading" ||
+        cache.has(state.activityId)
+      ) {
+        return;
+      }
       await load(DEFAULT_RIDE_ANALYSIS_SECTIONS);
     },
     load,
+    invalidate() {
+      cache.clear();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

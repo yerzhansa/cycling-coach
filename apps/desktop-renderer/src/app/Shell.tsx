@@ -2,6 +2,7 @@ import { Suspense, useEffect, type ReactElement } from "react";
 import { setupDisposition } from "../state/onboarding-slice";
 import { useEnduragentStore } from "../state/store";
 import { ChatView } from "../ui/chat/ChatView";
+import { clearTrainingRestrictionFocusRequest } from "../ui/settings/restriction-focus";
 import { Sidebar } from "../ui/sidebar/Sidebar";
 import { SetupGate } from "./SetupGate";
 import { REACT_CHAT_REGION, VIEWS } from "./views";
@@ -16,6 +17,10 @@ export function Shell(props: { readonly onReady: () => void }): ReactElement {
   useEffect(() => {
     onReady();
   }, [onReady]);
+
+  useEffect(() => {
+    if (activeView !== "settings") clearTrainingRestrictionFocusRequest();
+  }, [activeView]);
 
   return (
     <div

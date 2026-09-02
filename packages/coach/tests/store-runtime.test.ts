@@ -129,6 +129,23 @@ async function makeRuntime(
 }
 
 describe("StoreRuntime", () => {
+  it("threads the resolved calendar timezone into Reference capture", async () => {
+    const { runtime, capture } = await makeRuntime({
+      ...config,
+      session: { ...config.session, timezone: "Asia/Almaty" },
+    });
+
+    await runtime.runWindow();
+
+    expect(capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        calendarTimeZone: "Asia/Almaty",
+        reviewedOn: "1998-07-18",
+      }),
+    );
+    await runtime.close();
+  });
+
   it("threads injected win32 semantics into Reference capture", async () => {
     const { runtime, capture } = await makeRuntime(config, undefined, emptyReadonlyStore(), "win32");
 

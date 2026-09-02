@@ -71,6 +71,7 @@ export const ActivitySchema = z.looseObject({
   // ("i12345678") or number form (17654321) depending on the endpoint and
   // sport; we mirror that union so real intervals.icu shape rides through.
   id: z.union([z.string(), z.number()]),
+  name: z.string().nullable().optional(),
   start_date_local: z.string(), // ISO 8601
   type: z.string(), // "Ride", "VirtualRide", "Run", etc.
   moving_time: z.number().nonnegative(),

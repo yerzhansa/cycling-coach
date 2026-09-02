@@ -154,6 +154,59 @@ function makeScript(): DesktopFixtureScript {
                 },
               ],
             },
+            trainingHistory: {
+              kind: "computed",
+              asOf: "1998-07-19T08:00:00.000Z",
+              calendarTimeZone: "UTC",
+              displayMode: "last-recorded",
+              coverage: {
+                kind: "sparse",
+                latestKnownRideDate: "1998-07-09",
+                latestImportAt: "1998-07-19T08:00:00.000Z",
+              },
+              anchorWeek: {
+                id: "anchor",
+                window: { start: "1998-07-06", end: "1998-07-12" },
+                calendarState: "closed",
+                coverage: {
+                  kind: "incomplete",
+                  recordedThrough: "1998-07-09",
+                  reason: "sparse-imports",
+                },
+                totals: {
+                  rideCount: { kind: "computed", value: 1 },
+                  ridingSeconds: { kind: "computed", value: 3_600 },
+                  distanceMeters: { kind: "computed", value: 40_000 },
+                  load: { kind: "unavailable", reason: "no-recorded-value" },
+                },
+                rides: {
+                  count: { kind: "exact", value: 1 },
+                  items: [
+                    {
+                      id: "a".repeat(64),
+                      title: null,
+                      subSport: "road",
+                      startEpochSeconds: 900_000_000,
+                      timezoneOffsetSeconds: 0,
+                      localDate: "1998-07-09",
+                      ridingSeconds: 3_600,
+                      ridingTimeBasis: "moving",
+                      elapsedSeconds: 3_700,
+                      distanceMeters: 40_000,
+                      load: null,
+                      averagePowerWatts: null,
+                      averageHeartRateBpm: null,
+                      perceivedExertion: null,
+                      energyKilojoules: null,
+                    },
+                  ],
+                  truncated: false,
+                },
+                trend: { kind: "unavailable", reason: "limited-history" },
+                callout: null,
+              },
+              previousWeek: null,
+            },
             anchorZones: { kind: "unknown", reason: "not-synced" },
             cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
             plan: { kind: "unknown", reason: "no-plan" },
@@ -379,9 +432,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         chatWorking: composer !== null && composer.disabled === false,
         trainingReady:
           training !== null &&
-          training.querySelector(".training-status")?.hasAttribute("hidden") === true,
+          training.getAttribute("aria-busy") !== "true" &&
+          training.querySelector('[data-panel="weekly-summary"]') !== null,
         recentRideVisible:
-          recentRides?.querySelector('button[aria-label^="Review road ride"]') !== null,
+          recentRides?.querySelector('button[aria-label^="Open ride review:"]') !== null,
         syncNeedsAttention: syncChip?.getAttribute("data-status") === "attention",
       };
     `);

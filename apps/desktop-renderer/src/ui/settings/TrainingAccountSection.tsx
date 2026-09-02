@@ -1,4 +1,5 @@
-import type { ReactElement } from "react";
+import { TriangleAlert } from "lucide-react";
+import type { ReactElement, RefObject } from "react";
 import { Button } from "../../components/ui/button";
 import type {
   AthleteSettingsFormState,
@@ -7,10 +8,15 @@ import type {
 import { settingsMutationActive } from "../../state/settings-slice";
 import { useEnduragentStore } from "../../state/store";
 import {
+  sourceRestrictionSummary,
+  STRAVA_RESTRICTION_DESKTOP_COPY,
+} from "../../training-context/manual-sync";
+import {
   ATHLETE_SAVE_ERROR_COPY,
   ATHLETE_VALIDATION_COPY,
   MANAGED_BY_ENVIRONMENT_COPY,
 } from "./copy";
+import { STRAVA_RESTRICTION_CARD_ID } from "./restriction-focus";
 import { settingsStyles as styles } from "./styles";
 
 function formState(state: AthleteSettingsState): AthleteSettingsFormState | null {
@@ -44,8 +50,11 @@ function feedbackCopy(state: AthleteSettingsState): string | null {
   return null;
 }
 
-export function TrainingAccountSection(): ReactElement {
+export function TrainingAccountSection(props: {
+  readonly restrictionCard: RefObject<HTMLDivElement | null>;
+}): ReactElement {
   const state = useEnduragentStore((store) => store.settings.athlete);
+  const sync = useEnduragentStore((store) => store.sync);
   const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
   const port = useEnduragentStore((store) => store.settingsPorts?.athlete ?? null);
 
@@ -70,6 +79,7 @@ export function TrainingAccountSection(): ReactElement {
   const validation =
     editable?.validationError == null ? "" : ATHLETE_VALIDATION_COPY[editable.validationError];
   const feedback = feedbackCopy(state);
+  const restriction = sourceRestrictionSummary(sync.droppedActivities, "STRAVA");
   const describedBy = [
     "athlete-id-help",
     ...(externallyManaged ? ["athlete-id-managed"] : []),
@@ -181,6 +191,51 @@ export function TrainingAccountSection(): ReactElement {
           </Button>
         </div>
       </section>
+      {restriction === null ? null : (
+        <div
+          ref={props.restrictionCard}
+          id={STRAVA_RESTRICTION_CARD_ID}
+          tabIndex={-1}
+          className="mt-4 rounded-xl border border-line bg-surface p-4 shadow-elev-1"
+        >
+          <div className="flex items-start gap-2.5">
+            <TriangleAlert
+              size={17}
+              strokeWidth={1.8}
+              className="mt-px flex-none text-warn"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <p className="m-0 text-sm font-semibold text-ink">
+                {STRAVA_RESTRICTION_DESKTOP_COPY.cardTitle(restriction.count, restriction.total)}
+              </p>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+                {STRAVA_RESTRICTION_DESKTOP_COPY.cause}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2.5 border-t border-line pt-3">
+            <div className="flex items-start gap-2.5">
+              <span className="flex size-[18px] flex-none items-center justify-center rounded-full bg-brand/15 text-[10px] font-semibold text-brand">
+                1
+              </span>
+              <p className="m-0 text-[12.5px] leading-relaxed text-ink-2">
+                <strong className="font-semibold text-ink">For future rides — </strong>
+                {STRAVA_RESTRICTION_DESKTOP_COPY.future}
+              </p>
+            </div>
+            <div className="flex items-start gap-2.5">
+              <span className="flex size-[18px] flex-none items-center justify-center rounded-full bg-brand/15 text-[10px] font-semibold text-brand">
+                2
+              </span>
+              <p className="m-0 text-[12.5px] leading-relaxed text-ink-2">
+                <strong className="font-semibold text-ink">For past rides — </strong>
+                {STRAVA_RESTRICTION_DESKTOP_COPY.past}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

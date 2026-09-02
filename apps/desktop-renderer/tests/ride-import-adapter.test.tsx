@@ -14,6 +14,7 @@ import { useEnduragentStore } from "../src/state/store";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice";
 import { TrainingView } from "../src/ui/training/TrainingView";
+import { pinDefaultLocale } from "./intl";
 
 const PATHS = ["/rides/tuesday.fit"] as const;
 
@@ -41,7 +42,10 @@ function harness(
   const importFiles = vi.fn<RideImportTransport["importFiles"]>(
     options.importFiles ?? (async () => importResult(1)),
   );
-  const controller = createRideImportController({ chooseImportFiles, importFiles });
+  const controller = createRideImportController({
+    chooseImportFiles,
+    importFiles,
+  });
   const owners: (RideImportOwner | null)[] = [];
   const published: RideImportState[] = [];
   const adapter = createRideImportAdapter({
@@ -54,7 +58,14 @@ function harness(
     },
   });
   useEnduragentStore.getState().bindRideImportActions(adapter.port);
-  return { adapter, chooseImportFiles, controller, importFiles, owners, published };
+  return {
+    adapter,
+    chooseImportFiles,
+    controller,
+    importFiles,
+    owners,
+    published,
+  };
 }
 
 function status(): HTMLElement {
@@ -64,6 +75,7 @@ function status(): HTMLElement {
 }
 
 beforeEach(() => {
+  pinDefaultLocale("en-US");
   useEnduragentStore.setState({
     activeView: "training",
     training: EMPTY_TRAINING_SURFACE,
@@ -76,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   useEnduragentStore.setState({
     activeView: "chat",
     rideImport: IDLE_RIDE_IMPORT,
@@ -115,6 +128,71 @@ describe("resident ride import glue", () => {
               },
             ],
           },
+          trainingHistory: {
+            kind: "computed",
+            asOf: "1998-07-18T12:00:00.000Z",
+            calendarTimeZone: "UTC",
+            displayMode: "last-recorded",
+            coverage: {
+              kind: "sparse",
+              latestKnownRideDate: "1998-07-09",
+              latestImportAt: "1998-07-18T12:00:00.000Z",
+            },
+            anchorWeek: {
+              id: "anchor",
+              window: { start: "1998-07-06", end: "1998-07-12" },
+              calendarState: "closed",
+              coverage: {
+                kind: "incomplete",
+                recordedThrough: "1998-07-09",
+                reason: "sparse-imports",
+              },
+              totals: {
+                rideCount: {
+                  kind: "partial",
+                  value: 1,
+                  reason: "incomplete-coverage",
+                },
+                ridingSeconds: {
+                  kind: "partial",
+                  value: 3_600,
+                  reason: "incomplete-coverage",
+                },
+                distanceMeters: {
+                  kind: "partial",
+                  value: 40_000,
+                  reason: "incomplete-coverage",
+                },
+                load: { kind: "unavailable", reason: "no-recorded-value" },
+              },
+              rides: {
+                count: { kind: "exact", value: 1 },
+                items: [
+                  {
+                    id: "a".repeat(64),
+                    title: null,
+                    subSport: "road",
+                    startEpochSeconds: 900_000_000,
+                    timezoneOffsetSeconds: 0,
+                    localDate: "1998-07-09",
+                    ridingSeconds: 3_600,
+                    ridingTimeBasis: "moving",
+                    elapsedSeconds: 3_700,
+                    distanceMeters: 40_000,
+                    load: null,
+                    averagePowerWatts: null,
+                    averageHeartRateBpm: null,
+                    perceivedExertion: null,
+                    energyKilojoules: null,
+                  },
+                ],
+                truncated: false,
+              },
+              trend: { kind: "unavailable", reason: "limited-history" },
+              callout: null,
+            },
+            previousWeek: null,
+          },
           anchorZones: { kind: "unknown", reason: "not-synced" },
           cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
           plan: { kind: "unknown", reason: "no-plan" },
@@ -130,16 +208,16 @@ describe("resident ride import glue", () => {
     });
     render(<TrainingView />);
 
-    expect(screen.getByText("Training data unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Training history is not available yet.")).toBeInTheDocument();
     await act(async () => {
       await subject.controller.importPaths("onboarding", [...PATHS]);
     });
 
     expect(onSucceeded).toHaveBeenCalledOnce();
-    expect(screen.queryByText("Training data unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Training history is not available yet.")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "Review road ride from 1998-07-09 · 16:00, 1h 2m, 40.0 km",
+        name: "Open ride review: Road ride, Jul 9, 1998 · 4:00 PM",
       }),
     ).toBeInTheDocument();
   });
@@ -191,7 +269,10 @@ describe("resident ride import glue", () => {
       subject.adapter.port.choose();
       await vi.waitFor(() => expect(subject.importFiles).toHaveBeenCalledTimes(2));
     });
-    expect(subject.published.at(-1)).toMatchObject({ status: "succeeded", owner: "resident" });
+    expect(subject.published.at(-1)).toMatchObject({
+      status: "succeeded",
+      owner: "resident",
+    });
   });
 
   it("reports a failed import through the same publication path", async () => {

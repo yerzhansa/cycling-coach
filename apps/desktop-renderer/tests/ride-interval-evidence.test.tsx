@@ -1,19 +1,26 @@
-import type { ActivityAnalysisData, RecentRide } from "@enduragent/coach-contract";
-import { render, screen, within } from "@testing-library/react";
+import type { ActivityAnalysisData, TrainingHistoryRide } from "@enduragent/coach-contract";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it } from "vitest";
 import type { RideAnalysisViewState } from "../src/activity-analysis/controller";
 import { RideDetailView } from "../src/ui/training/RideReview";
 
-const ride: RecentRide = {
+const ride: TrainingHistoryRide = {
   id: "a".repeat(64),
+  title: null,
   subSport: "road",
   startEpochSeconds: 900_000_000,
   timezoneOffsetSeconds: 0,
   localDate: "1998-07-09",
+  ridingSeconds: 3_500,
+  ridingTimeBasis: "moving",
   elapsedSeconds: 3_600,
-  movingSeconds: 3_500,
   distanceMeters: 32_000,
+  load: null,
+  averagePowerWatts: null,
+  averageHeartRateBpm: null,
+  perceivedExertion: null,
+  energyKilojoules: null,
 };
 
 const fullMetrics = {
@@ -112,13 +119,18 @@ describe("ride interval evidence", () => {
         ride={ride}
         units="metric"
         analysis={analysis}
+        calloutReason={null}
+        onStartAnalysis={null}
         onRefreshAnalysis={null}
         onBack={() => undefined}
         titleRef={createRef<HTMLHeadingElement>()}
       />,
     );
+    fireEvent.click(screen.getByText("Recorded analysis and export"));
 
-    const ordered = screen.getByRole("list", { name: "Ordered ride intervals and laps" });
+    const ordered = screen.getByRole("list", {
+      name: "Ordered ride intervals and laps",
+    });
     const [work, recovery] = within(ordered).getAllByRole("listitem");
     expect(work).toHaveTextContent("91 avg · 108 max rpm");
     expect(work).toHaveTextContent("Zone 4");
@@ -134,7 +146,9 @@ describe("ride interval evidence", () => {
       expect(within(metric!).getByLabelText("Unavailable")).toBeInTheDocument();
     }
 
-    const groups = screen.getByRole("region", { name: "Interval group summaries" });
+    const groups = screen.getByRole("region", {
+      name: "Interval group summaries",
+    });
     expect(within(groups).getByText("Segment group")).toBeInTheDocument();
     expect(within(groups).getByText("Segments 1, 2")).toBeInTheDocument();
     expect(groups).toHaveTextContent("92 avg · 109 max rpm");

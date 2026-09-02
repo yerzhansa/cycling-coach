@@ -72,6 +72,7 @@ function runtimeFor(
     runtime,
     intervalsCredentials: { read: async () => ({ apiKey: "", athleteId: "" }) },
     historyNewestDate: () => "1998-07-18",
+    calendarTimeZone: () => "UTC",
     applyRuntimeConfig: async () => {},
   });
   return { runtime, operations };
@@ -382,6 +383,7 @@ FROM session`,
         runtime: selected.runtime,
         intervalsCredentials: { read: async () => ({ apiKey: "", athleteId: "" }) },
         historyNewestDate: () => "1998-07-18",
+        calendarTimeZone: () => "UTC",
         applyRuntimeConfig: async () => {},
       },
       { importFiles },

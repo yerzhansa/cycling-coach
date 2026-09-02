@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@enduragent/kernel/archive";
+import { createReferenceCapturePlan } from "@enduragent/kernel/reference/capture";
 import type { SyncBudget } from "@enduragent/kernel/store";
 import { describe, expect, it } from "vitest";
 import { createIntervalsIcuSource } from "../src/source.js";
 
 const NOW = new Date("1998-07-18T12:00:00.000Z");
+const PLAN = createReferenceCapturePlan({ now: NOW, calendarTimeZone: "UTC" });
 const PROFILE = { sportSettings: [{ id: 7, athlete_id: "synthetic-athlete", types: ["Ride"], updated: "1998-07-01T00:00:00.000Z", ftp: 250 }] };
 const ACTIVITY = { id: 42, type: "Ride", start_date: "1998-07-17T10:00:00.000Z",
   start_date_local: "1998-07-17T12:00:00", moving_time: 3600, elapsed_time: 3700, distance: 40_000 };
@@ -40,8 +42,21 @@ function fixture(stream: unknown = { time: [0, 1], watts: [200, 210] }, activiti
 }
 
 describe("captureReference", () => {
+  it("uses the caller plan's non-UTC civil window for both ranged endpoints", async () => {
+    const value = fixture();
+    const plan = createReferenceCapturePlan({
+      now: new Date("1998-07-18T20:30:00.000Z"),
+      calendarTimeZone: "Asia/Almaty",
+    });
+
+    await value.source.captureReference(plan, budget());
+
+    expect(value.requests[1]).toContain("oldest=1998-04-26&newest=1998-07-19");
+    expect(value.requests[2]).toContain("oldest=1998-04-26&newest=1998-07-19");
+  });
+
   it("fetches exact endpoints in selector order and archives whole/member evidence after fetch", async () => {
-    const value = fixture(), batch = await value.source.captureReference(NOW, budget());
+    const value = fixture(), batch = await value.source.captureReference(PLAN, budget());
     expect(value.requests).toHaveLength(4);
     expect(value.requests[0]).toMatch(/\/api\/v1\/athlete\/synthetic-athlete$/);
     expect(value.requests[1]).toContain("/activities?oldest=");
@@ -62,19 +77,19 @@ describe("captureReference", () => {
     const foreign = { id: "9002", icu_athlete_id: "i12345", start_date_local: "1998-07-17T14:09:41", source: "GARMIN_CONNECT" };
     const value = fixture({ time: [0, 1], watts: [200, 210] }, [ACTIVITY, stub, foreign]);
 
-    const batch = await value.source.captureReference(NOW, budget());
+    const batch = await value.source.captureReference(PLAN, budget());
 
     expect(batch.records.activities).toHaveLength(1);
     expect(batch.dropped_activity_rows).toEqual({ sourceRestricted: 1, other: 1 });
   });
 
   it("reports no dropped activity rows for a clean capture", async () => {
-    const batch = await fixture().source.captureReference(NOW, budget());
+    const batch = await fixture().source.captureReference(PLAN, budget());
     expect(batch.dropped_activity_rows).toEqual({ sourceRestricted: 0, other: 0 });
   });
 
   it("omits malformed stream responses without omitting required lanes", async () => {
-    const value = fixture("invalid"), batch = await value.source.captureReference(NOW, budget());
+    const value = fixture("invalid"), batch = await value.source.captureReference(PLAN, budget());
     expect(batch.selected_stream_ids).toEqual(["42"]);
     expect(batch.captured_stream_ids).toEqual([]);
     expect(batch.endpoints).toHaveLength(3);
@@ -83,13 +98,13 @@ describe("captureReference", () => {
 
   it("reserves every selected stream artifact before requests or archives", async () => {
     const value = fixture();
-    await expect(value.source.captureReference(NOW, budget(6))).rejects.toThrow();
+    await expect(value.source.captureReference(PLAN, budget(6))).rejects.toThrow();
     expect(value.requests).toHaveLength(3);
     expect(value.writes).toHaveLength(0);
   });
 
   it("derives live membership in whole-payload encounter order and omits malformed members", async () => {
-    const value = fixture(), plan = (await value.source.captureReference(NOW, budget())).plan;
+    const value = fixture(), plan = (await value.source.captureReference(PLAN, budget())).plan;
     const derived = await value.source.deriveReferenceCaptureMembers(plan, [
       { ordinal: 0, lane: "settings", endpoint: "athlete-profile", request: { oldest: null, newest: null, activity_id: null, stream_types: [], include_defaults: null }, payload: PROFILE },
       { ordinal: 1, lane: "activities", endpoint: "activities", request: { oldest: plan.window.oldest, newest: plan.window.newest, activity_id: null, stream_types: [], include_defaults: null }, payload: [{ bad: true }, ACTIVITY] },

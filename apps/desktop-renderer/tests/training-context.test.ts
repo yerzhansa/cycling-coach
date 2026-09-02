@@ -7,8 +7,9 @@ import {
   type TrainingContextViewState,
 } from "../src/training-context/controller";
 import {
-  formatDateLabel,
+  formatDistance,
   formatPercentage,
+  formatRidingDuration,
   formatSleepDuration,
   formatUtcTimestamp,
   formatWholeNumber,
@@ -17,10 +18,11 @@ import {
 const context: CyclingTrainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
   recentRides: { kind: "unknown", reason: "no-recent-rides" },
+  trainingHistory: { kind: "unavailable", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
   cyclingLoad: {
     kind: "computed",
-    asOf: "2026-07-18T00:00:00.000Z",
+    asOf: "1998-07-18T00:00:00.000Z",
     source: "intervals.icu",
     windowDays: 7,
     value: 120,
@@ -35,10 +37,10 @@ const context: CyclingTrainingContext = {
 function athlete(trainingContext: CyclingTrainingContext | undefined = context): AthleteState {
   return {
     schemaVersion: "3",
-    lastUpdated: "2026-07-18T00:00:00.000Z",
+    lastUpdated: "1998-07-18T00:00:00.000Z",
     freshness: "flag",
     degraded: true,
-    lastSynced: "2026-07-17T23:00:00.000Z",
+    lastSynced: "1998-07-17T23:00:00.000Z",
     athleteProfile: { hidden: true },
     currentStatus: { hidden: true },
     derivedMetrics: { hidden: true },
@@ -81,8 +83,8 @@ describe("training context controller", () => {
     expect(states.at(-1)).toEqual({
       status: "ready",
       metadata: {
-        lastUpdated: "2026-07-18T00:00:00.000Z",
-        lastSynced: "2026-07-17T23:00:00.000Z",
+        lastUpdated: "1998-07-18T00:00:00.000Z",
+        lastSynced: "1998-07-17T23:00:00.000Z",
         freshness: "flag",
         degraded: true,
       },
@@ -326,17 +328,18 @@ describe("training context controller", () => {
 
 describe("training context display formatters", () => {
   it("formats only display values without clock or locale inputs", () => {
-    expect(formatDateLabel("2026-07-18T12:00:00Z")).toBe("2026-07-18");
-    expect(formatDateLabel("2026-02-30")).toBe("Unknown date");
     expect(formatWholeNumber(12.6)).toBe("13");
     expect(formatPercentage(0.756)).toBe("76%");
     expect(formatSleepDuration(27_901)).toBe("7h 45m");
+    expect(formatRidingDuration(7_200)).toBe("2h");
+    expect(formatRidingDuration(5_100)).toBe("1h 25m");
+    expect(formatDistance(42_120, "metric")).toBe("42.1 km");
+    expect(formatDistance(42_120, "imperial")).toBe("26.2 mi");
   });
 
   it("distinguishes same-day sync seconds while mutation labels remain date-only", () => {
     expect(formatUtcTimestamp("1998-07-18T12:34:56.999Z")).toBe("1998-07-18 12:34:56 UTC");
     expect(formatUtcTimestamp("1998-07-18T12:34:57.001Z")).toBe("1998-07-18 12:34:57 UTC");
-    expect(formatDateLabel("1998-07-18T12:34:57.001Z")).toBe("1998-07-18");
   });
 
   it("normalizes valid offsets to UTC and uses fixed copy for invalid sync times", () => {

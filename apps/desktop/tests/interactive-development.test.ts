@@ -5,6 +5,7 @@ import {
   DESKTOP_INSPECTION_FIXTURE_ENV,
   PLAN_CURRENT_INSPECTION_FIXTURE,
   selectInteractiveDevelopmentTemporaryRoot,
+  TRAINING_CURRENT_INSPECTION_FIXTURE,
 } from "../scripts/interactive-development.mjs";
 
 const desktopRoot = join("/private", "tmp", "enduragent", "apps", "desktop");
@@ -57,27 +58,30 @@ describe("interactive desktop development plan", () => {
     expect(value.athleteHome).not.toBe(value.userData);
   });
 
-  it("launches the bounded Plan inspection fixture through the isolated command", () => {
-    const value = plan({
-      environment: {
-        [DESKTOP_INSPECTION_FIXTURE_ENV]: PLAN_CURRENT_INSPECTION_FIXTURE,
-        PLAN_QA_SCENARIO: "PL-S089",
-        PLAN_QA_OUTCOME: "failure",
-      },
-    });
+  it.each([PLAN_CURRENT_INSPECTION_FIXTURE, TRAINING_CURRENT_INSPECTION_FIXTURE])(
+    "launches the bounded %s inspection fixture through the isolated command",
+    (inspectionFixture) => {
+      const value = plan({
+        environment: {
+          [DESKTOP_INSPECTION_FIXTURE_ENV]: inspectionFixture,
+          PLAN_QA_SCENARIO: "PL-S089",
+          PLAN_QA_OUTCOME: "failure",
+        },
+      });
 
-    expect(value.args).toEqual([
-      "-dimsu",
-      nodeExecutable,
-      packageManagerScript,
-      "exec",
-      "tsx",
-      "tests/helpers/plan-inspection-live.ts",
-    ]);
-    expect(value.environment[DESKTOP_INSPECTION_FIXTURE_ENV]).toBe(PLAN_CURRENT_INSPECTION_FIXTURE);
-    expect(value.environment.PLAN_QA_SCENARIO).toBeUndefined();
-    expect(value.environment.PLAN_QA_OUTCOME).toBeUndefined();
-  });
+      expect(value.args).toEqual([
+        "-dimsu",
+        nodeExecutable,
+        packageManagerScript,
+        "exec",
+        "tsx",
+        "tests/helpers/plan-inspection-live.ts",
+      ]);
+      expect(value.environment[DESKTOP_INSPECTION_FIXTURE_ENV]).toBe(inspectionFixture);
+      expect(value.environment.PLAN_QA_SCENARIO).toBeUndefined();
+      expect(value.environment.PLAN_QA_OUTCOME).toBeUndefined();
+    },
+  );
 
   it("refuses an unknown inspection fixture", () => {
     expect(() =>

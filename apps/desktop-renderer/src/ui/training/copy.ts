@@ -10,8 +10,6 @@ import type {
 import { PLATFORM_COPY } from "../../platform-copy";
 import type { TrainingContextStatus } from "../../training-context/controller";
 
-export const MAX_VISIBLE_PLAN_ITEMS = 7;
-
 export const TRAINING_UNKNOWN_COPY: Readonly<Record<TrainingContextUnknownReason, string>> = {
   "not-synced": "Not synced yet",
   "missing-anchor": "No cycling FTP anchor is available",
@@ -28,7 +26,7 @@ export const POWER_PROGRESS_UNAVAILABLE_COPY: Readonly<
   Record<PowerProgressUnavailableReason, string>
 > = {
   "not-synced": "Sync training data to compare your recent power.",
-  "insufficient-data": "Not enough power-curve data to compare two 28-day periods.",
+  "insufficient-data": "Power progress needs rides with recorded power in both 28-day windows.",
   "invalid-data": "Power progress data could not be verified. Sync again.",
   "refresh-failed": "Power progress has not refreshed yet. Try syncing again.",
   "temporary-failure": "Power progress is temporarily unavailable. Try again.",
@@ -68,6 +66,30 @@ export const POWER_PROGRESS_FRESHNESS_COPY: Readonly<
 };
 
 export const RIDE_IMPORT_DESCRIPTION = PLATFORM_COPY.rideImportDescription;
+
+export const TRAINING_HISTORY_COPY = {
+  current: "This week",
+  previous: "Previous week",
+  lastRecorded: "Last recorded week",
+  coverage: "Recorded through",
+  trendTitle: "Six complete weeks of riding time",
+  trendUnavailable: "Trend unavailable",
+  limitedHistory: "Six complete weeks are needed.",
+  incompleteTrend: "Some weeks are not fully recorded.",
+  missingDuration: "Riding time is missing for one or more rides.",
+  currentEmpty: "No recorded rides this week.",
+  previousEmpty: "No recorded rides in the previous week.",
+  lastRecordedEmpty: "No recorded rides in this period.",
+  unknownRides: "Recent rides are not available for this period.",
+  incomplete: "Some rides may be missing.",
+  coverageLag: "This week has not been recorded yet.",
+  sparse: "Showing imported rides only. Earlier rides may be missing.",
+  refreshFailure: "Training could not be refreshed. Showing the last recorded data.",
+  unavailable: "Training history is not available yet.",
+  review: "Ride review",
+  back: "Back to training",
+  disclosure: "Recorded analysis and export",
+} as const;
 
 export function analysisUnavailableCopy(reason: AnalysisUnavailableReason): string {
   switch (reason) {

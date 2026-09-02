@@ -26,10 +26,10 @@ export const responseStyles = {
   responseFitLine: "response-fit-line flex-[0_0_34px] border-t-[3px] border-brand",
   responseFitNote: "mt-2 max-w-[660px] text-xs leading-[1.5] text-ink-3",
   responseSummary:
-    "mt-4 grid grid-cols-[repeat(2,minmax(0,1fr))_auto] items-center gap-3 max-[760px]:grid-cols-2 [&>div]:min-w-0 [&>div]:border-r [&>div]:border-line [&>div]:pr-3 [&_p]:m-0 [&>div>p:last-child]:mt-1 [&>div>p:last-child]:text-xs [&>div>p:last-child]:text-ink-3",
+    "mt-4 grid grid-cols-[repeat(2,minmax(0,1fr))_auto] items-center gap-3 max-[761px]:grid-cols-2 [&>div]:min-w-0 [&>div]:border-r [&>div]:border-line [&>div]:pr-3 [&_p]:m-0 [&>div>p:last-child]:mt-1 [&>div>p:last-child]:text-xs [&>div>p:last-child]:text-ink-3",
   responseValue: "text-xl leading-6 font-semibold tabular-nums",
   responseCoverage:
-    "justify-self-end rounded-chip border border-line-2 px-2 py-[5px] text-xs font-medium text-ink-2 data-[limited=true]:border-brand max-[760px]:col-span-full max-[760px]:justify-self-start",
+    "justify-self-end rounded-chip border border-line-2 px-2 py-[5px] text-xs font-medium text-ink-2 data-[limited=true]:border-brand max-[761px]:col-span-full max-[761px]:justify-self-start",
   responseMeta:
-    "mt-3.5 grid grid-cols-3 gap-2.5 max-[760px]:grid-cols-1 [&>div]:min-w-0 [&>div]:rounded-card [&>div]:border [&>div]:border-line [&>div]:p-2.5 [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:mt-[5px] [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-xs [&_dd]:leading-[1.4] [&_dd]:text-ink-2 [&_dd]:tabular-nums",
+    "mt-3.5 grid grid-cols-3 gap-2.5 max-[761px]:grid-cols-1 [&>div]:min-w-0 [&>div]:rounded-card [&>div]:border [&>div]:border-line [&>div]:p-2.5 [&_dt]:text-xs [&_dt]:font-medium [&_dt]:text-ink-3 [&_dd]:mt-[5px] [&_dd]:[overflow-wrap:anywhere] [&_dd]:text-xs [&_dd]:leading-[1.4] [&_dd]:text-ink-2 [&_dd]:tabular-nums",
 } as const;

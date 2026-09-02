@@ -22,6 +22,7 @@ function isCivilDate(value: string): boolean {
 export const TrainingExportCivilDateSchema = z
   .string()
   .refine(isCivilDate, "invalid training export civil date");
+export const CivilDateSchema = TrainingExportCivilDateSchema;
 
 export const DesktopTrainingExportRequestSchema = z.discriminatedUnion("kind", [
   z

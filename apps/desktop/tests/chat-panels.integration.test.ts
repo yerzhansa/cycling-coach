@@ -85,6 +85,56 @@ const trainingContext = {
       },
     ],
   },
+  trainingHistory: {
+    kind: "computed",
+    asOf: "2026-07-19T08:00:00.000Z",
+    calendarTimeZone: "Asia/Almaty",
+    displayMode: "current",
+    coverage: {
+      kind: "contiguous",
+      start: "2026-06-01",
+      through: "2026-07-19",
+      committedAt: "2026-07-19T07:55:00.000Z",
+    },
+    anchorWeek: {
+      id: "anchor",
+      window: { start: "2026-07-13", end: "2026-07-19" },
+      calendarState: "closed",
+      coverage: { kind: "complete" },
+      totals: {
+        rideCount: { kind: "computed", value: 1 },
+        ridingSeconds: { kind: "computed", value: 5_100 },
+        distanceMeters: { kind: "computed", value: 42_120 },
+        load: { kind: "unavailable", reason: "no-recorded-value" },
+      },
+      rides: {
+        count: { kind: "exact", value: 1 },
+        items: [
+          {
+            id: "c".repeat(64),
+            title: null,
+            subSport: "road",
+            startEpochSeconds: 1_784_358_000,
+            timezoneOffsetSeconds: 18_000,
+            localDate: "2026-07-18",
+            ridingSeconds: 5_100,
+            ridingTimeBasis: "moving",
+            elapsedSeconds: 5_460,
+            distanceMeters: 42_120,
+            load: null,
+            averagePowerWatts: null,
+            averageHeartRateBpm: null,
+            perceivedExertion: null,
+            energyKilojoules: null,
+          },
+        ],
+        truncated: false,
+      },
+      trend: { kind: "unavailable", reason: "limited-history" },
+      callout: null,
+    },
+    previousWeek: null,
+  },
   anchorZones: {
     kind: "computed",
     asOf: "2026-07-19T08:00:00.000Z",
@@ -1194,7 +1244,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     }
     await visibleQaCheckpoint("scr-02-scrolled-up");
 
-    const trainingView = await fixture.evaluate<string | null>(`
+    const trainingView = await fixture.evaluate<{
+      readonly view: string | null;
+      readonly weeklySummary: string;
+      readonly recentRides: string;
+      readonly historyStatus: string;
+    }>(`
       const navigation = document.querySelector('nav[aria-label="Main navigation"]');
       const training = Array.from(navigation?.querySelectorAll("button") ?? []).find(
         (entry) => entry.textContent?.trim() === "Training",
@@ -1202,12 +1257,27 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       if (!(training instanceof HTMLButtonElement)) throw new Error("Training navigation missing");
       training.click();
       const deadline = Date.now() + 5000;
-      while (!document.querySelector('[data-view="training"]') && Date.now() < deadline) {
+      while (!document.querySelector('[data-panel="weekly-summary"]') && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
-      return document.querySelector("[data-view]")?.getAttribute("data-view") ?? null;
+      const weeklySummary = document.querySelector('[data-panel="weekly-summary"]');
+      const recentRides = document.querySelector('[data-panel="recent-rides"]');
+      if (!(weeklySummary instanceof HTMLElement) || !(recentRides instanceof HTMLElement)) {
+        throw new Error("week-first Training surface missing");
+      }
+      return {
+        view: document.querySelector("[data-view]")?.getAttribute("data-view") ?? null,
+        weeklySummary: weeklySummary.querySelector("h2")?.textContent ?? "",
+        recentRides: recentRides.querySelector("h2")?.textContent ?? "",
+        historyStatus: weeklySummary.querySelector("p")?.textContent ?? "",
+      };
     `);
-    expect(trainingView).toBe("training");
+    expect(trainingView).toEqual({
+      view: "training",
+      weeklySummary: "Weekly summary",
+      recentRides: "Recent rides",
+      historyStatus: "Recorded through Jul 19, 2026",
+    });
     liveTurn.emit({ type: "text_delta", turnId: streamTurnId, delta: thirdStreamDelta });
     const hiddenUpdate = await fixture.evaluate<{
       readonly view: string | null;
@@ -2039,33 +2109,27 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     const training = await fixture.evaluate<{
       readonly current: string | null;
       readonly order: readonly string[];
-      readonly status: string;
-      readonly statusHidden: boolean;
-      readonly anchorValue: string;
-      readonly wellnessValue: string;
+      readonly retiredPanelsAbsent: boolean;
       readonly pageOverflow: boolean;
       readonly documentOverflow: boolean;
       readonly sync: {
         readonly buttonResident: boolean;
-        readonly queued: string;
-        readonly runningObserved: boolean;
-        readonly terminal: string;
-        readonly label: string;
-        readonly atomicLiveRegion: boolean;
-        readonly busyQueued: boolean;
+        readonly initialStatus: string;
+        readonly initialLabel: string | null;
+        readonly syncingObserved: boolean;
+        readonly syncingLabel: string | null;
+        readonly disabledWhileSyncing: boolean;
+        readonly ariaBusyAbsentWhileSyncing: boolean;
+        readonly terminalStatus: string;
+        readonly terminalLabel: string | null;
         readonly busyCleared: boolean;
         readonly keyboardFocusRestored: boolean;
-        readonly noChangeTerminalObservations: number;
-        readonly noChangeTerminalOnlyAfterRefresh: boolean;
-        readonly onlyLastSyncedChanged: boolean;
+        readonly metadataDetailChanged: boolean;
         readonly trainingPanelsUnchanged: boolean;
-        readonly asOfUnchanged: boolean;
-        readonly asOfBefore: string;
-        readonly asOfAfter: string;
-        readonly lastSyncedBefore: string;
-        readonly lastSyncedAfter: string;
-        readonly chipStatus: string;
-        readonly statusWraps: boolean;
+        readonly detailBefore: string;
+        readonly detailAfter: string;
+        readonly chipFitsSidebar: boolean;
+        readonly chipHasNoOverflow: boolean;
         readonly buttonReachable: boolean;
       };
     }>(`
@@ -2075,96 +2139,82 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       );
       trainingNav.click();
       const mountDeadline = Date.now() + 5000;
-      while (!document.querySelector('[data-panel="wellness"]') && Date.now() < mountDeadline) {
+      while (!document.querySelector('[data-panel="weekly-summary"]') && Date.now() < mountDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const page = document.querySelector('section[aria-label="Training"]');
       const panels = [...page.querySelectorAll("[data-panel]")];
-      const panel = (name) => panels.find((entry) => entry.dataset.panel === name);
-      const statusLine = page.querySelector(".training-status");
       const opened = {
         current: trainingNav.getAttribute("aria-current"),
-        order: panels.map((entry) => entry.querySelector("h2").textContent),
-        status: statusLine.textContent,
-        statusHidden: statusLine.hidden,
-        anchorValue: panel("anchor").querySelector("p").textContent,
-        wellnessValue: panel("wellness").querySelector("span").textContent,
+        order: panels.map((entry) => entry.dataset.panel),
+        retiredPanelsAbsent: ["anchor", "load", "wellness", "plan", "adherence"].every(
+          (name) => page.querySelector('[data-panel="' + name + '"]') === null,
+        ),
       };
-      const dataPanels = ["anchor", "load", "plan", "adherence", "wellness"];
-      const syncButton = page.querySelector(".training-sync-action");
-      const syncStatus = page.querySelector(".training-sync-message");
-      const metadataText = () => [...page.querySelectorAll(".training-metadata-item")].map((node) => node.textContent ?? "");
-      const metadataChildrenText = () => [...page.querySelector(".training-metadata").children].map((node) => node.textContent ?? "");
-      const metadataBefore = metadataChildrenText();
-      const panelsBefore = dataPanels.map((name) => panel(name).textContent ?? "");
-      const asOfBefore = metadataText().find((value) => value.startsWith("As of ")) ?? "";
-      const lastSyncedBefore = metadataText().find((value) => value.startsWith("Last synced ")) ?? "";
-      const liveValues = [];
-      const noChangeCopy = "Local training-data processing completed.";
-      let noChangeTerminalObservations = 0;
-      let noChangeTerminalBeforeRefresh = false;
-      const liveObserver = new MutationObserver(() => {
-        const value = syncStatus.textContent ?? "";
-        liveValues.push(value);
-        if (value === noChangeCopy) {
-          noChangeTerminalObservations += 1;
-          const currentLastSynced = metadataText().find((item) => item.startsWith("Last synced ")) ?? "";
-          if (currentLastSynced === lastSyncedBefore) noChangeTerminalBeforeRefresh = true;
-        }
-      });
-      liveObserver.observe(syncStatus, { childList: true, characterData: true, subtree: true });
+      const syncButton = document.querySelector("button.sync-chip");
+      const syncSurface = document.querySelector("[data-sync-chip]");
+      const sidebar = syncSurface.closest("aside");
+      const metadataDetail = () =>
+        [...syncSurface.querySelectorAll('span[aria-hidden="true"]')]
+          .map((node) => node.textContent?.trim() ?? "")
+          .find((value) => value.endsWith(" UTC")) ?? "";
+      const panelsBefore = panels.map((panel) => panel.textContent ?? "");
+      const initialStatus = syncButton.dataset.status;
+      const initialLabel = syncButton.getAttribute("aria-label");
+      const detailBefore = metadataDetail();
       syncButton.focus();
       syncButton.click();
-      const queued = syncStatus.textContent ?? "";
-      const busyQueued = syncButton.disabled && syncButton.getAttribute("aria-busy") === "true";
+      const syncingDeadline = Date.now() + 5000;
+      while (syncButton.dataset.status !== "syncing" && Date.now() < syncingDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const syncingObserved = syncButton.dataset.status === "syncing";
+      const syncingLabel = syncButton.getAttribute("aria-label");
+      const disabledWhileSyncing = syncButton.disabled;
+      const ariaBusyAbsentWhileSyncing = !syncButton.hasAttribute("aria-busy");
       syncButton.click();
       syncButton.blur();
       const syncDeadline = Date.now() + 5000;
-      while (syncButton.disabled && Date.now() < syncDeadline) {
+      while (
+        (syncButton.dataset.status !== "synced" || metadataDetail() === detailBefore) &&
+        Date.now() < syncDeadline
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      liveObserver.disconnect();
-      const asOfAfter = metadataText().find((value) => value.startsWith("As of ")) ?? "";
-      const lastSyncedAfter = metadataText().find((value) => value.startsWith("Last synced ")) ?? "";
-      const metadataAfter = metadataChildrenText();
-      const panelsAfter = dataPanels.map((name) => panel(name).textContent ?? "");
-      syncStatus.scrollIntoView({ block: "nearest" });
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const detailAfter = metadataDetail();
+      const panelsAfter = [...page.querySelectorAll("[data-panel]")].map(
+        (panel) => panel.textContent ?? "",
+      );
       const syncButtonRect = syncButton.getBoundingClientRect();
-      const pageRect = page.getBoundingClientRect();
+      const syncSurfaceRect = syncSurface.getBoundingClientRect();
+      const sidebarRect = sidebar.getBoundingClientRect();
       const syncResult = {
-        buttonResident: syncButton === page.querySelector(".training-sync-action"),
-        queued,
-        runningObserved: liveValues.includes("Syncing training data…"),
-        terminal: syncStatus.textContent ?? "",
-        label: syncButton.textContent ?? "",
-        atomicLiveRegion:
-          syncStatus.getAttribute("role") === "status" &&
-          syncStatus.getAttribute("aria-live") === "polite" &&
-          syncStatus.getAttribute("aria-atomic") === "true",
-        busyQueued,
+        buttonResident:
+          syncButton === document.querySelector("button.sync-chip") &&
+          document.querySelectorAll("button.sync-chip").length === 1,
+        initialStatus,
+        initialLabel,
+        syncingObserved,
+        syncingLabel,
+        disabledWhileSyncing,
+        ariaBusyAbsentWhileSyncing,
+        terminalStatus: syncButton.dataset.status,
+        terminalLabel: syncButton.getAttribute("aria-label"),
         busyCleared: !syncButton.hasAttribute("aria-busy") && !syncButton.disabled,
         keyboardFocusRestored: document.activeElement === syncButton,
-        noChangeTerminalObservations,
-        noChangeTerminalOnlyAfterRefresh:
-          noChangeTerminalObservations === 1 &&
-          !noChangeTerminalBeforeRefresh &&
-          lastSyncedAfter !== lastSyncedBefore,
-        onlyLastSyncedChanged:
-          metadataBefore.length === metadataAfter.length &&
-          metadataBefore.filter((value, index) => value !== metadataAfter[index]).length === 1 &&
-          metadataBefore.find((value) => value.startsWith("Last synced ")) === lastSyncedBefore &&
-          metadataAfter.find((value) => value.startsWith("Last synced ")) === lastSyncedAfter,
+        metadataDetailChanged: detailAfter !== detailBefore,
         trainingPanelsUnchanged: JSON.stringify(panelsBefore) === JSON.stringify(panelsAfter),
-        asOfUnchanged: asOfBefore === asOfAfter,
-        asOfBefore,
-        asOfAfter,
-        lastSyncedBefore,
-        lastSyncedAfter,
-        chipStatus: document.querySelector(".sync-chip").dataset.status,
-        statusWraps: syncStatus.scrollWidth <= syncStatus.clientWidth,
+        detailBefore,
+        detailAfter,
+        chipFitsSidebar:
+          syncSurfaceRect.left >= sidebarRect.left && syncSurfaceRect.right <= sidebarRect.right,
+        chipHasNoOverflow: syncSurface.scrollWidth <= syncSurface.clientWidth,
         buttonReachable:
-          syncButtonRect.top >= pageRect.top && syncButtonRect.bottom <= pageRect.bottom,
+          syncButtonRect.left >= 0 &&
+          syncButtonRect.right <= window.innerWidth &&
+          syncButtonRect.top >= 0 &&
+          syncButtonRect.bottom <= window.innerHeight,
       };
       return {
         ...opened,
@@ -2177,44 +2227,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     `);
     expect(training).toEqual({
       current: "page",
-      order: [
-        "Sync",
-        "Power progress",
-        "Recent rides",
-        "Current cycling anchor",
-        "Cycling Load",
-        "Plan",
-        "Adherence",
-        "Wellness trend",
-        "Import ride files",
-      ],
-      status: "",
-      statusHidden: true,
-      anchorValue: "300 W",
-      wellnessValue: "65 ms",
+      order: ["weekly-summary", "recent-rides", "power-progress"],
+      retiredPanelsAbsent: true,
       pageOverflow: false,
       documentOverflow: false,
       sync: {
         buttonResident: true,
-        queued: "Sync queued.",
-        runningObserved: true,
-        terminal: "Local training-data processing completed.",
-        label: "Sync again",
-        atomicLiveRegion: true,
-        busyQueued: true,
+        initialStatus: "synced",
+        initialLabel: "Sync now · Training data synced · 2026-07-19 07:55:00 UTC",
+        syncingObserved: true,
+        syncingLabel: "Sync now · Syncing",
+        disabledWhileSyncing: true,
+        ariaBusyAbsentWhileSyncing: true,
+        terminalStatus: "synced",
+        terminalLabel: "Sync again · Training data synced · 2026-07-19 07:55:01 UTC",
         busyCleared: true,
         keyboardFocusRestored: true,
-        noChangeTerminalObservations: 1,
-        noChangeTerminalOnlyAfterRefresh: true,
-        onlyLastSyncedChanged: true,
+        metadataDetailChanged: true,
         trainingPanelsUnchanged: true,
-        asOfUnchanged: true,
-        asOfBefore: "As of 2026-07-19",
-        asOfAfter: "As of 2026-07-19",
-        lastSyncedBefore: "Last synced 2026-07-19 07:55:00 UTC",
-        lastSyncedAfter: "Last synced 2026-07-19 07:55:01 UTC",
-        chipStatus: "synced",
-        statusWraps: true,
+        detailBefore: "2026-07-19 07:55:00 UTC",
+        detailAfter: "2026-07-19 07:55:01 UTC",
+        chipFitsSidebar: true,
+        chipHasNoOverflow: true,
         buttonReachable: true,
       },
     });
@@ -2242,6 +2276,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const page = document.querySelector('section[aria-label="Ride review"]');
+      const title = page.querySelector("h1");
+      const titleFocused = document.activeElement === title;
+      const analysisDisclosure = [...page.querySelectorAll("summary")].find(
+        (entry) => entry.textContent.includes("Recorded analysis and export"),
+      );
+      analysisDisclosure.click();
       const analysisDeadline = Date.now() + 5000;
       while (
         (!page.textContent.includes("+4.8%") ||
@@ -2253,11 +2293,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      const title = page.querySelector("h1");
       const powerHeartRatePanel = page.querySelector('[aria-labelledby="power-heart-rate-title"]');
       return {
         page: page.getAttribute("aria-label"),
-        titleFocused: document.activeElement === title,
+        titleFocused,
         overview: page.querySelector('[aria-labelledby="ride-overview-title"]').textContent,
         canonicalIdVisible: page.textContent.includes("${"c".repeat(64)}"),
         pageOverflow: Array.from(page.querySelectorAll("section, div, dl")).some(
@@ -2282,7 +2321,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(rideReview).toEqual({
       page: "Ride review",
       titleFocused: true,
-      overview: "Recent rideRoad rideDate2026-07-18 · 12:00Duration1h 31mDistance42.1 km",
+      overview: "Road rideRoad rideDateJul 18, 2026 · 12:00 PMRiding time1h 25mDistance42.1 km",
       canonicalIdVisible: false,
       pageOverflow: false,
       documentOverflow: false,
@@ -2400,15 +2439,19 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly settingsResident: boolean;
       readonly settingsReachable: boolean;
       readonly settingsAccessibleLabel: string;
+      readonly sidebarFullyVisible: boolean;
       readonly chipReachable: boolean;
       readonly syncFitsRail: boolean;
       readonly syncHasNoOverflow: boolean;
-      readonly syncActionHidden: boolean;
+      readonly completeStatusVisible: boolean;
+      readonly surfaceMinWidthZero: boolean;
+      readonly readableWrapping: boolean;
       readonly trainingOpen: boolean;
-      readonly buttonResident: boolean;
-      readonly buttonReachable: boolean;
-      readonly noChangeStatus: boolean;
-      readonly statusFits: boolean;
+      readonly panelOrder: readonly string[];
+      readonly retiredPanelsAbsent: boolean;
+      readonly chipResident: boolean;
+      readonly chipAccessibleLabel: string | null;
+      readonly metadataDetailVisible: boolean;
       readonly horizontalOverflow: boolean;
     }>(`
       const rail = document.querySelector('nav[aria-label="Main navigation"]');
@@ -2416,7 +2459,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         .find((entry) => entry.textContent.includes("Training"))
         .click();
       const mountDeadline = Date.now() + 5000;
-      while (!document.querySelector('[data-panel="wellness"]') && Date.now() < mountDeadline) {
+      while (!document.querySelector('[data-panel="weekly-summary"]') && Date.now() < mountDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -2424,20 +2467,18 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         (entry) => entry.textContent.includes("Settings"),
       );
       const page = document.querySelector('section[aria-label="Training"]');
-      const compactButton = page.querySelector(".training-sync-action");
-      const compactStatus = page.querySelector(".training-sync-message");
-      const chip = document.querySelector(".sync-chip");
+      const panels = [...page.querySelectorAll("[data-panel]")];
+      const chip = document.querySelector("button.sync-chip");
       const syncSurface = document.querySelector("[data-sync-chip]");
       const sidebar = syncSurface.closest("aside");
-      const syncAction = syncSurface.lastElementChild;
-      const pageRect = page.getBoundingClientRect();
-      const buttonRect = compactButton.getBoundingClientRect();
+      const headline = syncSurface.querySelector("[data-sync-headline]");
+      const detail = syncSurface.querySelector("[data-sync-detail]");
+      const action = syncSurface.querySelector("[data-sync-action]");
       const railRect = rail.getBoundingClientRect();
       const settingsRect = settings.getBoundingClientRect();
       const chipRect = chip.getBoundingClientRect();
       const syncRect = syncSurface.getBoundingClientRect();
       const sidebarRect = sidebar.getBoundingClientRect();
-      compactButton.scrollIntoView({ block: "nearest" });
       return {
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         settingsResident: rail.contains(settings),
@@ -2447,6 +2488,11 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           settingsRect.top >= railRect.top &&
           settingsRect.bottom <= railRect.bottom,
         settingsAccessibleLabel: settings.textContent.trim(),
+        sidebarFullyVisible:
+          sidebarRect.left >= 0 &&
+          sidebarRect.right <= window.innerWidth &&
+          sidebarRect.top >= 0 &&
+          sidebarRect.bottom <= window.innerHeight,
         chipReachable:
           chipRect.left >= 0 &&
           chipRect.right <= window.innerWidth &&
@@ -2454,19 +2500,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         syncFitsRail:
           syncRect.left >= sidebarRect.left && syncRect.right <= sidebarRect.right,
         syncHasNoOverflow: syncSurface.scrollWidth <= syncSurface.clientWidth,
-        syncActionHidden: getComputedStyle(syncAction).display === "none",
+        completeStatusVisible:
+          headline.textContent === "Training data synced" &&
+          detail.textContent === "2026-07-19 07:55:01 UTC" &&
+          action.textContent === "Sync again" &&
+          [headline, detail, action].every((row) => getComputedStyle(row).display !== "none"),
+        surfaceMinWidthZero: getComputedStyle(syncSurface).minWidth === "0px",
+        readableWrapping:
+          syncSurface.querySelectorAll(".truncate").length === 0 &&
+          [headline, detail, action].every(
+            (row) =>
+              getComputedStyle(row).whiteSpace === "normal" && row.scrollWidth <= row.clientWidth,
+          ),
         trainingOpen: page.getAttribute("aria-hidden") === null,
-        buttonResident: page.querySelectorAll(".training-sync-action").length === 1,
-        buttonReachable:
-          buttonRect.left >= pageRect.left &&
-          buttonRect.right <= pageRect.right &&
-          buttonRect.top >= pageRect.top &&
-          buttonRect.bottom <= Math.min(pageRect.bottom, window.innerHeight),
-        noChangeStatus: compactStatus.textContent === "Local training-data processing completed.",
-        statusFits: compactStatus.scrollWidth <= compactStatus.clientWidth,
-        horizontalOverflow: Array.from(page.querySelectorAll("section, div, ol, dl, p")).some(
-          (node) => node.scrollWidth > node.clientWidth,
+        panelOrder: panels.map((panel) => panel.dataset.panel),
+        retiredPanelsAbsent: ["anchor", "load", "wellness", "plan", "adherence"].every(
+          (name) => page.querySelector('[data-panel="' + name + '"]') === null,
         ),
+        chipResident:
+          sidebar.contains(chip) && document.querySelectorAll("button.sync-chip").length === 1,
+        chipAccessibleLabel: chip.getAttribute("aria-label"),
+        metadataDetailVisible: syncSurface.textContent.includes("2026-07-19 07:55:01 UTC"),
+        horizontalOverflow: page.scrollWidth > page.clientWidth,
       };
     `);
     expect(compactTrainingGeometry).toEqual({
@@ -2474,15 +2529,19 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       settingsResident: true,
       settingsReachable: true,
       settingsAccessibleLabel: "Settings",
+      sidebarFullyVisible: true,
       chipReachable: true,
       syncFitsRail: true,
       syncHasNoOverflow: true,
-      syncActionHidden: true,
+      completeStatusVisible: true,
+      surfaceMinWidthZero: true,
+      readableWrapping: true,
       trainingOpen: true,
-      buttonResident: true,
-      buttonReachable: true,
-      noChangeStatus: true,
-      statusFits: true,
+      panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
+      retiredPanelsAbsent: true,
+      chipResident: true,
+      chipAccessibleLabel: "Sync again · Training data synced · 2026-07-19 07:55:01 UTC",
+      metadataDetailVisible: true,
       horizontalOverflow: false,
     });
     const runtimeReadsBeforeSettings = calls.filter(
@@ -2614,7 +2673,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     fixtures.splice(fixtures.indexOf(fixture), 1);
   }, 90_000);
 
-  it("keeps the long partial-sync status reachable and wrapped at 720×800", async () => {
+  it("keeps partial-sync attention reachable without sidebar overflow at 720×800", async () => {
     const { fixture, calls } = await launch({
       width: 720,
       height: 800,
@@ -2623,12 +2682,22 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     });
     const compact = await fixture.evaluate<{
       readonly trainingOpen: boolean;
-      readonly buttonResident: boolean;
-      readonly buttonReachable: boolean;
-      readonly terminal: string;
-      readonly label: string;
-      readonly chipStatus: string;
-      readonly statusWrapped: boolean;
+      readonly panelOrder: readonly string[];
+      readonly retiredPanelsAbsent: boolean;
+      readonly chipResident: boolean;
+      readonly chipReachable: boolean;
+      readonly sidebarFullyVisible: boolean;
+      readonly syncingObserved: boolean;
+      readonly disabledWhileSyncing: boolean;
+      readonly ariaBusyAbsentWhileSyncing: boolean;
+      readonly terminalStatus: string;
+      readonly terminalLabel: string | null;
+      readonly terminalText: string;
+      readonly enabledAfterSync: boolean;
+      readonly longStatusAbsent: boolean;
+      readonly surfaceMinWidthZero: boolean;
+      readonly readableStatus: boolean;
+      readonly chipHasNoOverflow: boolean;
       readonly keyboardFocusRestored: boolean;
       readonly horizontalOverflow: boolean;
     }>(`
@@ -2636,55 +2705,99 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         .find((entry) => entry.textContent.includes("Training"))
         .click();
       const mountDeadline = Date.now() + 5000;
-      while (!document.querySelector(".training-sync-action") && Date.now() < mountDeadline) {
+      while (!document.querySelector('[data-panel="weekly-summary"]') && Date.now() < mountDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const page = document.querySelector('section[aria-label="Training"]');
-      const syncButton = page.querySelector(".training-sync-action");
-      const syncStatus = page.querySelector(".training-sync-message");
+      const panels = [...page.querySelectorAll("[data-panel]")];
+      const syncButton = document.querySelector("button.sync-chip");
+      const syncSurface = document.querySelector("[data-sync-chip]");
+      const sidebar = syncSurface.closest("aside");
       syncButton.focus();
+      syncButton.click();
+      const syncingDeadline = Date.now() + 5000;
+      while (syncButton.dataset.status !== "syncing" && Date.now() < syncingDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const syncingObserved = syncButton.dataset.status === "syncing";
+      const disabledWhileSyncing = syncButton.disabled;
+      const ariaBusyAbsentWhileSyncing = !syncButton.hasAttribute("aria-busy");
       syncButton.click();
       syncButton.blur();
       const deadline = Date.now() + 5000;
-      while (syncButton.disabled && Date.now() < deadline) {
+      while (syncButton.dataset.status !== "attention" && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      syncStatus.scrollIntoView({ block: "nearest" });
-      const pageRect = page.getBoundingClientRect();
-      const buttonRect = syncButton.getBoundingClientRect();
-      const statusRect = syncStatus.getBoundingClientRect();
-      const lineHeight = Number.parseFloat(getComputedStyle(syncStatus).lineHeight);
+      const chipRect = syncButton.getBoundingClientRect();
+      const syncRect = syncSurface.getBoundingClientRect();
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const headline = syncSurface.querySelector("[data-sync-headline]");
+      const action = syncSurface.querySelector("[data-sync-action]");
       return {
         trainingOpen: page.getAttribute("aria-hidden") === null,
-        buttonResident: page.querySelectorAll(".training-sync-action").length === 1,
-        buttonReachable:
-          buttonRect.left >= pageRect.left &&
-          buttonRect.right <= pageRect.right &&
-          buttonRect.top >= pageRect.top &&
-          buttonRect.bottom <= Math.min(pageRect.bottom, window.innerHeight),
-        terminal: syncStatus.textContent ?? "",
-        label: syncButton.textContent ?? "",
-        chipStatus: document.querySelector(".sync-chip").dataset.status,
-        statusWrapped:
-          statusRect.height >= lineHeight * 1.9 &&
-          syncStatus.scrollWidth <= syncStatus.clientWidth,
+        panelOrder: panels.map((panel) => panel.dataset.panel),
+        retiredPanelsAbsent: ["anchor", "load", "wellness", "plan", "adherence"].every(
+          (name) => page.querySelector('[data-panel="' + name + '"]') === null,
+        ),
+        chipResident:
+          sidebar.contains(syncButton) && document.querySelectorAll("button.sync-chip").length === 1,
+        chipReachable:
+          chipRect.left >= sidebarRect.left &&
+          chipRect.right <= sidebarRect.right &&
+          chipRect.top >= 0 &&
+          chipRect.bottom <= window.innerHeight,
+        sidebarFullyVisible:
+          sidebarRect.left >= 0 &&
+          sidebarRect.right <= window.innerWidth &&
+          sidebarRect.top >= 0 &&
+          sidebarRect.bottom <= window.innerHeight,
+        syncingObserved,
+        disabledWhileSyncing,
+        ariaBusyAbsentWhileSyncing,
+        terminalStatus: syncButton.dataset.status,
+        terminalLabel: syncButton.getAttribute("aria-label"),
+        terminalText: syncSurface.textContent ?? "",
+        enabledAfterSync: !syncButton.disabled,
+        longStatusAbsent: !syncSurface.textContent.includes(
+          "Training-data processing partially completed. Try again to finish.",
+        ),
+        surfaceMinWidthZero: getComputedStyle(syncSurface).minWidth === "0px",
+        readableStatus:
+          headline.textContent === "Sync needs attention" &&
+          action.textContent === "Try again" &&
+          getComputedStyle(headline).whiteSpace === "normal" &&
+          getComputedStyle(action).display !== "none" &&
+          headline.scrollWidth <= headline.clientWidth &&
+          action.scrollWidth <= action.clientWidth,
+        chipHasNoOverflow:
+          syncRect.left >= sidebarRect.left &&
+          syncRect.right <= sidebarRect.right &&
+          syncSurface.scrollWidth <= syncSurface.clientWidth,
         keyboardFocusRestored: document.activeElement === syncButton,
         horizontalOverflow:
           document.documentElement.scrollWidth > document.documentElement.clientWidth ||
-          Array.from(page.querySelectorAll("section, div, ol, dl, p")).some(
-            (node) => node.scrollWidth > node.clientWidth,
-          ),
+          page.scrollWidth > page.clientWidth,
       };
     `);
     expect(compact).toEqual({
       trainingOpen: true,
-      buttonResident: true,
-      buttonReachable: true,
-      terminal: "Training-data processing partially completed. Try again to finish.",
-      label: "Try again",
-      chipStatus: "attention",
-      statusWrapped: true,
+      panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
+      retiredPanelsAbsent: true,
+      chipResident: true,
+      chipReachable: true,
+      sidebarFullyVisible: true,
+      syncingObserved: true,
+      disabledWhileSyncing: true,
+      ariaBusyAbsentWhileSyncing: true,
+      terminalStatus: "attention",
+      terminalLabel: "Try again · Sync needs attention",
+      terminalText: "Sync needs attentionTry again",
+      enabledAfterSync: true,
+      longStatusAbsent: true,
+      surfaceMinWidthZero: true,
+      readableStatus: true,
+      chipHasNoOverflow: true,
       keyboardFocusRestored: true,
       horizontalOverflow: false,
     });
