@@ -110,6 +110,23 @@ describe("Plan inspection live fixture", () => {
         (ride) => ride.averagePowerWatts === null,
       ),
     ).toBe(true);
+    expect(noPower.recentRides.kind).toBe("computed");
+    if (noPower.recentRides.kind !== "computed") throw new TypeError("expected recent rides");
+    const noPowerCallout = noPower.trainingHistory.anchorWeek.callout;
+    expect(noPowerCallout?.kind).toBe("longest-ride-28d");
+    if (noPowerCallout?.kind !== "longest-ride-28d") {
+      throw new TypeError("expected longest ride callout");
+    }
+    const longestDuration = Math.max(
+      ...noPower.recentRides.items
+        .filter(
+          (ride) =>
+            ride.localDate >= noPowerCallout.window.start &&
+            ride.localDate <= noPowerCallout.window.end,
+        )
+        .map((ride) => ride.movingSeconds ?? 0),
+    );
+    expect(noPowerCallout.durationSeconds).toBe(longestDuration);
 
     const limited = TRAINING_LIMITED_ATHLETE_STATE.trainingContext?.trainingHistory;
     expect(limited?.kind).toBe("computed");
@@ -134,9 +151,15 @@ describe("Plan inspection live fixture", () => {
     });
     expect(limited.anchorWeek.callout).toBeNull();
 
-    const incomplete = TRAINING_INCOMPLETE_ATHLETE_STATE.trainingContext?.trainingHistory;
+    const incompleteContext = TRAINING_INCOMPLETE_ATHLETE_STATE.trainingContext;
+    const incomplete = incompleteContext?.trainingHistory;
     expect(incomplete?.kind).toBe("computed");
     if (incomplete?.kind !== "computed") throw new TypeError("expected history");
+    expect(incompleteContext.recentRides.kind).toBe("computed");
+    if (incompleteContext.recentRides.kind !== "computed") {
+      throw new TypeError("expected recent rides");
+    }
+    expect(incompleteContext.recentRides.asOf).toBe(incomplete.asOf);
     expect(incomplete.coverage.kind).toBe("incomplete");
     expect(incomplete.anchorWeek.coverage.kind).toBe("incomplete");
     expect(incomplete.anchorWeek.coverage).toEqual({
@@ -163,6 +186,18 @@ describe("Plan inspection live fixture", () => {
       reason: "incomplete-source",
     });
     expect(incomplete.anchorWeek.callout).toBeNull();
+    expect(incomplete.previousWeek?.coverage).toEqual({ kind: "complete" });
+    expect(incomplete.previousWeek?.totals).toEqual({
+      rideCount: { kind: "computed", value: 0 },
+      ridingSeconds: { kind: "computed", value: 0 },
+      distanceMeters: { kind: "computed", value: 0 },
+      load: { kind: "computed", value: 0 },
+    });
+    expect(incomplete.previousWeek?.rides).toEqual({
+      count: { kind: "exact", value: 0 },
+      items: [],
+      truncated: false,
+    });
 
     const stale = TRAINING_STALE_ATHLETE_STATE.trainingContext?.trainingHistory;
     expect(stale?.kind).toBe("stale");
@@ -171,6 +206,23 @@ describe("Plan inspection live fixture", () => {
     expect(stale.lastGood.anchorWeek.calendarState).toBe("closed");
     expect(stale.lastGood.anchorWeek.callout).toBeNull();
     expect(stale.lastGood.previousWeek).toBeNull();
+  });
+
+  it("keeps Training fixture ride IDs distinct across data states", () => {
+    const states = [
+      TRAINING_CURRENT_ATHLETE_STATE,
+      TRAINING_NO_POWER_ATHLETE_STATE,
+      TRAINING_LIMITED_ATHLETE_STATE,
+      TRAINING_INCOMPLETE_ATHLETE_STATE,
+      TRAINING_STALE_ATHLETE_STATE,
+    ];
+    const rideIds = states.flatMap((state) =>
+      state.trainingContext?.recentRides.kind === "computed"
+        ? state.trainingContext.recentRides.items.map((ride) => ride.id)
+        : [],
+    );
+
+    expect(new Set(rideIds).size).toBe(rideIds.length);
   });
 
   it("uses privacy-safe ordinary Main Chat turns", async () => {

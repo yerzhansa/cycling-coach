@@ -7,7 +7,7 @@ if (currentTrainingContext === undefined) throw new TypeError("expected Training
 const AS_OF = "1998-08-30T18:00:00.000Z";
 
 const anchorRide = {
-  id: "7777777777777777777777777777777777777777777777777777777777777777",
+  id: "7878787878787878787878787878787878787878787878787878787878787878",
   title: "Canal ride",
   subSport: "road",
   startEpochSeconds: 904_377_600,

@@ -9,7 +9,7 @@ const FAILED_AT = "1998-08-30T18:00:00.000Z";
 
 const rides = [
   {
-    id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    id: "bdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd",
     title: "Rolling endurance",
     subSport: "road",
     startEpochSeconds: 903_859_200,
@@ -26,7 +26,7 @@ const rides = [
     energyKilojoules: 1_394,
   },
   {
-    id: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    id: "cececececececececececececececececececececececececececececececece",
     title: "Easy road spin",
     subSport: "road",
     startEpochSeconds: 903_600_000,

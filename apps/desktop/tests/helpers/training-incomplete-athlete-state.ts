@@ -26,7 +26,7 @@ const recordedRides = [
     energyKilojoules: 949,
   },
   {
-    id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    id: "adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad",
     title: "Country endurance",
     subSport: "road",
     startEpochSeconds: 904_118_400,
@@ -50,7 +50,7 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
     performanceProgress: { kind: "unavailable", reason: "temporary-failure" },
     recentRides: {
       kind: "computed",
-      asOf: "1998-08-28T18:00:00.000Z",
+      asOf: AS_OF,
       windowDays: 28,
       items: recordedRides.map((ride) => ({
         id: ride.id,
@@ -103,21 +103,17 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
         id: "previous",
         window: { start: "1998-08-17", end: "1998-08-23" },
         calendarState: "closed",
-        coverage: {
-          kind: "incomplete",
-          recordedThrough: "1998-08-21",
-          reason: "source-degraded",
-        },
+        coverage: { kind: "complete" },
         totals: {
-          rideCount: { kind: "partial", value: 0, reason: "incomplete-coverage" },
-          ridingSeconds: { kind: "partial", value: 0, reason: "incomplete-coverage" },
-          distanceMeters: { kind: "partial", value: 0, reason: "incomplete-coverage" },
-          load: { kind: "partial", value: 0, reason: "incomplete-coverage" },
+          rideCount: { kind: "computed", value: 0 },
+          ridingSeconds: { kind: "computed", value: 0 },
+          distanceMeters: { kind: "computed", value: 0 },
+          load: { kind: "computed", value: 0 },
         },
         rides: {
-          count: { kind: "at-least", value: 0 },
+          count: { kind: "exact", value: 0 },
           items: [],
-          truncated: true,
+          truncated: false,
         },
         trend: { kind: "unavailable", reason: "incomplete-source" },
         callout: null,
