@@ -25,6 +25,7 @@ import {
   SCHEDULER_SCHEMA_VERSION,
   SchedulerStateSchema,
 } from "@enduragent/kernel/reference/schemas";
+import { referenceFreshnessAt } from "@enduragent/kernel/reference/freshness";
 import { projectCyclingTrainingContext } from "./training-context.js";
 import type { TrainingHistorySource } from "./training-history.js";
 
@@ -190,6 +191,7 @@ export function createPersistedAthleteStateSource(
   };
   return {
     async getAthleteState(): Promise<AthleteState> {
+      const evaluatedAt = input.now?.() ?? new Date();
       const trainingHistoryIdentity: TrainingHistoryCacheIdentity | null =
         input.trainingHistorySource === undefined
           ? null
@@ -215,9 +217,8 @@ export function createPersistedAthleteStateSource(
       ]);
       if (latestResult.status === "rejected") {
         if (input.recentRidesSource !== undefined && isMissingFile(latestResult.reason)) {
-          const now = input.now?.() ?? new Date();
-          const asOf = now.toISOString();
-          const asOfEpochSeconds = Math.floor(now.getTime() / 1_000);
+          const asOf = evaluatedAt.toISOString();
+          const asOfEpochSeconds = Math.floor(evaluatedAt.getTime() / 1_000);
           const [recentRides, trainingHistory] = await Promise.all([
             readRecentRides(input.recentRidesSource, asOf, asOfEpochSeconds),
             trainingHistoryIdentity === null
@@ -278,6 +279,10 @@ export function createPersistedAthleteStateSource(
       const lastSynced =
         committedSyncAt !== null && isFiniteInstant(committedSyncAt) ? committedSyncAt : null;
       const latest = latestParsed.data;
+      const trainingHistoryFreshness = referenceFreshnessAt(
+        lastSynced ?? latest.metadata.last_updated,
+        evaluatedAt,
+      );
       const derivedMetrics = { ...latest.derived_metrics };
       delete derivedMetrics.acwr;
       delete derivedMetrics["capability.dfa_a1_profile"];
@@ -316,10 +321,10 @@ export function createPersistedAthleteStateSource(
         asOfEpochS === null || trainingHistoryIdentity === null
           ? Promise.resolve({ kind: "unavailable", reason: "not-synced" } as const)
           : readTrainingHistory(trainingHistoryIdentity, {
-              asOf: latest.metadata.last_updated,
-              asOfEpochSeconds: asOfEpochS,
+              asOf: evaluatedAt.toISOString(),
+              asOfEpochSeconds: Math.floor(evaluatedAt.getTime() / 1_000),
               calendarTimeZone: trainingHistoryIdentity.calendarTimeZone,
-              freshness: latest.metadata.freshness,
+              freshness: trainingHistoryFreshness,
               sourceRestricted: errorState?.mitigation === "block_coaching",
             }),
       ]);

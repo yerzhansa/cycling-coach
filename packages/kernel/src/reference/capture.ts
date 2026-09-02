@@ -356,6 +356,20 @@ export function planCalendarTimeZone(plan: ReferenceCapturePlan): string {
   return plan.calendar_timezone ?? "UTC";
 }
 
+export interface ReferenceCaptureClock {
+  readonly captureEpochMs: number;
+  readonly civilDateTime: string;
+  readonly calendarTimeZone: string;
+}
+
+export function referenceCaptureClock(plan: ReferenceCapturePlan): ReferenceCaptureClock {
+  return Object.freeze({
+    captureEpochMs: plan.capture_epoch_ms,
+    civilDateTime: plan.frozenNow,
+    calendarTimeZone: planCalendarTimeZone(plan),
+  });
+}
+
 export function validateReferenceCapturePlan(value: unknown): ReferenceCapturePlan {
   return CapturePlanSchema.parse(value);
 }

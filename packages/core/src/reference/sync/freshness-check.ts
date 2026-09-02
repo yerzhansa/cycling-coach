@@ -1,6 +1,9 @@
-import { CRITICAL_MS, FRESH_MS, FUTURE_TOLERANCE_MS, STALE_MS } from "../freshness.js";
+import {
+  referenceFreshnessAt,
+  type ReferenceFreshness,
+} from "@enduragent/kernel/reference/freshness";
 
-export type Freshness = "fresh" | "flag" | "stale" | "critical";
+export type Freshness = ReferenceFreshness;
 
 /**
  * Map a cache file's `metadata.last_updated` to one of four freshness bands:
@@ -12,14 +15,5 @@ export function freshnessOf(
   metadata: { last_updated: string },
   now: Date = new Date(),
 ): Freshness {
-  const elapsed = now.getTime() - new Date(metadata.last_updated).getTime();
-  // A `last_updated` in the future beyond a small skew tolerance is impossible;
-  // a backward/frozen clock would otherwise leave `elapsed` negative forever and
-  // mask arbitrarily old data as fresh. Treat it as stale so the freshness
-  // annotator raises a warning instead of silently trusting it.
-  if (elapsed < -FUTURE_TOLERANCE_MS) return "stale";
-  if (elapsed >= CRITICAL_MS) return "critical";
-  if (elapsed >= STALE_MS) return "stale";
-  if (elapsed >= FRESH_MS) return "flag";
-  return "fresh";
+  return referenceFreshnessAt(metadata.last_updated, now);
 }

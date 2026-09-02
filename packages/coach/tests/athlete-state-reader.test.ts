@@ -196,6 +196,7 @@ describe("persisted athlete state source", () => {
     const reader = createPersistedAthleteStateSource({
       dataDir: root,
       cyclingFtpAnchorResolver: resolver,
+      now: () => new Date(T2),
       trainingHistorySource: { readTrainingHistory },
       sourceOwner: () => "synthetic-athlete",
       calendarTimeZone: () => "UTC",
@@ -211,7 +212,7 @@ describe("persisted athlete state source", () => {
     const thrown = (await reader.getAthleteState()).trainingContext?.trainingHistory;
     expect(thrown).toMatchObject({
       kind: "stale",
-      failedAt: T1,
+      failedAt: new Date(T2).toISOString(),
       reason: "temporary-failure",
       lastGood: { anchorWeek: { callout: null }, previousWeek: { callout: null } },
     });
@@ -347,6 +348,55 @@ describe("persisted athlete state source", () => {
       sourceRestricted: false,
     });
     expect(state.trainingContext?.trainingHistory).toMatchObject({ kind: "computed" });
+  });
+
+  it("evaluates training history now and prefers the successful sync marker for freshness", async () => {
+    const root = await home();
+    const now = new Date("1998-07-23T00:00:00.000Z");
+    await writeJson(root, "latest.json", latest("critical", T1));
+    await writeJson(root, ".scheduler.json", schedulerState(now.toISOString()));
+    const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
+
+    await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    }).getAthleteState();
+
+    expect(readTrainingHistory).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+      calendarTimeZone: "UTC",
+      freshness: "fresh",
+      sourceRestricted: false,
+    });
+  });
+
+  it("falls back to payload time when no successful sync marker exists", async () => {
+    const root = await home();
+    const now = new Date("1998-07-23T00:00:00.000Z");
+    await writeJson(root, "latest.json", latest("fresh", T1));
+    const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
+
+    await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    }).getAthleteState();
+
+    expect(readTrainingHistory).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+      calendarTimeZone: "UTC",
+      freshness: "stale",
+      sourceRestricted: false,
+    });
   });
 
   it("returns canonical recent rides without a Reference snapshot", async () => {
