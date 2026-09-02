@@ -510,22 +510,69 @@ describe("training landing page", () => {
     render(<TrainingView />);
 
     const recent = screen.getByRole("region", { name: "Recent rides" });
-    expect(within(recent).getByText("River tempo")).toBeInTheDocument();
-    const datedRide = within(recent).getByText("Jul 9, 1998 · 10:00 PM");
-    expect(datedRide).toBeInTheDocument();
-    expect(datedRide).toHaveAttribute("datetime", "1998-07-09");
-    expect(within(recent).getByText("1h 25m")).toBeInTheDocument();
-    expect(within(recent).getByText("42.1 km")).toBeInTheDocument();
-    expect(within(recent).getByText("Load 91")).toHaveClass("max-[761px]:hidden");
-    expect(within(recent).getByText("Indoor ride")).toBeInTheDocument();
-    expect(within(recent).getByText("Jul 8, 1998")).toBeInTheDocument();
-    expect(within(recent).queryByText(/Jul 8, 1998 ·/u)).not.toBeInTheDocument();
-    expect(within(recent).getAllByText("Worth a look")).toHaveLength(1);
-    const reason = within(recent).getByText(
+    const firstRide = within(recent).getByRole("button", {
+      name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
+    });
+    const rideDay = firstRide.querySelector('[data-parity="ride-day"]');
+    const rideMeta = firstRide.querySelector('[data-parity="ride-meta"]');
+    const rideStats = firstRide.querySelector('[data-parity="ride-stats"]');
+    expect(firstRide.children[0]).toBe(rideDay);
+    expect(firstRide.children[2]).toBe(rideStats);
+    expect(firstRide).toHaveClass(
+      "grid-cols-[58px_minmax(0,1fr)_auto_18px]",
+      "max-[761px]:grid-cols-[46px_minmax(0,1fr)_18px]",
+      "max-[761px]:gap-row",
+      "group-data-[callout=true]/callout:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
+    );
+    expect(firstRide.closest("li")).not.toHaveClass(
+      "data-[callout=true]:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
+    );
+    expect(rideDay).toHaveAttribute("datetime", "1998-07-09");
+    expect(rideDay).toHaveTextContent("Thu9");
+    expect(rideDay).toHaveClass("grid", "gap-0.5", "text-xs", "leading-4", "text-ink-3");
+    expect(rideDay?.querySelector("strong")).toHaveTextContent("9");
+    expect(rideMeta).toHaveTextContent("Road · 42.1 km");
+    expect(rideMeta).toHaveClass(
+      "text-xs",
+      "leading-4",
+      "text-ink-3",
+      "max-[761px]:hidden",
+    );
+    expect(rideStats).toHaveClass(
+      "grid-cols-[repeat(2,auto)]",
+      "gap-x-[18px]",
+      "gap-y-1",
+      "max-[761px]:col-start-2",
+      "max-[761px]:row-start-2",
+    );
+    expect(rideStats?.children).toHaveLength(2);
+    expect(rideStats?.children[0]?.tagName).toBe("STRONG");
+    expect(rideStats?.children[0]).toHaveTextContent("1h 25m");
+    expect(rideStats?.children[1]).toHaveTextContent("Load 91");
+    expect(rideStats?.children[1]).not.toHaveClass("max-[761px]:hidden");
+    const reason = within(firstRide).getByText(
       "Longest recorded ride in the 28 days ending Jul 9, 1998",
     );
-    expect(reason).toHaveClass("[overflow-wrap:anywhere]", "whitespace-normal");
-    expect(reason).not.toHaveClass("text-ellipsis", "whitespace-nowrap");
+    expect(reason.previousElementSibling).toBe(rideMeta);
+    expect(reason).toHaveClass(
+      "overflow-hidden",
+      "text-xs",
+      "leading-4",
+      "font-medium",
+      "text-brand",
+      "text-ellipsis",
+      "whitespace-nowrap",
+    );
+    const arrow = firstRide.lastElementChild;
+    expect(arrow).toHaveClass("text-base", "leading-6", "text-ink-3");
+    const indoorRide = within(recent).getByRole("button", {
+      name: "Open ride review: Indoor ride, Jul 8, 1998",
+    });
+    expect(indoorRide.querySelector('[data-parity="ride-day"]')).toHaveTextContent("Wed8");
+    expect(indoorRide.querySelector('[data-parity="ride-meta"]')).toHaveTextContent(
+      "Indoor · 24.5 km",
+    );
+    expect(within(recent).getAllByText("Worth a look")).toHaveLength(1);
   });
 
   it("uses the units preference across the weekly summary, ride row, and Ride review", async () => {
@@ -539,8 +586,12 @@ describe("training landing page", () => {
 
     expect(document.querySelector('[data-summary-metric="distance"]')).toHaveTextContent("41.4 mi");
     expect(
-      within(screen.getByRole("region", { name: "Recent rides" })).getByText("26.2 mi"),
-    ).toBeInTheDocument();
+      within(screen.getByRole("region", { name: "Recent rides" }))
+        .getByRole("button", {
+          name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
+        })
+        .querySelector('[data-parity="ride-meta"]'),
+    ).toHaveTextContent("Road · 26.2 mi");
 
     await openFirstRide(user);
 
