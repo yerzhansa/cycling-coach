@@ -11,7 +11,7 @@ export const overviewStyles = {
   weekEyebrow: "m-0 text-xs leading-4 font-semibold text-ink-3",
   weekTime:
     "mt-2 [overflow-wrap:anywhere] text-2xl leading-8 font-semibold tracking-normal tabular-nums",
-  weekMetrics: "mt-2.5 flex min-h-5 min-w-0 flex-wrap text-sm leading-5 text-ink-2 tabular-nums",
+  weekMetrics: "mt-2.5 min-h-5 min-w-0 text-sm leading-5 text-ink-2 tabular-nums",
   trend:
     "m-0 grid min-w-0 grid-rows-[auto_1fr] gap-2.5 border-l border-line pl-6 max-[761px]:border-t max-[761px]:border-l-0 max-[761px]:pt-3.5 max-[761px]:pl-0",
   trendCaption:

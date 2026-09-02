@@ -366,9 +366,10 @@ describe("training landing page", () => {
     const summary = screen.getByRole("region", { name: "Weekly summary" });
     expect(within(summary).getByRole("heading", { name: "Weekly summary" })).toHaveClass("sr-only");
     expect(within(summary).getByText("2h 25m")).toBeInTheDocument();
-    expect(within(summary).getByText("66.6 km").parentElement).toHaveTextContent(
-      "2 rides · 66.6 km · Load 119",
-    );
+    const weekMetrics = within(summary).getByText("66.6 km").parentElement;
+    expect(weekMetrics?.textContent).toBe("2 rides · 66.6 km · Load 119");
+    expect(weekMetrics).not.toHaveClass("flex");
+    expect(weekMetrics).not.toHaveClass("grid");
     const recent = screen.getByRole("region", { name: "Recent rides" });
     expect(within(recent).getByText("Newest first")).toBeInTheDocument();
     expect(recent.querySelector('[data-parity="rides-previous-week"]')).toHaveTextContent(
