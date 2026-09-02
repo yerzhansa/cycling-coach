@@ -9,6 +9,7 @@ export interface InteractiveDevelopmentPlanInput {
 
 export const DESKTOP_INSPECTION_FIXTURE_ENV: "ENDURAGENT_DESKTOP_INSPECTION_FIXTURE";
 export const PLAN_CURRENT_INSPECTION_FIXTURE: "plan-current";
+export const TRAINING_CURRENT_INSPECTION_FIXTURE: "training-current";
 
 export interface InteractiveDevelopmentPlan {
   readonly command: "/usr/bin/caffeinate";

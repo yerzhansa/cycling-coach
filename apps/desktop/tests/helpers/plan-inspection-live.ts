@@ -1,10 +1,15 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { AthleteState } from "@enduragent/coach-contract";
 import type { DesktopFixtureScript, RunningDesktopFixture } from "./desktop-fixture.js";
 import { launchDesktopFixture } from "./desktop-fixture.js";
+import { PLAN_QA_ATHLETE_STATE } from "./inspection-athlete-states.js";
 import { createPlanQaFixtureScript } from "./plan-qa-live.js";
+import { TRAINING_CURRENT_ATHLETE_STATE } from "./training-current-athlete-state.js";
 
 export const PLAN_INSPECTION_SCENARIO_ID = "PL-S004";
+export const PLAN_CURRENT_INSPECTION_FIXTURE = "plan-current";
+export const TRAINING_CURRENT_INSPECTION_FIXTURE = "training-current";
 
 export const PLAN_INSPECTION_TURNS = Object.freeze([
   Object.freeze({
@@ -46,8 +51,10 @@ function response(value: unknown): readonly string[] {
   return [JSON.stringify(value)];
 }
 
-export function createPlanInspectionFixtureScript(): DesktopFixtureScript {
-  const plan = createPlanQaFixtureScript(PLAN_INSPECTION_SCENARIO_ID);
+export function createPlanInspectionFixtureScript(
+  athleteState: AthleteState = PLAN_QA_ATHLETE_STATE,
+): DesktopFixtureScript {
+  const plan = createPlanQaFixtureScript(PLAN_INSPECTION_SCENARIO_ID, athleteState);
   return {
     onRequest(value) {
       const request = value as { readonly method: string };
@@ -70,6 +77,16 @@ export function createPlanInspectionFixtureScript(): DesktopFixtureScript {
   };
 }
 
+export function inspectionAthleteState(inspectionFixture: string | undefined): AthleteState {
+  if (inspectionFixture === undefined || inspectionFixture === PLAN_CURRENT_INSPECTION_FIXTURE) {
+    return PLAN_QA_ATHLETE_STATE;
+  }
+  if (inspectionFixture === TRAINING_CURRENT_INSPECTION_FIXTURE) {
+    return TRAINING_CURRENT_ATHLETE_STATE;
+  }
+  throw new TypeError("unknown desktop inspection fixture");
+}
+
 const token = "v".repeat(43);
 let fixture: RunningDesktopFixture | undefined;
 
@@ -82,8 +99,11 @@ const directExecution =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 
 if (directExecution) {
+  const inspectionFixture =
+    process.env.ENDURAGENT_DESKTOP_INSPECTION_FIXTURE ?? PLAN_CURRENT_INSPECTION_FIXTURE;
+  const athleteState = inspectionAthleteState(inspectionFixture);
   fixture = await launchDesktopFixture({
-    script: createPlanInspectionFixtureScript(),
+    script: createPlanInspectionFixtureScript(athleteState),
     token,
     width: 1180,
     height: 820,
@@ -94,5 +114,7 @@ if (directExecution) {
   });
   process.on("SIGINT", () => void close());
   process.on("SIGTERM", () => void close());
-  process.stdout.write(`PLAN_INSPECTION_READY ${PLAN_INSPECTION_SCENARIO_ID}\n`);
+  process.stdout.write(
+    `DESKTOP_INSPECTION_READY ${inspectionFixture} ${PLAN_INSPECTION_SCENARIO_ID}\n`,
+  );
 }
