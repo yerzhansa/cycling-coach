@@ -2443,9 +2443,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly chipReachable: boolean;
       readonly syncFitsRail: boolean;
       readonly syncHasNoOverflow: boolean;
-      readonly syncLabelHidden: boolean;
+      readonly completeStatusVisible: boolean;
       readonly surfaceMinWidthZero: boolean;
-      readonly truncationApplied: boolean;
+      readonly readableWrapping: boolean;
       readonly trainingOpen: boolean;
       readonly panelOrder: readonly string[];
       readonly retiredPanelsAbsent: boolean;
@@ -2471,8 +2471,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const chip = document.querySelector("button.sync-chip");
       const syncSurface = document.querySelector("[data-sync-chip]");
       const sidebar = syncSurface.closest("aside");
-      const syncLabel = syncSurface.lastElementChild;
-      const truncatedRows = [...syncSurface.querySelectorAll(".truncate")];
+      const headline = syncSurface.querySelector("[data-sync-headline]");
+      const detail = syncSurface.querySelector("[data-sync-detail]");
+      const action = syncSurface.querySelector("[data-sync-action]");
       const railRect = rail.getBoundingClientRect();
       const settingsRect = settings.getBoundingClientRect();
       const chipRect = chip.getBoundingClientRect();
@@ -2499,18 +2500,18 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         syncFitsRail:
           syncRect.left >= sidebarRect.left && syncRect.right <= sidebarRect.right,
         syncHasNoOverflow: syncSurface.scrollWidth <= syncSurface.clientWidth,
-        syncLabelHidden: getComputedStyle(syncLabel).display === "none",
+        completeStatusVisible:
+          headline.textContent === "Training data synced" &&
+          detail.textContent === "2026-07-19 07:55:01 UTC" &&
+          action.textContent === "Sync again" &&
+          [headline, detail, action].every((row) => getComputedStyle(row).display !== "none"),
         surfaceMinWidthZero: getComputedStyle(syncSurface).minWidth === "0px",
-        truncationApplied:
-          truncatedRows.length === 2 &&
-          truncatedRows.every((row) => {
-            const style = getComputedStyle(row);
-            return (
-              style.overflow === "hidden" &&
-              style.textOverflow === "ellipsis" &&
-              style.whiteSpace === "nowrap"
-            );
-          }),
+        readableWrapping:
+          syncSurface.querySelectorAll(".truncate").length === 0 &&
+          [headline, detail, action].every(
+            (row) =>
+              getComputedStyle(row).whiteSpace === "normal" && row.scrollWidth <= row.clientWidth,
+          ),
         trainingOpen: page.getAttribute("aria-hidden") === null,
         panelOrder: panels.map((panel) => panel.dataset.panel),
         retiredPanelsAbsent: ["anchor", "load", "wellness", "plan", "adherence"].every(
@@ -2532,9 +2533,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       chipReachable: true,
       syncFitsRail: true,
       syncHasNoOverflow: true,
-      syncLabelHidden: true,
+      completeStatusVisible: true,
       surfaceMinWidthZero: true,
-      truncationApplied: true,
+      readableWrapping: true,
       trainingOpen: true,
       panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
       retiredPanelsAbsent: true,
@@ -2695,7 +2696,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly enabledAfterSync: boolean;
       readonly longStatusAbsent: boolean;
       readonly surfaceMinWidthZero: boolean;
-      readonly truncationApplied: boolean;
+      readonly readableStatus: boolean;
       readonly chipHasNoOverflow: boolean;
       readonly keyboardFocusRestored: boolean;
       readonly horizontalOverflow: boolean;
@@ -2731,7 +2732,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const chipRect = syncButton.getBoundingClientRect();
       const syncRect = syncSurface.getBoundingClientRect();
       const sidebarRect = sidebar.getBoundingClientRect();
-      const truncatedRows = [...syncSurface.querySelectorAll(".truncate")];
+      const headline = syncSurface.querySelector("[data-sync-headline]");
+      const action = syncSurface.querySelector("[data-sync-action]");
       return {
         trainingOpen: page.getAttribute("aria-hidden") === null,
         panelOrder: panels.map((panel) => panel.dataset.panel),
@@ -2761,16 +2763,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           "Training-data processing partially completed. Try again to finish.",
         ),
         surfaceMinWidthZero: getComputedStyle(syncSurface).minWidth === "0px",
-        truncationApplied:
-          truncatedRows.length === 1 &&
-          truncatedRows.every((row) => {
-            const style = getComputedStyle(row);
-            return (
-              style.overflow === "hidden" &&
-              style.textOverflow === "ellipsis" &&
-              style.whiteSpace === "nowrap"
-            );
-          }),
+        readableStatus:
+          headline.textContent === "Sync needs attention" &&
+          action.textContent === "Try again" &&
+          getComputedStyle(headline).whiteSpace === "normal" &&
+          getComputedStyle(action).display !== "none" &&
+          headline.scrollWidth <= headline.clientWidth &&
+          action.scrollWidth <= action.clientWidth,
         chipHasNoOverflow:
           syncRect.left >= sidebarRect.left &&
           syncRect.right <= sidebarRect.right &&
@@ -2797,7 +2796,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       enabledAfterSync: true,
       longStatusAbsent: true,
       surfaceMinWidthZero: true,
-      truncationApplied: true,
+      readableStatus: true,
       chipHasNoOverflow: true,
       keyboardFocusRestored: true,
       horizontalOverflow: false,

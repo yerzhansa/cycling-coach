@@ -406,7 +406,8 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "loading");
     expect(chipSurface()).toHaveClass("min-w-0");
     expect(chipSurface()).toHaveTextContent("Loading training data");
-    expect(screen.getByText("Sync now")).toHaveClass("max-[860px]:hidden");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Loading training data");
 
     update({
       training: {
@@ -423,6 +424,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "synced");
     expect(chipSurface()).toHaveTextContent("Training data synced");
     expect(chipSurface()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
     expect(chip()).toHaveAccessibleName(
       "Sync now · Training data synced · 1998-07-19 07:55:00 UTC",
     );
@@ -430,6 +432,9 @@ describe("sidebar sync chip", () => {
     update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
     expect(chip()).toHaveAttribute("data-status", "syncing");
     expect(chip()).toBeDisabled();
+    expect(chipSurface()).toHaveTextContent("Syncing");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Syncing");
 
     update({
       sync: toManualSyncViewState({
@@ -440,7 +445,10 @@ describe("sidebar sync chip", () => {
       }),
     });
     expect(chip()).toHaveAttribute("data-status", "attention");
+    expect(chipSurface()).toHaveTextContent("Sync needs attention");
     expect(chipSurface()).toHaveTextContent("Try again");
+    expect(screen.getByText("Try again")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Try again · Sync needs attention");
   });
 
   it("keeps Strava remedy navigation independent from syncing", async () => {
@@ -471,6 +479,7 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "synced");
     expect(chipSurface()).toHaveTextContent("60 hidden by Strava");
     expect(chipSurface()).toHaveTextContent("How to fix this");
+    expect(screen.getByText("Sync again")).toHaveAttribute("data-sync-action");
     expect(chipSurface()).not.toHaveTextContent("1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAttribute("title", "1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAccessibleName(
@@ -551,10 +560,14 @@ describe("sidebar sync chip", () => {
     update({ training: { ...EMPTY_TRAINING_SURFACE, status: "ready" } });
     expect(chip()).toHaveAttribute("data-status", "never");
     expect(chipSurface()).toHaveTextContent("Not synced yet");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Not synced yet");
 
     update({ training: { ...EMPTY_TRAINING_SURFACE, status: "unavailable" } });
     expect(chip()).toHaveAttribute("data-status", "unavailable");
     expect(chipSurface()).toHaveTextContent("Training data unavailable");
+    expect(screen.getByText("Sync now")).toHaveAttribute("data-sync-action");
+    expect(chip()).toHaveAccessibleName("Sync now · Training data unavailable");
   });
 
   it("requests a manual sync and restores keyboard focus to the activator", async () => {
