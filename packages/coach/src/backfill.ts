@@ -14,11 +14,13 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import {
   REQUEST_ATTEMPTS,
   ZERO_DROPPED_ACTIVITY_ROWS,
-  type DroppedActivityRowCounts,
+  type DroppedActivityRowEvidence,
   type IntervalsIcuArtifact,
   type IntervalsIcuSource,
 } from "@enduragent/sync-intervals-icu";
+import { addCivilDays, todayInTZ } from "@enduragent/engine/sport";
 import { enforceIntervalsStoreOwner } from "./account-identity.js";
+import { coverageGapsWithinWindow } from "./coverage-gaps.js";
 import {
   createIntervalsBackfillSource,
   DEFAULT_PER_REQUEST_TIMEOUT_MS,
@@ -110,11 +112,16 @@ export interface RunActivityAuditPagesOptions extends RunBackfillPagesOptions {
 }
 
 export interface BackfillRunResult { readonly pages: number; readonly artifacts: number; readonly reports: readonly ImportReport[];
-  readonly droppedActivityRows: DroppedActivityRowCounts; }
+  readonly droppedActivityRows: DroppedActivityRowEvidence; }
 
-function addDropped(total: DroppedActivityRowCounts, page: DroppedActivityRowCounts | undefined): DroppedActivityRowCounts {
+function addDropped(total: DroppedActivityRowEvidence, page: DroppedActivityRowEvidence | undefined): DroppedActivityRowEvidence {
   if (page === undefined) return total;
-  return { sourceRestricted: total.sourceRestricted + page.sourceRestricted, other: total.other + page.other };
+  return {
+    sourceRestricted: total.sourceRestricted + page.sourceRestricted,
+    other: total.other + page.other,
+    datedLocalDates: [...new Set([...total.datedLocalDates, ...page.datedLocalDates])].sort(),
+    undatedCount: total.undatedCount + page.undatedCount,
+  };
 }
 
 interface AuthoritativeBackfillCycle {
@@ -130,7 +137,7 @@ export async function runActivityAuditPages(
   const perRequestTimeoutMs = configured(options.perRequestTimeoutMs, DEFAULT_PER_REQUEST_TIMEOUT_MS, 1_000, 300_000, "request timeout");
   const pageDeadlineMs = configured(options.backfillPageDeadlineMs, DEFAULT_BACKFILL_PAGE_DEADLINE_MS, 60_000, 86_400_000, "page deadline");
   let pages = 0, artifacts = 0;
-  let droppedActivityRows: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
+  let droppedActivityRows: DroppedActivityRowEvidence = ZERO_DROPPED_ACTIVITY_ROWS;
   const reports: ImportReport[] = [];
   const coverage = createTrainingCoverageRepository();
   let authoritativeCycle: AuthoritativeBackfillCycle | null | undefined;
@@ -198,6 +205,8 @@ export async function runActivityAuditPages(
           droppedActivityRows = {
             sourceRestricted: previous.droppedSourceRestricted,
             other: previous.droppedOther,
+            datedLocalDates: previous.gaps.datedLocalDates,
+            undatedCount: previous.gaps.undatedCount,
           };
         }
       }
@@ -230,9 +239,26 @@ export async function runActivityAuditPages(
         cursorAfter: checkpointValue,
         droppedSourceRestricted: droppedActivityRows.sourceRestricted,
         droppedOther: droppedActivityRows.other,
+        gaps: coverageGapsWithinWindow({
+          evidence: droppedActivityRows,
+          oldest: options.historyOldestDate,
+          newest: options.historyNewestDate,
+        }),
         terminal: parsed.complete,
       });
       if (terminalCommitEpochSeconds !== null) {
+        const elapsedThrough = addCivilDays(
+          todayInTZ(
+            options.calendarTimeZone,
+            new Date(terminalCommitEpochSeconds * 1_000),
+          ),
+          -1,
+        );
+        const coverageNewest =
+          options.historyNewestDate < elapsedThrough
+            ? options.historyNewestDate
+            : elapsedThrough;
+        if (coverageNewest < options.historyOldestDate) return;
         await coverage.appendCommitInTransaction(transactionStore, {
           source: "intervals-icu",
           lane: "activities",
@@ -240,12 +266,13 @@ export async function runActivityAuditPages(
           authorityId: authoritativeCycle.authorityId,
           calendarTimeZone: options.calendarTimeZone,
           coveredOldest: options.historyOldestDate,
-          coveredNewest: options.historyNewestDate,
+          coveredNewest: coverageNewest,
           committedEpochSeconds: terminalCommitEpochSeconds,
-          gapState:
-            droppedActivityRows.sourceRestricted > 0 || droppedActivityRows.other > 0
-              ? "undated-dropped-rows"
-              : "none",
+          gaps: coverageGapsWithinWindow({
+            evidence: droppedActivityRows,
+            oldest: options.historyOldestDate,
+            newest: coverageNewest,
+          }),
         });
       }
     };
@@ -288,7 +315,7 @@ export async function runBackfillPages(options: RunBackfillPagesOptions): Promis
   const perRequestTimeoutMs = configured(options.perRequestTimeoutMs, DEFAULT_PER_REQUEST_TIMEOUT_MS, 1_000, 300_000, "request timeout");
   const pageDeadlineMs = configured(options.backfillPageDeadlineMs, DEFAULT_BACKFILL_PAGE_DEADLINE_MS, 60_000, 86_400_000, "page deadline");
   let pages = 0, artifacts = 0, terminalCursor: string | null = null;
-  let droppedActivityRows: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
+  let droppedActivityRows: DroppedActivityRowEvidence = ZERO_DROPPED_ACTIVITY_ROWS;
   const reports: ImportReport[] = [];
   for (;;) {
     const before = await createSyncStateRepository(options.store).readWatermark("intervals-icu", "bulk-fit");

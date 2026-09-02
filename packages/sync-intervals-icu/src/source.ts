@@ -18,7 +18,7 @@ import { activityIdentity, mapActivityLanding, mapSettingsLanding, mapWellnessLa
 import { advanceWindow, compactCursor, compareBinary, parseCivilDate, parseCursor, type CursorRange, type RangeCursor } from "./cursor.js";
 import { createRequester, IntervalsHttpError, MIN_CONFIGURED_INTERVAL_MS, SyncBudgetExceededError, type IntervalsRequester } from "./http.js";
 import { BULK_FIT_BATCH_SIZE, BULK_SAFE_ACTIVITY_ID, IncompleteBulkFitBatchError, MAX_FIT_BYTES, MAX_ZIP_BYTES, extractBulkFitZip } from "./zip.js";
-import { INTERVALS_ICU_CAPABILITIES, INTERVALS_ICU_SOURCE_ID, MAX_JSON_BYTES, ZERO_DROPPED_ACTIVITY_ROWS, type DroppedActivityRowCounts, type IntervalsIcuArtifact, type IntervalsIcuCaptureSource, type IntervalsIcuCheckpoint, type IntervalsIcuSourceOptions, type ReferenceCaptureActivityRecord, type ReferenceCaptureBatch, type ReferenceCaptureEndpoint, type ReferenceCaptureSettingsRecord, type ReferenceCaptureStreamRecord, type ReferenceCaptureWellnessRecord } from "./types.js";
+import { INTERVALS_ICU_CAPABILITIES, INTERVALS_ICU_SOURCE_ID, MAX_JSON_BYTES, ZERO_DROPPED_ACTIVITY_ROWS, type DroppedActivityRowEvidence, type IntervalsIcuArtifact, type IntervalsIcuCaptureSource, type IntervalsIcuCheckpoint, type IntervalsIcuSourceOptions, type ReferenceCaptureActivityRecord, type ReferenceCaptureBatch, type ReferenceCaptureEndpoint, type ReferenceCaptureSettingsRecord, type ReferenceCaptureStreamRecord, type ReferenceCaptureWellnessRecord } from "./types.js";
 
 const BASE_URL = "https://intervals.icu";
 const JSON_TYPE = "application/json";
@@ -78,18 +78,36 @@ function isSourceRestrictedRow(entry: unknown): boolean {
 class DropTally {
   private restricted = 0;
   private rest = 0;
+  private readonly dates = new Set<string>();
+  private undated = 0;
   record(entry: unknown): void {
     if (isSourceRestrictedRow(entry)) this.restricted += 1;
     else this.rest += 1;
+    const local =
+      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>).start_date_local
+        : undefined;
+    if (typeof local === "string") {
+      try {
+        this.dates.add(parseCivilDate(local.slice(0, 10)));
+        return;
+      } catch {}
+    }
+    this.undated += 1;
   }
-  counts(): DroppedActivityRowCounts {
-    return Object.freeze({ sourceRestricted: this.restricted, other: this.rest });
+  evidence(): DroppedActivityRowEvidence {
+    return Object.freeze({
+      sourceRestricted: this.restricted,
+      other: this.rest,
+      datedLocalDates: Object.freeze([...this.dates].sort(compareBinary)),
+      undatedCount: this.undated,
+    });
   }
 }
 
 interface ActivityScan {
   readonly rows: readonly ActivityIndexEntry[];
-  readonly dropped: DroppedActivityRowCounts;
+  readonly dropped: DroppedActivityRowEvidence;
 }
 
 function activityIndex(value: unknown): ActivityScan {
@@ -107,10 +125,10 @@ function activityIndex(value: unknown): ActivityScan {
     rows.push({ ...activityIdentity(row), row });
   }
   rows.sort((a, b) => compareBinary(a.key, b.key));
-  return { rows, dropped: tally.counts() };
+  return { rows, dropped: tally.evidence() };
 }
 
-function checkpoint(lane: SourceLane, cursor: RangeCursor, droppedActivityRows: DroppedActivityRowCounts): IntervalsIcuCheckpoint {
+function checkpoint(lane: SourceLane, cursor: RangeCursor, droppedActivityRows: DroppedActivityRowEvidence): IntervalsIcuCheckpoint {
   return { kind: "checkpoint", watermark: { source: "intervals-icu", lane, value: compactCursor(cursor) }, droppedActivityRows };
 }
 
@@ -203,7 +221,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       yielded += 1;
     };
     const yieldCheckpoint = async function* (value: RangeCursor,
-      dropped: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS): AsyncGenerator<IntervalsIcuArtifact> {
+      dropped: DroppedActivityRowEvidence = ZERO_DROPPED_ACTIVITY_ROWS): AsyncGenerator<IntervalsIcuArtifact> {
       requester.assertActive();
       yield checkpoint(lane, value, dropped);
     };
@@ -417,7 +435,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
     yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey), droppedRows);
   }
 
-  let capturedActivityDrops: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
+  let capturedActivityDrops: DroppedActivityRowEvidence = ZERO_DROPPED_ACTIVITY_ROWS;
 
   const placeholderArchive: ArchiveWriteResult = Object.freeze({
     address: "0".repeat(64),
@@ -488,7 +506,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
         activities.push({ endpoint_ordinal: 1, payload_index: index, external_id: identity.externalId, payload: row });
       } catch { activityDrops.record(activityPayload[index]); }
     }
-    capturedActivityDrops = activityDrops.counts();
+    capturedActivityDrops = activityDrops.evidence();
 
     const wellness: DerivedCaptureMember[] = [];
     const wellnessPayload = endpointPayloads[2]!.payload as unknown[];

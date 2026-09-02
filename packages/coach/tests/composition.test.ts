@@ -1744,7 +1744,7 @@ describe("local coach composition", () => {
       pages: 1,
       artifacts: 0,
       reports: [],
-      droppedActivityRows: { sourceRestricted: 0, other: 0 },
+      droppedActivityRows: { sourceRestricted: 0, other: 0, datedLocalDates: [], undatedCount: 0 },
     }));
     let runtimeOptions: LocalStoreRuntimeOptions | undefined;
     let readReferenceIntervals:
@@ -5593,7 +5593,7 @@ describe("local coach composition", () => {
       pages: 1,
       artifacts: 0,
       reports: [],
-      droppedActivityRows: { sourceRestricted: 0, other: 0 },
+      droppedActivityRows: { sourceRestricted: 0, other: 0, datedLocalDates: [], undatedCount: 0 },
     }));
     const lifecycle = await compose(
       home,

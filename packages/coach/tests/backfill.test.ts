@@ -15,6 +15,7 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { EMPTY_DROPPED_ACTIVITIES } from "@enduragent/coach-contract";
 import {
   createIntervalsBackfillSource,
+  runActivityAuditPages,
   runBackfillPages,
   runIntervalsBackfill,
   runIntervalsBackfillInWriter,
@@ -134,7 +135,12 @@ describe("incremental backfill pages", () => {
           yield {
             kind: "checkpoint",
             watermark: { source: "intervals-icu", lane: "bulk-fit", value: call === 0 ? midway : complete },
-            droppedActivityRows: { sourceRestricted: call === 0 ? 60 : 3, other: call === 0 ? 0 : 2 },
+            droppedActivityRows: {
+              sourceRestricted: call === 0 ? 60 : 3,
+              other: call === 0 ? 0 : 2,
+              datedLocalDates: call === 0 ? ["1998-07-16"] : ["1998-07-17"],
+              undatedCount: 0,
+            },
           };
         })(),
       );
@@ -145,7 +151,128 @@ describe("incremental backfill pages", () => {
         clock,
       });
       expect(result).toMatchObject({ pages: 3 });
-      expect(result.droppedActivityRows).toEqual({ sourceRestricted: 63, other: 2 });
+      expect(result.droppedActivityRows).toEqual({
+        sourceRestricted: 63,
+        other: 2,
+        datedLocalDates: ["1998-07-16", "1998-07-17"],
+        undatedCount: 0,
+      });
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("persists only in-window activity-audit gap evidence without claiming the commit day", async () => {
+    const value = await fresh();
+    const checkpoint = JSON.stringify({
+      v: 1,
+      cycle: 0,
+      window_start: "1998-01-01",
+      window_end: "1998-07-18",
+      last_key: null,
+      complete: true,
+    });
+    const fake = source(() =>
+      (async function* () {
+        yield {
+          kind: "checkpoint",
+          watermark: { source: "intervals-icu", lane: "activities", value: checkpoint },
+          droppedActivityRows: {
+            sourceRestricted: 3,
+            other: 1,
+            datedLocalDates: ["1997-12-31", "1998-07-16", "1998-07-19"],
+            undatedCount: 1,
+          },
+        } as SourceArtifact;
+      })(),
+    );
+    try {
+      await runActivityAuditPages({
+        store: value.store,
+        node: value.node,
+        source: fake,
+        clock: {
+          now: () => Date.parse("1998-07-18T12:00:00.000Z"),
+          monotonicNow: () => 1_000,
+        },
+        historyOldestDate: "1998-01-01",
+        historyNewestDate: "1998-07-18",
+        calendarTimeZone: "UTC",
+        cycleId: () => "activity-audit-cycle",
+      });
+
+      expect(
+        await value.store.get(
+          `SELECT covered_newest_date_key, dropped_local_dates_json, undated_dropped_count
+FROM training_history_coverage_commit`,
+        ),
+      ).toEqual({
+        covered_newest_date_key: 19980717,
+        dropped_local_dates_json: '["1998-07-16"]',
+        undated_dropped_count: 1,
+      });
+      expect(
+        await value.store.get(
+          `SELECT dropped_local_dates_json, undated_dropped_count
+FROM training_history_backfill_checkpoint`,
+        ),
+      ).toEqual({
+        dropped_local_dates_json: '["1998-07-16"]',
+        undated_dropped_count: 1,
+      });
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("finishes a same-day activity audit without claiming future coverage", async () => {
+    const value = await fresh();
+    const checkpoint = JSON.stringify({
+      v: 1,
+      cycle: 0,
+      window_start: "1998-07-18",
+      window_end: "1998-07-18",
+      last_key: null,
+      complete: true,
+    });
+    const fake = source(() =>
+      (async function* () {
+        yield {
+          kind: "checkpoint",
+          watermark: { source: "intervals-icu", lane: "activities", value: checkpoint },
+          droppedActivityRows: {
+            sourceRestricted: 0,
+            other: 0,
+            datedLocalDates: [],
+            undatedCount: 0,
+          },
+        } as SourceArtifact;
+      })(),
+    );
+    try {
+      await expect(
+        runActivityAuditPages({
+          store: value.store,
+          node: value.node,
+          source: fake,
+          clock: {
+            now: () => Date.parse("1998-07-18T12:00:00.000Z"),
+            monotonicNow: () => 1_000,
+          },
+          historyOldestDate: "1998-07-18",
+          historyNewestDate: "1998-07-18",
+          calendarTimeZone: "UTC",
+          cycleId: () => "same-day-activity-audit-cycle",
+        }),
+      ).resolves.toMatchObject({ pages: 1 });
+      expect(
+        await value.store.get("SELECT count(*) AS n FROM training_history_coverage_commit"),
+      ).toEqual({ n: 0 });
+      expect(
+        await value.store.get(
+          "SELECT count(*) AS n FROM training_history_backfill_checkpoint WHERE terminal = 1",
+        ),
+      ).toEqual({ n: 1 });
     } finally {
       await value.store.close();
     }

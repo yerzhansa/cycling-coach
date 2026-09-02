@@ -32,7 +32,9 @@ import {
 } from "@enduragent/kernel-node/capture-manifest";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import { REQUEST_ATTEMPTS, type IntervalsIcuCaptureSource, type ReferenceCaptureBatch } from "@enduragent/sync-intervals-icu";
+import { addCivilDays, todayInTZ } from "@enduragent/engine/sport";
 import { createIntervalsBackfillSource, DEFAULT_PER_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_INTERVAL_MS } from "./backfill.js";
+import { coverageGapsWithinWindow } from "./coverage-gaps.js";
 import {
   withCoachStoreWriter,
   type CoachStoreWriterContext,
@@ -156,6 +158,13 @@ export async function runReferenceCapture(
       ) {
         throw new TypeError("reference capture dropped activity counts are invalid");
       }
+      if (
+        !Array.isArray(batch.dropped_activity_rows.datedLocalDates) ||
+        !Number.isSafeInteger(batch.dropped_activity_rows.undatedCount) ||
+        batch.dropped_activity_rows.undatedCount < 0
+      ) {
+        throw new TypeError("reference capture dropped activity evidence is invalid");
+      }
     }
     catch (error) { throw new ReferenceCaptureRunError("capture", { cause: error }); }
 
@@ -164,6 +173,12 @@ export async function runReferenceCapture(
       return H(crypto, ...(fields as [string | number, ...(string | number)[]]));
     });
     const coverage = createTrainingCoverageRepository();
+    const elapsedThrough = addCivilDays(
+      todayInTZ(planCalendarTimeZone(plan), new Date(plan.capture_epoch_ms)),
+      -1,
+    );
+    const coverageNewest =
+      plan.window.newest < elapsedThrough ? plan.window.newest : elapsedThrough;
     const coverageCommit: CoverageCommitInput = {
       source: "intervals-icu",
       lane: "activities",
@@ -171,13 +186,13 @@ export async function runReferenceCapture(
       authorityId: captureId,
       calendarTimeZone: planCalendarTimeZone(plan),
       coveredOldest: plan.window.oldest,
-      coveredNewest: plan.window.newest,
+      coveredNewest: coverageNewest,
       committedEpochSeconds: Math.floor(plan.capture_epoch_ms / 1_000),
-      gapState:
-        batch.dropped_activity_rows.sourceRestricted > 0 ||
-        batch.dropped_activity_rows.other > 0
-          ? "undated-dropped-rows"
-          : "none",
+      gaps: coverageGapsWithinWindow({
+        evidence: batch.dropped_activity_rows,
+        oldest: plan.window.oldest,
+        newest: coverageNewest,
+      }),
     };
     const wellnessArtifactKeys = new Map<string, string>();
     try {

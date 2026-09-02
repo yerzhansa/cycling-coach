@@ -229,6 +229,7 @@ describe("001_init migration", () => {
       { version: 28, name: "028_plan_workout_additions" },
       { version: 29, name: "029_planning_domain" },
       { version: 30, name: "030_training_history_coverage" },
+      { version: 31, name: "031_training_history_gap_evidence" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -1309,6 +1310,42 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
       0,
       0,
     );
+    expect(
+      (db.prepare("PRAGMA table_info(training_history_coverage_commit)").all() as Array<{
+        name: string;
+      }>).map(({ name }) => name),
+    ).toEqual(expect.arrayContaining(["dropped_local_dates_json", "gap_evidence_version"]));
+    expect(
+      (db.prepare("PRAGMA table_info(training_history_backfill_checkpoint)").all() as Array<{
+        name: string;
+      }>).map(({ name }) => name),
+    ).toEqual(expect.arrayContaining(["undated_dropped_count", "gap_evidence_version"]));
+    expect(
+      db
+        .prepare(
+          "SELECT gap_evidence_version FROM training_history_coverage_commit WHERE authority_id = ?",
+        )
+        .get("12345678-1234-4123-8123-123456789abc"),
+    ).toEqual({ gap_evidence_version: 0 });
+    expect(
+      db
+        .prepare(
+          "SELECT gap_evidence_version FROM training_history_backfill_checkpoint WHERE source_cycle = ?",
+        )
+        .get(12345),
+    ).toEqual({ gap_evidence_version: 0 });
+    expect(() =>
+      db!
+        .prepare(
+          `INSERT INTO training_history_coverage_commit (
+  source, lane, authority_kind, authority_id, calendar_timezone,
+  covered_oldest_date_key, covered_newest_date_key, committed_epoch_seconds, gap_state,
+  dropped_local_dates_json, undated_dropped_count
+) VALUES ('intervals-icu', 'activities', 'reference-capture', 'invalid-json', 'UTC',
+  19980413, 19980706, 899712000, 'none', 'not-json', 0)`,
+        )
+        .run(),
+    ).toThrow();
     expect(() =>
       db!
         .prepare("UPDATE training_history_coverage_commit SET gap_state='undated-dropped-rows'")
