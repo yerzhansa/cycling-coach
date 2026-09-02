@@ -359,7 +359,7 @@ describe("training landing page", () => {
 
     expect(screen.getByRole("heading", { level: 1, name: "Training" })).toBeInTheDocument();
     expect(screen.getByText("Jul 6–12")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Import ride files" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import ride files" })).toBeInTheDocument();
     expect(
       [...document.querySelectorAll("[data-panel]")].map((node) => node.getAttribute("data-panel")),
     ).toEqual(["weekly-summary", "recent-rides", "power-progress"]);
@@ -434,6 +434,33 @@ describe("training landing page", () => {
     expect(
       screen.getByText("Power progress needs rides with recorded power in both 28-day windows."),
     ).toBeInTheDocument();
+  });
+
+  it("keeps focus inside the period group after chevron navigation", async () => {
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    const group = screen.getByRole("group", { name: "Completed riding period" });
+    await user.click(within(group).getByRole("button", { name: "Previous week" }));
+    expect(within(group).getByRole("button", { name: "This week" })).toHaveFocus();
+
+    await user.click(within(group).getByRole("button", { name: "Next week" }));
+    expect(within(group).getByRole("button", { name: "This week" })).toHaveFocus();
+  });
+
+  it("moves focus into the period group after the post-list period button unmounts", async () => {
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    const group = screen.getByRole("group", { name: "Completed riding period" });
+    const previous = document.querySelector<HTMLButtonElement>(
+      '[data-parity="rides-previous-week"]',
+    );
+    expect(previous).not.toBeNull();
+    if (previous === null) return;
+    await user.click(previous);
+
+    expect(within(group).getByRole("button", { name: "This week" })).toHaveFocus();
   });
 
   it("distinguishes partial totals, missing recorded values, and complete zero", () => {
@@ -553,6 +580,7 @@ describe("training landing page", () => {
       "max-[761px]:gap-row",
       "group-data-[callout=true]/callout:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
     );
+    expect(firstRide.closest("li")).toHaveAttribute("data-callout", "true");
     expect(firstRide.closest("li")).not.toHaveClass(
       "data-[callout=true]:bg-[color-mix(in_srgb,var(--brand-soft)_58%,transparent)]",
     );
@@ -591,6 +619,10 @@ describe("training landing page", () => {
       "text-brand",
       "text-ellipsis",
       "whitespace-nowrap",
+    );
+    expect(reason).toHaveAttribute(
+      "title",
+      "Longest recorded ride in the 28 days ending Jul 9, 1998",
     );
     const arrow = firstRide.lastElementChild;
     expect(arrow).toHaveClass("text-base", "leading-4", "text-ink-3");
@@ -806,7 +838,7 @@ describe("ride review", () => {
 
     const panel = screen.getByRole("region", { name: "Export ride" });
     const formatLabel = within(panel).getByText("File format");
-    expect(formatLabel).toHaveClass("font-semibold");
+    expect(formatLabel).toHaveClass("font-medium");
     await user.click(within(panel).getByRole("combobox", { name: "File format" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "FIT",
@@ -1497,12 +1529,23 @@ describe("training history states and import status", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "This week" })).not.toBeInTheDocument();
     expect(screen.queryByText("Worth a look")).not.toBeInTheDocument();
-    expect(screen.getByText("Recorded through Jul 12, 1998")).toBeInTheDocument();
+    expect(screen.getByText("Recorded through Jul 12, 1998").tagName).toBe("STRONG");
     expect(screen.getByRole("region", { name: "Recorded rides" })).toBeInTheDocument();
     const notice = screen
       .getByText("Training could not be refreshed. Showing the last recorded data.")
       .closest("p");
     expect(notice).toHaveClass("text-xs", "leading-4");
+  });
+
+  it("leads a complete last-recorded notice with its recorded-through date", () => {
+    setTraining(ready(history({ displayMode: "last-recorded" })));
+    render(<TrainingView />);
+
+    const coverage = screen.getByText("Recorded through Jul 12, 1998");
+    const notice = screen.getByText("Training may be out of date.").closest("p");
+    expect(coverage.tagName).toBe("STRONG");
+    expect(coverage.parentElement).toBe(notice);
+    expect(coverage.nextElementSibling).toHaveTextContent("Training may be out of date.");
   });
 
   it("combines stale and incomplete history into one warning", () => {
@@ -1575,6 +1618,8 @@ describe("training history states and import status", () => {
   });
 
   it("reports the picker, progress, success and failure stages", () => {
+    const choose = vi.fn();
+    useEnduragentStore.setState({ rideImportActions: { choose } });
     render(<TrainingView />);
     expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
     const status = document.querySelector("#ride-import-status");
@@ -1590,7 +1635,11 @@ describe("training history states and import status", () => {
       result: null,
     });
     expect(status).toHaveTextContent("Waiting for ride file selection…");
-    expect(screen.queryByRole("button", { name: "Import ride files" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import ride files" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import ride files" })).toHaveAttribute(
+      "aria-describedby",
+      "ride-import-status",
+    );
 
     setRideImport({
       status: "running",

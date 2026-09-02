@@ -62,7 +62,7 @@ export function ActivityExportControl(props: {
         Save a copy to your computer. Exporting does not change this ride or your training account.
       </p>
       <div className={styles.exportControls}>
-        <label className="font-semibold" htmlFor={`${id}-format`}>
+        <label className="font-medium" htmlFor={`${id}-format`}>
           File format
         </label>
         <Select

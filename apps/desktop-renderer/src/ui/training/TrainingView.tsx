@@ -13,6 +13,7 @@ import {
   useState,
   type ReactElement,
   type ReactNode,
+  type Ref,
 } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "../../components/ui/button";
@@ -106,9 +107,12 @@ function noticeCoverage(
   history: TrainingHistoryComputed,
   week: CompletedActivityWeek,
 ): string | null {
-  if (panel.kind !== "stale" && week.coverage.kind !== "incomplete") return null;
   const through =
-    week.coverage.kind === "incomplete" ? week.coverage.recordedThrough : coverageDate(history);
+    week.coverage.kind === "incomplete"
+      ? week.coverage.recordedThrough
+      : panel.kind === "stale" || history.displayMode === "last-recorded"
+        ? coverageDate(history)
+        : null;
   return through === null ? null : `${TRAINING_HISTORY_COPY.coverage} ${formatCivilDate(through)}`;
 }
 
@@ -276,7 +280,9 @@ function RideRow(props: {
             {historyRideMeta(props.ride, props.units)}
           </span>
           {props.reason === null ? null : (
-            <span className={styles.historyRideReason}>{props.reason}</span>
+            <span className={styles.historyRideReason} title={props.reason}>
+              {props.reason}
+            </span>
           )}
         </span>
         <span className={styles.historyRideStats} data-parity="ride-stats">
@@ -392,6 +398,7 @@ function PeriodNavigation(props: {
   readonly history: TrainingHistoryComputed;
   readonly period: Period;
   readonly retained: boolean;
+  readonly currentButtonRef: Ref<HTMLButtonElement>;
   readonly onChange: (period: Period) => void;
 }): ReactElement {
   return (
@@ -420,6 +427,7 @@ function PeriodNavigation(props: {
             <ChevronLeft aria-hidden="true" />
           </Button>
           <Button
+            ref={props.currentButtonRef}
             type="button"
             variant="outline"
             size="xs"
@@ -453,10 +461,26 @@ function DataNotice(props: {
   return (
     <p className={styles.dataNotice}>
       {props.coverage === null ? null : (
-        <span className={styles.dataNoticeCoverage}>{props.coverage}</span>
+        <strong className={styles.dataNoticeCoverage}>{props.coverage}</strong>
       )}
       <span>{props.notice}</span>
     </p>
+  );
+}
+
+function RideImportAction(): ReactElement {
+  const state = useEnduragentStore((store) => store.rideImport);
+  const actions = useEnduragentStore((store) => store.rideImportActions);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      disabled={actions === null || state.status === "running"}
+      aria-describedby={state.status === "idle" ? undefined : "ride-import-status"}
+      onClick={() => actions?.choose()}
+    >
+      Import ride files
+    </Button>
   );
 }
 
@@ -543,6 +567,7 @@ export function TrainingView(): ReactElement {
   const rideButtons = useRef(new Map<string, HTMLButtonElement>());
   const previousRideId = useRef<string | null>(null);
   const title = useRef<HTMLHeadingElement>(null);
+  const currentPeriodButton = useRef<HTMLButtonElement>(null);
   const panel = training.trainingContext.trainingHistory;
   const history = effectiveHistory(panel);
   const retained = panel.kind === "stale";
@@ -589,6 +614,10 @@ export function TrainingView(): ReactElement {
     () => (label === null ? null : notice === null ? label : `${label}. ${notice}`),
     [label, notice],
   );
+  const changePeriod = (nextPeriod: Period): void => {
+    setPeriod(nextPeriod);
+    currentPeriodButton.current?.focus();
+  };
 
   if (resolvedRide !== null) {
     return (
@@ -637,7 +666,7 @@ export function TrainingView(): ReactElement {
           week={activeWeek}
           units={training.unitsPreference.value}
           onOpen={openRide}
-          onPreviousWeek={() => setPeriod("previous")}
+          onPreviousWeek={() => changePeriod("previous")}
           registerButton={(id, node) => {
             if (node === null) rideButtons.current.delete(id);
             else rideButtons.current.set(id, node);
@@ -654,14 +683,18 @@ export function TrainingView(): ReactElement {
       titleRef={title}
       busy={training.status === "loading"}
       action={
-        history === null ? undefined : (
-          <PeriodNavigation
-            history={history}
-            period={period}
-            retained={retained}
-            onChange={setPeriod}
-          />
-        )
+        <>
+          {history === null ? null : (
+            <PeriodNavigation
+              history={history}
+              period={period}
+              retained={retained}
+              currentButtonRef={currentPeriodButton}
+              onChange={changePeriod}
+            />
+          )}
+          <RideImportAction />
+        </>
       }
     >
       {historyContent}
