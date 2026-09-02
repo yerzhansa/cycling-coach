@@ -99,8 +99,9 @@ export function makeProductionFetcher(deps: {
 }): (
   signal: AbortSignal,
   intervals: { readonly apiKey: string; readonly athleteId?: string },
+  calendarTimeZone: string,
 ) => Promise<FetchedReference> {
-  return async (signal, intervals) => {
+  return async (signal, intervals, calendarTimeZone) => {
     const client = makeAbortableClient({
       apiKey: intervals.apiKey,
       athleteId: intervals.athleteId,
@@ -108,7 +109,7 @@ export function makeProductionFetcher(deps: {
       perRequestMs: PER_REQUEST_TIMEOUT_MS,
       attemptLedger: deps.attemptLedgerForRun?.(),
     });
-    return await fetchOnce(client, signal, deps.adapters, deps.sportTypes);
+    return await fetchOnce(client, signal, deps.adapters, deps.sportTypes, calendarTimeZone);
   };
 }
 
@@ -117,8 +118,15 @@ async function fetchOnce(
   signal: AbortSignal,
   adapters: readonly ReferenceSportAdapter[],
   sportTypes: readonly IntervalsActivityType[],
+  calendarTimeZone: string,
 ): Promise<FetchedReference> {
-  const live = await fetchLiveBundle({ client, signal, now: new Date(), sportTypes });
+  const live = await fetchLiveBundle({
+    client,
+    signal,
+    now: new Date(),
+    calendarTimeZone,
+    sportTypes,
+  });
   const runs: readonly AdapterRun[] = runAdaptersForActivities(
     adapters,
     sportTypes,

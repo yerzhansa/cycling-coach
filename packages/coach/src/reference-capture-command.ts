@@ -29,6 +29,7 @@ import type { FileSystemPort } from "@enduragent/kernel/ports";
 import {
   assertReferenceCaptureReplayable,
   parseReferenceCaptureManifest,
+  referenceCaptureClock,
   type RecordRef,
   type ReferenceCaptureManifest,
   type SnapshotRef,
@@ -826,7 +827,13 @@ export async function runReferenceCaptureCommand(
           ? await (await import(new URL("./local-bundle-producer.js", import.meta.url).href))
             .createLocalBundleProducer({ ...destination, bundleProjection }).produce(manifest)
           : await dependencies.produceLocalBundle(destination, manifest);
-        if (produced.captureId !== manifest.capture_id || produced.frozenNow !== manifest.plan.frozenNow) {
+        const expectedClock = referenceCaptureClock(manifest.plan);
+        if (
+          produced.captureId !== manifest.capture_id ||
+          produced.captureClock.captureEpochMs !== expectedClock.captureEpochMs ||
+          produced.captureClock.civilDateTime !== expectedClock.civilDateTime ||
+          produced.captureClock.calendarTimeZone !== expectedClock.calendarTimeZone
+        ) {
           throw new TypeError("local bundle identity changed");
         }
         const projected = buildFixtureShape(produced.bundle);

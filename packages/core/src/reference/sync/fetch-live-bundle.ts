@@ -152,6 +152,7 @@ interface LiveFetchDeps {
   readonly client: BundleFetchClient;
   readonly signal: AbortSignal;
   readonly now: Date;
+  readonly calendarTimeZone: string;
   readonly sportTypes?: readonly string[];
   /** Override the inter-request throttle (tests pass 0). */
   readonly throttleMs?: number;
@@ -201,7 +202,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const { client, signal, now } = deps;
   const log = deps.log ?? ((m: string) => console.warn(m));
   const throttleMs = deps.throttleMs ?? STREAM_THROTTLE_MS;
-  const plan = createReferenceCapturePlan({ now, calendarTimeZone: "UTC" });
+  const plan = createReferenceCapturePlan({ now, calendarTimeZone: deps.calendarTimeZone });
   const frozenNow = plan.frozenNow;
   const { oldest, newest } = plan.window;
   const cyclingSportTypes = new Set(

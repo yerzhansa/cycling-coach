@@ -104,6 +104,20 @@ function fakeClient(opts: FakeOpts): {
 }
 
 describe("fetchLiveBundle", () => {
+  it("uses the supplied calendar zone for the run window", async () => {
+    const { client, eventCalls } = fakeClient({});
+    const result = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: new Date("2026-06-08T15:30:00.000Z"),
+      calendarTimeZone: "Australia/Sydney",
+      throttleMs: 0,
+    });
+
+    expect(result.frozenNow).toBe("2026-06-09T01:30:00");
+    expect(eventCalls[0]).toMatchObject({ oldest: "2026-06-03", newest: "2026-07-07" });
+  });
+
   it("snake-cases + renames TP fields on activities and wellness", async () => {
     const { client } = fakeClient({
       activities: [camelActivity({ id: 7 })],
@@ -113,6 +127,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
 
@@ -149,6 +164,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
 
@@ -172,6 +188,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(streamCalls).toEqual(["90", "10"]);
@@ -190,6 +207,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: () => {},
     });
@@ -203,7 +221,13 @@ describe("fetchLiveBundle", () => {
     const { client, streamCalls } = fakeClient({
       activities: [camelActivity({ id: 1, startDateLocal: daysAgo(1) })],
     });
-    const res = await fetchLiveBundle({ client, signal: ac.signal, now: NOW, throttleMs: 0 });
+    const res = await fetchLiveBundle({
+      client,
+      signal: ac.signal,
+      now: NOW,
+      calendarTimeZone: "UTC",
+      throttleMs: 0,
+    });
     expect(streamCalls).toHaveLength(0);
     expect(res.bundle.streams).toBeUndefined();
   });
@@ -220,6 +244,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.bundle.ftpHistory).toEqual([
@@ -239,6 +264,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.recentActivities).toHaveLength(1);
@@ -253,6 +279,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.bundle.athlete?.sportSettings[0]?.ftp).toBe(250);
@@ -261,7 +288,13 @@ describe("fetchLiveBundle", () => {
   it("throws when the activities list is unreachable", async () => {
     const { client } = fakeClient({ activitiesFail: true });
     await expect(
-      fetchLiveBundle({ client, signal: new AbortController().signal, now: NOW, throttleMs: 0 }),
+      fetchLiveBundle({
+        client,
+        signal: new AbortController().signal,
+        now: NOW,
+        calendarTimeZone: "UTC",
+        throttleMs: 0,
+      }),
     ).rejects.toThrow(/activities\.list failed/);
   });
 
@@ -320,6 +353,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       sportTypes: ["Ride", "VirtualRide", "Run"],
       throttleMs: 0,
       log: () => {},
@@ -347,6 +381,7 @@ describe("fetchLiveBundle", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       sportTypes: ["Ride"],
       throttleMs: 0,
       log: () => {},
@@ -379,6 +414,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.bundle.streams?.["1"]?.dfa_a1).toEqual([1, 0.8]);
@@ -406,6 +442,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: (message) => logs.push(message),
     });
@@ -426,6 +463,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.bundle.streams?.["1"]?.dfa_a1).toEqual([1, 0.8]);
@@ -440,6 +478,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: () => {},
     });
@@ -454,6 +493,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.bundle.athlete?.sportSettings[0]?.indoor_ftp).toBe(240);
@@ -474,6 +514,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: (m) => logs.push(m),
     });
@@ -501,6 +542,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: (message) => logs.push(message),
     });
@@ -527,6 +569,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: () => {},
     });
@@ -551,6 +594,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: (m) => logs.push(m),
     });
@@ -573,6 +617,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: () => {},
     });
@@ -587,6 +632,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.fetchErrors).toBeUndefined();
@@ -610,6 +656,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: () => {},
     });
@@ -638,6 +685,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
 
@@ -662,6 +710,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
       log: (m) => logs.push(m),
     });
@@ -683,7 +732,13 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
         return STREAM_OK;
       },
     });
-    await fetchLiveBundle({ client, signal: ac.signal, now: NOW, throttleMs: 0 });
+    await fetchLiveBundle({
+      client,
+      signal: ac.signal,
+      now: NOW,
+      calendarTimeZone: "UTC",
+      throttleMs: 0,
+    });
     expect(streamCalls).toHaveLength(1);
   });
 
@@ -693,6 +748,7 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       client,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       throttleMs: 0,
     });
     expect(res.frozenNow).not.toMatch(/[Z+]/);

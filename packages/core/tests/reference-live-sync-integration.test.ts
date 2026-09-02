@@ -130,6 +130,7 @@ async function composeFetched(): Promise<FetchedReference> {
     client: fakeClient(),
     signal: new AbortController().signal,
     now: NOW,
+      calendarTimeZone: "UTC",
     sportTypes: SPORT_TYPES,
     throttleMs: 0,
   });
@@ -237,6 +238,7 @@ describe("live-data bridge integration", () => {
       client: emptyClient,
       signal: new AbortController().signal,
       now: NOW,
+      calendarTimeZone: "UTC",
       sportTypes: SPORT_TYPES,
       throttleMs: 0,
     });

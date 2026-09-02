@@ -1021,6 +1021,7 @@ export async function createLocalCoachComposition(
       dataDir: input.home.root,
       intervals: approvedConfig().intervals,
       readIntervals: () => approvedConfig().intervals,
+      readCalendarTimeZone: () => resolveUserTimezone(approvedConfig().session.timezone),
       sport: cyclingSport,
       startScheduler: false,
       attemptLedgerForRun: () => {

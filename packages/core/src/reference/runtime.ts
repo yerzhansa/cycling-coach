@@ -36,11 +36,13 @@ export interface BootstrapReferenceDeps {
   readonly dataDir: string;
   readonly intervals: { readonly apiKey: string; readonly athleteId?: string };
   readonly readIntervals?: () => { readonly apiKey: string; readonly athleteId?: string };
+  readonly readCalendarTimeZone: () => string;
   readonly sport: Sport;
   /** Inject a fetcher for tests. Defaults to `makeProductionFetcher`. */
   readonly fetchReferenceData?: (
     signal: AbortSignal,
     intervals: { readonly apiKey: string; readonly athleteId?: string },
+    calendarTimeZone: string,
   ) => Promise<FetchedReference>;
   readonly startScheduler?: boolean;
   readonly attemptLedgerForRun?: () => PhysicalRequestLedger;
@@ -83,7 +85,7 @@ export async function bootstrapReference(
       attemptLedgerForRun: deps.attemptLedgerForRun,
     });
   const fetchReferenceDataForRun = (signal: AbortSignal) =>
-    fetchReferenceData(signal, readIntervals());
+    fetchReferenceData(signal, readIntervals(), deps.readCalendarTimeZone());
 
   const mutex = new AsyncMutex();
   const cooldown = new Cooldown();

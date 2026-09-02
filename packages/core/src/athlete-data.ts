@@ -155,7 +155,7 @@ export function isRealCivilDate(value: string): boolean {
 }
 
 function freshnessFor(snapshot: ProducedLocalBundle, clockNow: number): StoredDataFreshness | undefined {
-  const capturedMs = Date.parse(snapshot.frozenNow);
+  const capturedMs = snapshot.captureClock.captureEpochMs;
   if (!Number.isFinite(capturedMs) || !Number.isSafeInteger(capturedMs) || capturedMs < 0
     || capturedMs - clockNow > 300_000) return undefined;
   const ageMs = Math.max(0, clockNow - capturedMs);
@@ -164,7 +164,7 @@ function freshnessFor(snapshot: ProducedLocalBundle, clockNow: number): StoredDa
     : ageMs < 172_800_000
       ? `${Math.floor(ageMs / 60_000)} minutes`
       : `${Math.floor(ageMs / 86_400_000)} days`;
-  return Object.freeze({ capturedAt: snapshot.frozenNow, ageMs, label });
+  return Object.freeze({ capturedAt: snapshot.captureClock.civilDateTime, ageMs, label });
 }
 
 export function formatStoreFreshness(freshness: StoredDataFreshness): string {
@@ -192,7 +192,7 @@ export function createStoreAthleteDataReader(input: {
     snapshot: ProducedLocalBundle,
     candidate: { start: string; end?: string },
   ): { start: string; end: string } | undefined => {
-    const end = candidate.end ?? snapshot.frozenNow.slice(0, 10);
+    const end = candidate.end ?? snapshot.captureClock.civilDateTime.slice(0, 10);
     if (!isRealCivilDate(candidate.start) || !isRealCivilDate(end) || candidate.start > end) return undefined;
     return { start: candidate.start, end };
   };

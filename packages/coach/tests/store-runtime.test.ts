@@ -34,11 +34,19 @@ const config: Config = {
 };
 const manifest = {
   capture_id: "12345678-1234-4123-8123-123456789abc",
-  plan: { frozenNow: "1998-07-18T12:00:00.000Z" },
+  plan: {
+    capture_epoch_ms: Date.parse("1998-07-18T12:00:00.000Z"),
+    frozenNow: "1998-07-18T12:00:00.000Z",
+    calendar_timezone: "UTC",
+  },
 } as ReferenceCaptureManifest;
 const produced: ProducedLocalBundle = {
   captureId: manifest.capture_id,
-  frozenNow: manifest.plan.frozenNow,
+  captureClock: {
+    captureEpochMs: manifest.plan.capture_epoch_ms,
+    civilDateTime: manifest.plan.frozenNow,
+    calendarTimeZone: "UTC",
+  },
   bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } },
 };
 

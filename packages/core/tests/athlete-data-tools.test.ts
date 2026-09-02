@@ -19,7 +19,11 @@ import { COACH_EVENT_TAG } from "../../engine/src/sport/event-provenance.js";
 function produced(frozenNow = "1998-07-18T12:00:00.000Z"): ProducedLocalBundle {
   return {
     captureId: "12345678-1234-4123-8123-123456789abc",
-    frozenNow,
+    captureClock: {
+      captureEpochMs: Date.parse(frozenNow),
+      civilDateTime: frozenNow,
+      calendarTimeZone: "UTC",
+    },
     bundle: {
       athlete: { sportSettings: [{ types: ["Ride"], ftp: 250 }] },
       activities: [
@@ -180,6 +184,27 @@ describe("store athlete reader", () => {
       ok: false,
       error: "invalid_input",
       message: "Dates must be real YYYY-MM-DD values with start on or before end.",
+    });
+  });
+
+  it("derives snapshot age from the capture epoch instead of civil text", async () => {
+    const snapshot = {
+      ...produced("not-an-instant"),
+      captureClock: {
+        captureEpochMs: Date.parse("1998-07-18T20:30:00.000Z"),
+        civilDateTime: "1998-07-19T03:30:00",
+        calendarTimeZone: "Asia/Almaty",
+      },
+    };
+    const reader = createStoreAthleteDataReader({
+      snapshot: () => snapshot,
+      clockNow: () => Date.parse("1998-07-18T20:32:00.000Z"),
+    });
+    const result = await reader.getAthlete();
+    expect(result.ok && result.freshness).toEqual({
+      capturedAt: "1998-07-19T03:30:00",
+      ageMs: 120_000,
+      label: "2 minutes",
     });
   });
 

@@ -10,11 +10,12 @@ import {
 } from "../src/local-bundle-producer.js";
 
 function manifest() {
-  const captureEpoch = Date.UTC(1998, 5, 10);
+  const captureEpoch = Date.UTC(1998, 5, 10, 12);
   const snapshot = (value: string) => ({ address: value.repeat(64), rel_path: `1998/06/${value.repeat(64)}.json.gz` });
   return validateReferenceCaptureManifest({
     schema_version: 1, capture_id: "123e4567-e89b-42d3-a456-426614174000", source: "external-oracle",
-    plan: { capture_epoch_ms: captureEpoch, frozenNow: "1998-06-10T12:00:00",
+    plan: { capture_epoch_ms: captureEpoch, frozenNow: "1998-06-10T18:00:00",
+      calendar_timezone: "Asia/Almaty",
       window: { oldest: "1998-06-01", newest: "1998-06-10" },
       stream_cutoff_epoch_ms: captureEpoch - 21 * 24 * 60 * 60 * 1_000 },
     operation_ledger: { link_kind: "capture-id", capture_id: "123e4567-e89b-42d3-a456-426614174000" },
@@ -88,7 +89,12 @@ describe("local bundle producer composition", () => {
       }));
     const value = await producer.produce(manifest());
     expect(value).toEqual({ captureId: "123e4567-e89b-42d3-a456-426614174000",
-      frozenNow: "1998-06-10T12:00:00", bundle: emptyBundle });
+      captureClock: {
+        captureEpochMs: Date.UTC(1998, 5, 10, 12),
+        civilDateTime: "1998-06-10T18:00:00",
+        calendarTimeZone: "Asia/Almaty",
+      },
+      bundle: emptyBundle });
     expect(store.calls).toEqual([
       ["intervals-icu", "activities"], ["intervals-icu", "settings"],
       ["intervals-icu", "wellness"], ["intervals-icu", "streams"],
@@ -127,7 +133,12 @@ describe("local bundle producer composition", () => {
 
     await expect(producer.produce(manifest())).resolves.toEqual({
       captureId: "123e4567-e89b-42d3-a456-426614174000",
-      frozenNow: "1998-06-10T12:00:00", bundle: emptyBundle,
+      captureClock: {
+        captureEpochMs: Date.UTC(1998, 5, 10, 12),
+        civilDateTime: "1998-06-10T18:00:00",
+        calendarTimeZone: "Asia/Almaty",
+      },
+      bundle: emptyBundle,
     });
     expect(close).toHaveBeenCalledTimes(1);
   });

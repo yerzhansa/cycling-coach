@@ -581,11 +581,19 @@ describe("local coach composition", () => {
     });
     const manifest = {
       capture_id: "12345678-1234-4123-8123-123456789abc",
-      plan: { frozenNow: "1998-07-18T12:00:00.000Z" },
+      plan: {
+        capture_epoch_ms: Date.parse("1998-07-18T12:00:00.000Z"),
+        frozenNow: "1998-07-18T12:00:00.000Z",
+        calendar_timezone: "UTC",
+      },
     } as ReferenceCaptureManifest;
     const produced: ProducedLocalBundle = {
       captureId: manifest.capture_id,
-      frozenNow: manifest.plan.frozenNow,
+      captureClock: {
+        captureEpochMs: manifest.plan.capture_epoch_ms,
+        civilDateTime: manifest.plan.frozenNow,
+        calendarTimeZone: "UTC",
+      },
       bundle: { activities: [], wellness: [], ftpHistory: [] },
     };
     const capture = vi.fn(
@@ -1224,6 +1232,7 @@ describe("local coach composition", () => {
         readCurrent: async () => undefined,
       }),
       createResolver: () => missingResolver(),
+      now: () => Date.parse(state.lastUpdated),
     });
     const projectedState = await received!.ports.stateReader.getAthleteState();
     const projectedTrainingContext = projectedState.trainingContext;
@@ -3368,7 +3377,7 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
-  it("passes reference bootstrap a live intervals reader updated by runtime configuration", async () => {
+  it("passes reference bootstrap live credentials and calendar zone readers", async () => {
     const home = await freshHome();
     let referenceOptions:
       | Parameters<NonNullable<LocalCoachCompositionDependencies["bootstrap"]>>[0]
@@ -3397,12 +3406,14 @@ describe("local coach composition", () => {
         api_key: "placeholder",
         athlete_id: "fake-configured-athlete",
       },
+      session: { timezone: "Europe/Berlin" },
     });
 
     expect(referenceOptions?.readIntervals?.()).toEqual({
       apiKey: "placeholder",
       athleteId: "fake-configured-athlete",
     });
+    expect(referenceOptions?.readCalendarTimeZone()).toBe("Europe/Berlin");
     await lifecycle.close();
   });
 

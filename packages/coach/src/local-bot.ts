@@ -40,6 +40,7 @@ export async function prepareStoreCoachComposition(
   const reference = await (dependencies.bootstrap ?? bootstrapReference)({
     dataDir: input.config.dataDir,
     intervals: input.config.intervals,
+    readCalendarTimeZone: () => input.config.session.timezone,
     sport: input.sport,
     startScheduler: false,
     attemptLedgerForRun: () => {

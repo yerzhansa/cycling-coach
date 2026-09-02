@@ -9,6 +9,7 @@ import {
   parseReferenceCaptureManifest,
   parseReferenceCapturePlan,
   planCalendarTimeZone,
+  referenceCaptureClock,
   selectReferenceCaptureStreamIds,
   serializeReferenceCaptureManifest,
   serializeReferenceCapturePlan,
@@ -97,6 +98,18 @@ describe("Reference capture plan and manifest", () => {
     expect(almaty.window).toEqual({ oldest: "1998-04-26", newest: "1998-07-19" });
     expect(almaty.frozenNow).toBe("1998-07-19T03:30:00");
     expect(planCalendarTimeZone(almaty)).toBe("Asia/Almaty");
+  });
+
+  it("projects the authoritative instant, civil time, and calendar zone together", () => {
+    const plan = createReferenceCapturePlan({
+      now: new Date("1998-07-18T20:30:00.000Z"),
+      calendarTimeZone: "Asia/Almaty",
+    });
+    expect(referenceCaptureClock(plan)).toEqual({
+      captureEpochMs: Date.parse("1998-07-18T20:30:00.000Z"),
+      civilDateTime: "1998-07-19T03:30:00",
+      calendarTimeZone: "Asia/Almaty",
+    });
   });
 
   it("strictly validates every manifest object and exact bytes", () => {
