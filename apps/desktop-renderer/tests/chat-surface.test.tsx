@@ -82,12 +82,6 @@ function composer(): HTMLTextAreaElement {
   return element;
 }
 
-type QuestionFixture = {
-  readonly kind: PlanCreationOpenQuestion["kind"];
-  readonly prompt: string;
-  readonly [key: string]: unknown;
-};
-
 type PlanLengthQuestion = Extract<
   PlanCreationOpenQuestion,
   { readonly kind: "plan-length-question" }
@@ -127,248 +121,245 @@ const fixtureAuthoredOption = {
   placeholder: "Type an answer",
 } as const;
 
-function completeQuestion(question: QuestionFixture): PlanCreationOpenQuestion {
-  const shared = { step: fixtureStep, ...question };
-  if (question.kind === "goal-question") {
-    const completed: GoalQuestion = {
-      ...shared,
-      kind: "goal-question",
-      candidates: question.candidates as GoalQuestion["candidates"],
-      eventNotListedOption: {
-        label: "Event not listed",
-        detail: "Tell me the event name and its exact date.",
-        editorLabel: "Name the event and include its exact date.",
-        placeholder: "Event name",
-        nameLabel: "Event name",
-        dateLabel: "Event date",
-      },
-      fitnessOption: {
-        label: "Improve without an event",
-        detail: "Build fitness for a fixed number of weeks.",
-      },
-      authoredOption: fixtureAuthoredOption,
-    };
-    return completed;
-  }
-  if (question.kind === "success-question") {
-    const input = question.input as {
-      readonly kind: "authored" | "fitness-choice" | "event-finish";
-      readonly options?: readonly Record<string, unknown>[];
-      readonly placeholder?: string;
-    };
-    const completed: SuccessQuestion = {
-      ...shared,
-      kind: "success-question",
-      input:
-        input.kind === "authored" || input.kind === "fitness-choice"
-          ? {
-              kind: "fitness-choice",
-              options: (
-                input.options ?? [
-                  {
-                    choice: "train-consistently",
-                    label: "Train consistently",
-                    detail: "Repeat most planned weeks.",
-                  },
-                  {
-                    choice: "climb-stronger",
-                    label: "Climb stronger",
-                    detail: "Hold steady on longer climbs.",
-                  },
-                  {
-                    choice: "ride-farther",
-                    label: "Ride farther comfortably",
-                    detail: "Finish longer rides comfortably.",
-                  },
-                ]
-              ).map((option) => ({
-                choice: option.choice as
-                  | "train-consistently"
-                  | "climb-stronger"
-                  | "ride-farther",
-                label: String(option.label),
-                detail: String(option.detail ?? "Choose this Fitness outcome."),
-              })),
-              authored: {
-                label: fixtureAuthoredOption.label,
-                detail: fixtureAuthoredOption.detail,
-                editorLabel: fixtureAuthoredOption.editorLabel,
-              },
-              placeholder: input.placeholder ?? fixtureAuthoredOption.placeholder,
-            }
-          : {
-              kind: "event-finish",
-              options: (input.options ?? []).map((option) => ({
-                choice: option.choice as "finish-comfortably" | "finish-fast" | "race-for-result",
-                label: String(option.label),
-                detail: String(
-                  option.detail ?? option.description ?? "Choose this event outcome.",
-                ),
-              })),
-              authored: fixtureAuthoredOption,
-            },
-    };
-    return completed;
-  }
-  if (question.kind === "plan-length-question") {
-    const options = question.options as readonly (Omit<
-      PlanLengthQuestion["options"][number],
-      "detail"
-    > & {
-      readonly detail?: string;
-      readonly description?: string;
-    })[];
-    const completed: PlanLengthQuestion = {
-      ...shared,
-      kind: "plan-length-question",
-      options: options.map((option) => ({
-        weeks: option.weeks,
-        label: option.label,
-        detail: option.detail ?? option.description ?? "Choose this Plan length.",
-      })),
-    };
-    return completed;
-  }
-  if (question.kind === "start-timing-question") {
-    const completed: StartTimingQuestion = {
-      ...shared,
-      kind: "start-timing-question",
-      earliestAllowed: String(question.earliestAllowed),
+function goalQuestion(prompt: string): GoalQuestion {
+  return {
+    kind: "goal-question",
+    step: fixtureStep,
+    prompt,
+    candidates: [],
+    eventNotListedOption: {
+      label: "Event not listed",
+      detail: "Tell me the event name and its exact date.",
+      editorLabel: "Name the event and include its exact date.",
+      placeholder: "Event name",
+      nameLabel: "Event name",
+      dateLabel: "Event date",
+    },
+    fitnessOption: {
+      label: "Improve without an event",
+      detail: "Build fitness for a fixed number of weeks.",
+    },
+    authoredOption: fixtureAuthoredOption,
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function fitnessSuccessQuestion(prompt: string, placeholder = "Describe success"): SuccessQuestion {
+  return {
+    kind: "success-question",
+    step: fixtureStep,
+    prompt,
+    input: {
+      kind: "fitness-choice",
       options: [
         {
-          timing: "as-soon-as-possible",
-          label: "As soon as possible",
-          detail: "Start at the earliest suitable week.",
+          choice: "train-consistently",
+          label: "Train consistently",
+          detail: "Repeat most planned weeks.",
         },
-        { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
+        {
+          choice: "climb-stronger",
+          label: "Climb stronger",
+          detail: "Hold steady on longer climbs.",
+        },
+        {
+          choice: "ride-farther",
+          label: "Ride farther comfortably",
+          detail: "Finish longer rides comfortably.",
+        },
       ],
-      dateLabel: "Earliest start date",
-    };
-    return completed;
-  }
-  if (question.kind === "commitments-question") {
-    const completed: CommitmentsQuestion = {
-      ...shared,
-      kind: "commitments-question",
-      noneOption: { label: "Nothing fixed", detail: "There is nothing fixed to add." },
-      authoredOption: {
-        ...fixtureAuthoredOption,
-        editorLabel: "Scheduling details",
-        placeholder:
-          typeof question.placeholder === "string"
-            ? question.placeholder
-            : fixtureAuthoredOption.placeholder,
+      authored: {
+        label: fixtureAuthoredOption.label,
+        detail: fixtureAuthoredOption.detail,
+        editorLabel: fixtureAuthoredOption.editorLabel,
       },
-    };
-    return completed;
-  }
-  if (question.kind === "schedule-mode-question") {
-    const options = question.options as readonly (Omit<
-      ScheduleModeQuestion["options"][number],
-      "detail"
-    > & {
-      readonly detail?: string;
-      readonly description?: string;
-    })[];
-    const completed: ScheduleModeQuestion = {
-      ...shared,
-      kind: "schedule-mode-question",
-      options: options.map((option) => ({
-        mode: option.mode,
-        label: option.label,
-        detail: option.detail ?? option.description ?? "Choose this Schedule mode.",
-      })),
-    };
-    return completed;
-  }
-  if (question.kind === "availability-question") {
-    const completed: AvailabilityQuestion = {
-      ...shared,
-      kind: "availability-question",
-      mode: question.mode as AvailabilityQuestion["mode"],
-      weeklyHoursOptions: [
-        { id: "hours-6", weeklyHoursLimit: 6, label: "5–6 hours", detail: "Usual volume." },
-        { id: "hours-8", weeklyHoursLimit: 8, label: "7–8 hours", detail: "A small step." },
-        { id: "hours-10", weeklyHoursLimit: 10, label: "9+ hours", detail: "More volume." },
+      placeholder,
+    },
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function eventSuccessQuestion(prompt: string): SuccessQuestion {
+  return {
+    kind: "success-question",
+    step: fixtureStep,
+    prompt,
+    input: {
+      kind: "event-finish",
+      options: [
+        {
+          choice: "finish-comfortably",
+          label: "Finish comfortably",
+          detail: "Complete the event feeling in control.",
+        },
+        { choice: "finish-fast", label: "Finish fast", detail: "Aim for a faster finish." },
+        {
+          choice: "race-for-result",
+          label: "Race for a result",
+          detail: "Prepare for a competitive result.",
+        },
       ],
-      longestWorkoutLabel: "Longest ride in hours",
-      weekdayOptions: [
-        { weekday: 1, label: "Mon" },
-        { weekday: 2, label: "Tue" },
-        { weekday: 3, label: "Wed" },
-        { weekday: 4, label: "Thu" },
-        { weekday: 5, label: "Fri" },
-        { weekday: 6, label: "Sat" },
-        { weekday: 7, label: "Sun" },
-      ],
-      derivedPoolNote: String(question.derivedPoolNote),
-    };
-    return completed;
-  }
-  if (question.kind === "baseline-question") {
-    const options = question.options as readonly (Omit<
-      BaselineQuestion["options"][number],
-      "detail"
-    > & {
-      readonly detail?: string;
-      readonly description?: string;
-    })[];
-    const completed: BaselineQuestion = {
-      ...shared,
-      kind: "baseline-question",
-      options: options.map((option) => ({
-        baseline: option.baseline,
-        label: option.label,
-        detail: option.detail ?? option.description ?? "Choose this training baseline.",
-      })),
-    };
-    return completed;
-  }
-  if (question.kind === "restriction-question") {
-    const options = question.options as readonly (Omit<
-      RestrictionQuestion["options"][number],
-      "detail"
-    > & {
-      readonly detail?: string;
-      readonly description?: string;
-    })[];
-    const completed: RestrictionQuestion = {
-      ...shared,
-      kind: "restriction-question",
-      options: options.map((option) => ({
-        kind: option.kind,
-        label: option.label,
-        detail: option.detail ?? option.description ?? "Choose this operational restriction.",
-      })),
-    };
-    return completed;
-  }
-  throw new TypeError(`Unsupported question fixture: ${question.kind}`);
+      authored: fixtureAuthoredOption,
+    },
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function planLengthQuestion(prompt: string): PlanLengthQuestion {
+  return {
+    kind: "plan-length-question",
+    step: fixtureStep,
+    prompt,
+    options: [
+      { weeks: 4, label: "4 weeks", detail: "Choose a 4-week Plan." },
+      { weeks: 8, label: "8 weeks", detail: "Choose an 8-week Plan." },
+      { weeks: 12, label: "12 weeks", detail: "Choose a 12-week Plan." },
+      { weeks: 16, label: "16 weeks", detail: "Choose a 16-week Plan." },
+    ],
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function startTimingQuestion(prompt: string, earliestAllowed: string): StartTimingQuestion {
+  return {
+    kind: "start-timing-question",
+    step: fixtureStep,
+    prompt,
+    earliestAllowed,
+    options: [
+      {
+        timing: "as-soon-as-possible",
+        label: "As soon as possible",
+        detail: "Start at the earliest suitable week.",
+      },
+      { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
+    ],
+    dateLabel: "Earliest start date",
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function commitmentsQuestion(prompt: string, placeholder: string): CommitmentsQuestion {
+  return {
+    kind: "commitments-question",
+    step: fixtureStep,
+    prompt,
+    noneOption: { label: "Nothing fixed", detail: "There is nothing fixed to add." },
+    authoredOption: {
+      ...fixtureAuthoredOption,
+      editorLabel: "Scheduling details",
+      placeholder,
+    },
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function scheduleModeQuestion(prompt: string): ScheduleModeQuestion {
+  return {
+    kind: "schedule-mode-question",
+    step: fixtureStep,
+    prompt,
+    options: [
+      {
+        mode: "fixed",
+        label: "Fixed Schedule",
+        detail: "Place each Workout on one of your available weekdays.",
+      },
+      {
+        mode: "flexible",
+        label: "Flexible Schedule",
+        detail: "Choose from an ordered Workout pool during each week.",
+      },
+    ],
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function availabilityQuestion(
+  prompt: string,
+  mode: AvailabilityQuestion["mode"],
+  derivedPoolNote: string,
+): AvailabilityQuestion {
+  return {
+    kind: "availability-question",
+    step: fixtureStep,
+    prompt,
+    mode,
+    weeklyHoursOptions: [
+      { id: "hours-6", weeklyHoursLimit: 6, label: "5–6 hours", detail: "Usual volume." },
+      { id: "hours-8", weeklyHoursLimit: 8, label: "7–8 hours", detail: "A small step." },
+      { id: "hours-10", weeklyHoursLimit: 10, label: "9+ hours", detail: "More volume." },
+    ],
+    longestWorkoutLabel: "Longest ride in hours",
+    weekdayOptions: [
+      { weekday: 1, label: "Mon" },
+      { weekday: 2, label: "Tue" },
+      { weekday: 3, label: "Wed" },
+      { weekday: 4, label: "Thu" },
+      { weekday: 5, label: "Fri" },
+      { weekday: 6, label: "Sat" },
+      { weekday: 7, label: "Sun" },
+    ],
+    derivedPoolNote,
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function baselineQuestion(prompt: string): BaselineQuestion {
+  return {
+    kind: "baseline-question",
+    step: fixtureStep,
+    prompt,
+    options: [
+      { baseline: "regular", label: "Regular", detail: "Consistent training." },
+      { baseline: "occasional", label: "Occasional", detail: "Some training." },
+      { baseline: "starting-again", label: "Starting again", detail: "Returning to training." },
+    ],
+  } satisfies PlanCreationOpenQuestion;
+}
+
+function restrictionQuestion(prompt: string): RestrictionQuestion {
+  return {
+    kind: "restriction-question",
+    step: fixtureStep,
+    prompt,
+    options: [
+      { kind: "none", label: "None", detail: "No Training Restriction." },
+      { kind: "no-training", label: "No training", detail: "Schedule no training." },
+      {
+        kind: "no-hard-training",
+        label: "No hard training",
+        detail: "Schedule no hard training.",
+      },
+      {
+        kind: "max-duration",
+        label: "Maximum Workout duration",
+        detail: "Limit each Workout duration.",
+      },
+    ],
+  } satisfies PlanCreationOpenQuestion;
+}
+
+type PlanCreationSummaryFixture = Omit<
+  PlanCreationCardModel["answeredSummaries"][number],
+  "source"
+> & {
+  readonly source?: PlanCreationCardModel["answeredSummaries"][number]["source"];
+};
+
+interface PlanCreationModelPatch {
+  readonly version?: number;
+  readonly readiness?: PlanCreationCardModel["readiness"];
+  readonly answeredSummaries?: readonly PlanCreationSummaryFixture[];
 }
 
 function planCreationModel(
-  openQuestion: QuestionFixture | null,
-  patch: Record<string, unknown> = {},
+  openQuestion: PlanCreationOpenQuestion | null,
+  patch: PlanCreationModelPatch = {},
 ): PlanCreationCardModel {
-  const summaries = Array.isArray(patch.answeredSummaries)
-    ? patch.answeredSummaries.map((value) => {
-        const summary = value as Record<string, unknown>;
-        return {
-          source: { kind: "athlete" as const },
-          ...summary,
-          question: completeQuestion(summary.question as QuestionFixture),
-        };
-      })
-    : [];
   return {
     creationId: "01J00000000000000000000000",
-    version: 1,
+    version: patch.version ?? 1,
     status: "in-progress",
-    readiness: openQuestion === null ? "ready" : "incomplete",
-    openQuestion: openQuestion === null ? null : completeQuestion(openQuestion),
-    ...patch,
-    answeredSummaries: summaries,
-  } as PlanCreationCardModel;
+    readiness: patch.readiness ?? (openQuestion === null ? "ready" : "incomplete"),
+    openQuestion,
+    answeredSummaries: (patch.answeredSummaries ?? []).map((summary) => ({
+      ...summary,
+      source: summary.source ?? { kind: "athlete" },
+    })),
+  };
 }
 
 const ATTACHMENT_CAPABILITIES: AttachmentCapabilitiesReadModel = {
@@ -2124,11 +2115,7 @@ describe("chat surface", () => {
       await userEvent.click(startButton);
       expect(actions.startPlanCreation).toHaveBeenCalledOnce();
       setChat({
-        planCreation: planCreationModel({
-          kind: "goal-question",
-          prompt: "What are you preparing for?",
-          candidates: [],
-        }),
+        planCreation: planCreationModel(goalQuestion("What are you preparing for?")),
         sendDisabled: true,
         inputDisabled: true,
         composerPlaceholder: "Finish the Plan question above",
@@ -2157,11 +2144,7 @@ describe("chat surface", () => {
       expect(heading.closest('[data-slot="card"]')).toHaveClass("min-w-0");
       setChat({
         planCreation: planCreationModel(
-          {
-            kind: "success-question",
-            prompt: "What would success mean?",
-            input: { kind: "authored", placeholder: "Describe success" },
-          },
+          fitnessSuccessQuestion("What would success mean?"),
           {
             version: 2,
             answeredSummaries: [
@@ -2169,11 +2152,7 @@ describe("chat surface", () => {
                 answerKey: "goal",
                 title: "Goal",
                 detail: "Build steady power",
-                question: {
-                  kind: "goal-question",
-                  prompt: "What are you preparing for?",
-                  candidates: [],
-                },
+                question: goalQuestion("What are you preparing for?"),
                 answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
               },
             ],
@@ -2197,11 +2176,7 @@ describe("chat surface", () => {
       render(<Harness />);
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "goal-question",
-          prompt: "What are you preparing for?",
-          candidates: [],
-        }),
+        planCreation: planCreationModel(goalQuestion("What are you preparing for?")),
       });
       await userEvent.click(screen.getByRole("button", { name: "Something else" }));
       const eventName = screen.getByRole("textbox", { name: "Event name" });
@@ -2225,18 +2200,7 @@ describe("chat surface", () => {
       setChat({
         planCreationLoaded: true,
         planCreation: planCreationModel(
-          {
-            kind: "success-question",
-            prompt: "What would success mean?",
-            input: {
-              kind: "event-finish",
-              options: [
-                { choice: "finish-comfortably", label: "Finish comfortably" },
-                { choice: "finish-fast", label: "Finish fast" },
-                { choice: "race-for-result", label: "Race for a result" },
-              ],
-            },
-          },
+          eventSuccessQuestion("What would success mean?"),
           {
             version: 2,
             answeredSummaries: [
@@ -2244,11 +2208,7 @@ describe("chat surface", () => {
                 answerKey: "goal",
                 title: "Goal",
                 detail: "Highland Tour · 1998-10-18",
-                question: {
-                  kind: "goal-question",
-                  prompt: "What are you preparing for?",
-                  candidates: [],
-                },
+                question: goalQuestion("What are you preparing for?"),
                 answer: {
                   kind: "goal",
                   goal: { kind: "event-manual", name: "Highland Tour", date: "1998-10-18" },
@@ -2278,19 +2238,9 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "plan-length-question",
-          prompt: "How long should this Fitness Plan be?",
-          options: [4, 8, 12, 16].map((weeks) => ({
-            weeks: weeks as 4 | 8 | 12 | 16,
-            label: `${weeks} weeks`,
-          })) as [
-            { weeks: 4; label: string },
-            { weeks: 8; label: string },
-            { weeks: 12; label: string },
-            { weeks: 16; label: string },
-          ],
-        }),
+        planCreation: planCreationModel(
+          planLengthQuestion("How long should this Fitness Plan be?"),
+        ),
       });
       render(<Harness />);
 
@@ -2302,11 +2252,7 @@ describe("chat surface", () => {
 
       setChat({
         planCreation: planCreationModel(
-          {
-            kind: "start-timing-question",
-            prompt: "When could this Plan start?",
-            earliestAllowed: "1998-10-01",
-          },
+          startTimingQuestion("When could this Plan start?", "1998-10-01"),
           { version: 2 },
         ),
       });
@@ -2323,22 +2269,7 @@ describe("chat surface", () => {
 
       setChat({
         planCreation: planCreationModel(
-          {
-            kind: "schedule-mode-question",
-            prompt: "Should this Plan use a Fixed or Flexible Schedule?",
-            options: [
-              {
-                mode: "fixed",
-                label: "Fixed Schedule",
-                description: "Place each Workout on one of your available weekdays.",
-              },
-              {
-                mode: "flexible",
-                label: "Flexible Schedule",
-                description: "Choose from an ordered Workout pool during each week.",
-              },
-            ],
-          },
+          scheduleModeQuestion("Should this Plan use a Fixed or Flexible Schedule?"),
           { version: 3 },
         ),
       });
@@ -2353,12 +2284,13 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "availability-question",
-          prompt: "How much training fits in a usual week?",
-          mode: "fixed",
-          derivedPoolNote: "Choose every weekday you can usually train.",
-        }),
+        planCreation: planCreationModel(
+          availabilityQuestion(
+            "How much training fits in a usual week?",
+            "fixed",
+            "Choose every weekday you can usually train.",
+          ),
+        ),
       });
       render(<Harness />);
 
@@ -2377,13 +2309,11 @@ describe("chat surface", () => {
 
       setChat({
         planCreation: planCreationModel(
-          {
-            kind: "availability-question",
-            prompt: "How much training fits in a usual week?",
-            mode: "flexible",
-            derivedPoolNote:
-              "Your weekly limit sets 3 Workouts up to 6 h, 4 up to 8 h, or 5 above 8 h.",
-          },
+          availabilityQuestion(
+            "How much training fits in a usual week?",
+            "flexible",
+            "Your weekly limit sets 3 Workouts up to 6 h, 4 up to 8 h, or 5 above 8 h.",
+          ),
           { version: 2 },
         ),
       });
@@ -2404,12 +2334,13 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "availability-question",
-          prompt: "How much training fits in a usual week?",
-          mode: "fixed",
-          derivedPoolNote: "Choose every weekday you can usually train.",
-        }),
+        planCreation: planCreationModel(
+          availabilityQuestion(
+            "How much training fits in a usual week?",
+            "fixed",
+            "Choose every weekday you can usually train.",
+          ),
+        ),
       });
       render(<Harness />);
 
@@ -2427,11 +2358,12 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "commitments-question",
-          prompt: "Any fixed commitments, other training, or time off to account for?",
-          placeholder: "Add only the scheduling details this Plan should account for",
-        }),
+        planCreation: planCreationModel(
+          commitmentsQuestion(
+            "Any fixed commitments, other training, or time off to account for?",
+            "Add only the scheduling details this Plan should account for",
+          ),
+        ),
       });
       render(<Harness />);
 
@@ -2456,19 +2388,7 @@ describe("chat surface", () => {
 
       setChat({
         planCreation: planCreationModel(
-          {
-            kind: "baseline-question",
-            prompt: "What best describes your recent training?",
-            options: [
-              { baseline: "regular", label: "Regular", description: "Consistent training." },
-              { baseline: "occasional", label: "Occasional", description: "Some training." },
-              {
-                baseline: "starting-again",
-                label: "Starting again",
-                description: "Returning to training.",
-              },
-            ],
-          },
+          baselineQuestion("What best describes your recent training?"),
           { version: 2 },
         ),
       });
@@ -2483,16 +2403,9 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "restriction-question",
-          prompt: "What Training Restriction should this Plan respect?",
-          options: [
-            { kind: "none", label: "None" },
-            { kind: "no-training", label: "No training" },
-            { kind: "no-hard-training", label: "No hard training" },
-            { kind: "max-duration", label: "Maximum Workout duration" },
-          ],
-        }),
+        planCreation: planCreationModel(
+          restrictionQuestion("What Training Restriction should this Plan respect?"),
+        ),
       });
       render(<Harness />);
 
@@ -2540,11 +2453,7 @@ describe("chat surface", () => {
     it("edits a summary, cancels to the unanswered Card, and restores focus", async () => {
       const user = userEvent.setup();
       const model = planCreationModel(
-        {
-          kind: "start-timing-question",
-          prompt: "When could this Plan start?",
-          earliestAllowed: "1998-10-01",
-        },
+        startTimingQuestion("When could this Plan start?", "1998-10-01"),
         {
           version: 4,
           answeredSummaries: [
@@ -2552,16 +2461,7 @@ describe("chat surface", () => {
               answerKey: "plan-length",
               title: "Plan length",
               detail: "12 weeks",
-              question: {
-                kind: "plan-length-question",
-                prompt: "How long should this Fitness Plan be?",
-                options: [
-                  { weeks: 4, label: "4 weeks" },
-                  { weeks: 8, label: "8 weeks" },
-                  { weeks: 12, label: "12 weeks" },
-                  { weeks: 16, label: "16 weeks" },
-                ],
-              },
+              question: planLengthQuestion("How long should this Fitness Plan be?"),
               answer: { kind: "plan-length", weeks: 12 },
             },
           ],
@@ -2596,6 +2496,55 @@ describe("chat surface", () => {
       expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     });
 
+    it("disables every summary Edit action while an answer editor is open", async () => {
+      const user = userEvent.setup();
+      const model = planCreationModel(
+        startTimingQuestion("When could this Plan start?", "1998-10-01"),
+        {
+          version: 4,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Build steady power",
+              question: goalQuestion("What are you preparing for?"),
+              answer: {
+                kind: "goal",
+                goal: { kind: "fitness", outcome: "Build steady power" },
+              },
+            },
+            {
+              answerKey: "plan-length",
+              title: "Plan length",
+              detail: "12 weeks",
+              question: planLengthQuestion("How long should this Fitness Plan be?"),
+              answer: { kind: "plan-length", weeks: 12 },
+            },
+          ],
+        },
+      );
+      vi.mocked(actions.editPlanCreation).mockImplementation((answerKey) => {
+        setChat({ planCreationEditingKey: answerKey, planCreationFocusRevision: 1 });
+      });
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+        sendDisabled: true,
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("list")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Edit Plan length" }));
+      expect(actions.editPlanCreation).toHaveBeenCalledOnce();
+      expect(actions.editPlanCreation).toHaveBeenCalledWith("plan-length");
+      const editActions = screen.getAllByRole("button", { name: /^Edit /u });
+      expect(editActions).toHaveLength(2);
+      for (const editAction of editActions) expect(editAction).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: "Edit Goal" }));
+      expect(actions.editPlanCreation).toHaveBeenCalledOnce();
+    });
+
     it("restores focus to Event not listed when backing out of an edited manual Event Goal", async () => {
       const user = userEvent.setup();
       const model = planCreationModel(null, {
@@ -2606,11 +2555,7 @@ describe("chat surface", () => {
             answerKey: "goal",
             title: "Goal",
             detail: "Highland Tour · 1998-10-18",
-            question: {
-              kind: "goal-question",
-              prompt: "What do you want this Plan to prepare you for?",
-              candidates: [],
-            },
+            question: goalQuestion("What do you want this Plan to prepare you for?"),
             answer: {
               kind: "goal",
               goal: { kind: "event-manual", name: "Highland Tour", date: "1998-10-18" },
@@ -2646,16 +2591,7 @@ describe("chat surface", () => {
             answerKey: "plan-length",
             title: "Plan length",
             detail: "12 weeks",
-            question: {
-              kind: "plan-length-question",
-              prompt: "How long should this Fitness Plan be?",
-              options: [
-                { weeks: 4, label: "4 weeks" },
-                { weeks: 8, label: "8 weeks" },
-                { weeks: 12, label: "12 weeks" },
-                { weeks: 16, label: "16 weeks" },
-              ],
-            },
+            question: planLengthQuestion("How long should this Fitness Plan be?"),
             answer: { kind: "plan-length", weeks: 12 },
           },
         ],
@@ -2687,14 +2623,7 @@ describe("chat surface", () => {
     it("edits from host-authored questions and structured current answers", async () => {
       const user = userEvent.setup();
       const model = planCreationModel(
-        {
-          kind: "schedule-mode-question",
-          prompt: "Should this Plan use a Fixed or Flexible Schedule?",
-          options: [
-            { mode: "fixed", label: "Fixed", description: "Use fixed days." },
-            { mode: "flexible", label: "Flexible", description: "Use a weekly pool." },
-          ],
-        },
+        scheduleModeQuestion("Should this Plan use a Fixed or Flexible Schedule?"),
         {
           version: 5,
           answeredSummaries: [
@@ -2702,11 +2631,7 @@ describe("chat surface", () => {
               answerKey: "goal",
               title: "Goal",
               detail: "Build Fitness by 1998-12-01",
-              question: {
-                kind: "goal-question",
-                prompt: "What do you want this Plan to prepare you for?",
-                candidates: [],
-              },
+              question: goalQuestion("What do you want this Plan to prepare you for?"),
               answer: {
                 kind: "goal",
                 goal: { kind: "fitness", outcome: "Build Fitness by 1998-12-01" },
@@ -2716,11 +2641,9 @@ describe("chat surface", () => {
               answerKey: "success",
               title: "Success",
               detail: "Ride steadily",
-              question: {
-                kind: "success-question",
-                prompt: "What would success mean for this Fitness Goal?",
-                input: { kind: "authored", placeholder: "Describe success" },
-              },
+              question: fitnessSuccessQuestion(
+                "What would success mean for this Fitness Goal?",
+              ),
               answer: {
                 kind: "success",
                 success: { kind: "authored", text: "Ride steadily" },
@@ -2730,11 +2653,7 @@ describe("chat surface", () => {
               answerKey: "start-timing",
               title: "Start timing",
               detail: "Earliest start 1998-10-10",
-              question: {
-                kind: "start-timing-question",
-                prompt: "When could this Plan start?",
-                earliestAllowed: "1998-10-01",
-              },
+              question: startTimingQuestion("When could this Plan start?", "1998-10-01"),
               answer: {
                 kind: "start-timing",
                 timing: { kind: "earliest", date: "1998-10-10" },
@@ -2780,16 +2699,9 @@ describe("chat surface", () => {
 
     it("pauses with Later or Escape and Continue restores the focused Card", async () => {
       const user = userEvent.setup();
-      const model = planCreationModel({
-        kind: "plan-length-question",
-        prompt: "How long should this Fitness Plan be?",
-        options: [
-          { weeks: 4, label: "4 weeks" },
-          { weeks: 8, label: "8 weeks" },
-          { weeks: 12, label: "12 weeks" },
-          { weeks: 16, label: "16 weeks" },
-        ],
-      });
+      const model = planCreationModel(
+        planLengthQuestion("How long should this Fitness Plan be?"),
+      );
       vi.mocked(actions.pausePlanCreation).mockImplementation(() => {
         setChat({ planCreationPaused: true, sendDisabled: false });
       });
@@ -2826,27 +2738,18 @@ describe("chat surface", () => {
     it.each([
       [
         "Goal",
-        {
-          kind: "goal-question",
-          prompt: "What do you want this Plan to prepare you for?",
-          candidates: [],
-        },
+        goalQuestion("What do you want this Plan to prepare you for?"),
       ],
       [
         "Success",
-        {
-          kind: "success-question",
-          prompt: "What would success mean for this Fitness Goal?",
-          input: { kind: "authored", placeholder: "Describe success" },
-        },
+        fitnessSuccessQuestion("What would success mean for this Fitness Goal?"),
       ],
       [
         "Commitments",
-        {
-          kind: "commitments-question",
-          prompt: "Any fixed commitments, other training, or time off to account for?",
-          placeholder: "Add scheduling details",
-        },
+        commitmentsQuestion(
+          "Any fixed commitments, other training, or time off to account for?",
+          "Add scheduling details",
+        ),
       ],
     ] as const)("returns from the %s editor on Escape without pausing", async (_name, question) => {
       const user = userEvent.setup();
@@ -2869,16 +2772,9 @@ describe("chat surface", () => {
 
     it("lets Escape close command suggestions before it pauses the Card", async () => {
       const user = userEvent.setup();
-      const model = planCreationModel({
-        kind: "plan-length-question",
-        prompt: "How long should this Fitness Plan be?",
-        options: [
-          { weeks: 4, label: "4 weeks" },
-          { weeks: 8, label: "8 weeks" },
-          { weeks: 12, label: "12 weeks" },
-          { weeks: 16, label: "16 weeks" },
-        ],
-      });
+      const model = planCreationModel(
+        planLengthQuestion("How long should this Fitness Plan be?"),
+      );
       setChat({ planCreationLoaded: true, planCreation: model, sendDisabled: true });
       render(<Harness />);
 
@@ -2894,11 +2790,9 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel({
-          kind: "goal-question",
-          prompt: "What do you want this Plan to prepare you for?",
-          candidates: [],
-        }),
+        planCreation: planCreationModel(
+          goalQuestion("What do you want this Plan to prepare you for?"),
+        ),
       });
       render(<Harness />);
       await user.click(screen.getByRole("button", { name: "Improve without an event" }));
@@ -2909,11 +2803,10 @@ describe("chat surface", () => {
 
       setChat({
         planCreation: planCreationModel(
-          {
-            kind: "commitments-question",
-            prompt: "Any fixed commitments, other training, or time off to account for?",
-            placeholder: "Add only the scheduling details this Plan should account for",
-          },
+          commitmentsQuestion(
+            "Any fixed commitments, other training, or time off to account for?",
+            "Add only the scheduling details this Plan should account for",
+          ),
           { version: 2 },
         ),
       });
@@ -2929,16 +2822,7 @@ describe("chat surface", () => {
             answerKey: "restriction",
             title: "Training Restriction",
             detail: "No training restrictions",
-            question: {
-              kind: "restriction-question",
-              prompt: "What Training Restriction should this Plan respect?",
-              options: [
-                { kind: "none", label: "None" },
-                { kind: "no-training", label: "No training" },
-                { kind: "no-hard-training", label: "No hard training" },
-                { kind: "max-duration", label: "Maximum Workout duration" },
-              ],
-            },
+            question: restrictionQuestion("What Training Restriction should this Plan respect?"),
             answer: { kind: "restriction", restriction: { kind: "none" } },
           },
         ],
@@ -2959,12 +2843,9 @@ describe("chat surface", () => {
       const actions = stubActions();
       useEnduragentStore.getState().bindChatActions(actions);
       render(<Harness />);
+      const successQuestion = fitnessSuccessQuestion("What would success mean?");
       const model = planCreationModel(
-        {
-          kind: "success-question",
-          prompt: "What would success mean?",
-          input: { kind: "authored", placeholder: "Describe success" },
-        },
+        successQuestion,
         {
           version: 2,
           answeredSummaries: [
@@ -2972,11 +2853,7 @@ describe("chat surface", () => {
               answerKey: "goal" as const,
               title: "Goal",
               detail: "Build steady power",
-              question: {
-                kind: "goal-question" as const,
-                prompt: "What are you preparing for?",
-                candidates: [],
-              },
+              question: goalQuestion("What are you preparing for?"),
               answer: {
                 kind: "goal" as const,
                 goal: { kind: "fitness" as const, outcome: "Build steady power" },
@@ -3014,16 +2891,7 @@ describe("chat surface", () => {
         success: { kind: "authored", text: "Ride four steady hours" },
       });
       const complete = planCreationModel(
-        {
-          kind: "plan-length-question",
-          prompt: "How long should this Fitness Plan be?",
-          options: [
-            { weeks: 4 as const, label: "4 weeks" },
-            { weeks: 8 as const, label: "8 weeks" },
-            { weeks: 12 as const, label: "12 weeks" },
-            { weeks: 16 as const, label: "16 weeks" },
-          ],
-        },
+        planLengthQuestion("How long should this Fitness Plan be?"),
         {
           version: 3,
           answeredSummaries: [
@@ -3032,7 +2900,7 @@ describe("chat surface", () => {
               answerKey: "success" as const,
               title: "Success",
               detail: "Ride four steady hours",
-              question: model.openQuestion,
+              question: successQuestion,
               answer: {
                 kind: "success" as const,
                 success: { kind: "authored" as const, text: "Ride four steady hours" },

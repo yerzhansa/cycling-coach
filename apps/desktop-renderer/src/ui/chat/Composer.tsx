@@ -243,7 +243,7 @@ export function Composer(props: {
           ref={textarea}
           data-parity="composer.textarea"
           defaultValue={props.draftMemory?.current ?? ""}
-          className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[calc(var(--inset)*0.75)] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
+          className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent pt-0.75 pb-1.5 text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
           rows={2}
           placeholder={
             status === "streaming"

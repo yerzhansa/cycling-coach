@@ -11,6 +11,7 @@ export function PlanCreationSummary(props: {
   const actions = useEnduragentStore((state) => state.chatActions);
   const paused = useEnduragentStore((state) => state.chat.planCreationPaused);
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
+  const editingKey = useEnduragentStore((state) => state.chat.planCreationEditingKey);
   const ready = props.model.readiness === "ready";
   const canContinue = paused && props.model.openQuestion !== null;
   const total =
@@ -20,7 +21,7 @@ export function PlanCreationSummary(props: {
   return (
     <section className="grid min-w-0 gap-inset" aria-label="Plan Creation progress">
       {props.model.answeredSummaries.length === 0 ? null : (
-        <ul className="m-0 grid list-none gap-2 p-0">
+        <ul className="m-0 grid list-none gap-2 p-0" role="list">
           {props.model.answeredSummaries.map((summary) => (
             <li
               key={summary.answerKey}
@@ -33,7 +34,7 @@ export function PlanCreationSummary(props: {
               </span>
               <div className="min-w-0">
                 <p
-                  className="mt-0 mr-0 mb-[calc(var(--inset)/2)] ml-0 text-xs font-semibold uppercase tracking-wide text-ink-2"
+                  className="m-0 mb-[calc(var(--inset)/2)] text-xs font-semibold uppercase tracking-wide text-ink-2"
                   data-parity="summary.eyebrow"
                 >
                   Answer recorded
@@ -45,7 +46,7 @@ export function PlanCreationSummary(props: {
                   {summary.detail}
                 </strong>
                 <p
-                  className="mt-[calc(var(--inset)/2)] mr-0 mb-0 ml-0 text-xs text-ink-2"
+                  className="m-0 mt-[calc(var(--inset)/2)] text-xs text-ink-2"
                   data-parity="summary.detail"
                 >
                   {summary.title} ·{" "}
@@ -59,7 +60,7 @@ export function PlanCreationSummary(props: {
                 className="gap-inset border-line bg-surface"
                 data-parity="summary.edit"
                 aria-label={`Edit ${summary.title}`}
-                disabled={actions === null || busy}
+                disabled={actions === null || busy || editingKey !== null}
                 onClick={() => actions?.editPlanCreation(summary.answerKey)}
               >
                 Edit

@@ -975,7 +975,7 @@ export function PlanCreationQuestionCard(
   }, [props.focusRevision, props.question.kind]);
   return (
     <Card
-      className="min-w-0 [gap:normal] overflow-hidden py-0 shadow-elev-2"
+      className="min-w-0 gap-0 overflow-hidden py-0 shadow-elev-2"
       data-parity="question.card"
       data-question={questionAnswerKey(props.question)}
       onKeyDown={(event) => {
@@ -986,7 +986,7 @@ export function PlanCreationQuestionCard(
     >
       <CardHeader className="gap-0 border-b border-line">
         <p
-          className="mt-0 mr-0 mb-[calc(var(--inset)/2)] ml-0 text-xs font-semibold leading-4 text-ink-2"
+          className="m-0 mb-[calc(var(--inset)/2)] text-xs font-semibold leading-4 text-ink-2"
           data-parity="question.eyebrow"
         >
           Plan creation · question {props.question.step.current} of {props.question.step.total}
