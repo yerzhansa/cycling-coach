@@ -3,4 +3,4 @@
 "@enduragent/desktop": patch
 ---
 
-User-facing: Training now uses a compact icon to import ride files. Ride review shows recorded analysis without the ride-export card.
+User-facing: Training now keeps ride import compact and ends after your recent rides. Ride review shows recorded analysis without the ride-export card.

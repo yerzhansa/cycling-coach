@@ -362,7 +362,7 @@ describe("training landing page", () => {
     expect(screen.getByRole("button", { name: "Import ride files" })).toBeInTheDocument();
     expect(
       [...document.querySelectorAll("[data-panel]")].map((node) => node.getAttribute("data-panel")),
-    ).toEqual(["weekly-summary", "recent-rides", "power-progress"]);
+    ).toEqual(["weekly-summary", "recent-rides"]);
     const summary = screen.getByRole("region", { name: "Weekly summary" });
     expect(within(summary).getByRole("heading", { name: "Weekly summary" })).toHaveClass("sr-only");
     expect(within(summary).getByText("2h 25m")).toBeInTheDocument();
@@ -448,9 +448,7 @@ describe("training landing page", () => {
       .find((element) => element.id !== "ride-import-status");
     expect(periodStatus).toHaveTextContent("Previous week. Some rides may be missing.");
     expect(periodStatus?.textContent?.match(/Some rides may be missing\./gu)).toHaveLength(1);
-    expect(
-      screen.getByText("Power progress needs rides with recorded power in both 28-day windows."),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Power progress" })).not.toBeInTheDocument();
   });
 
   it("keeps focus inside the period group after chevron navigation", async () => {
@@ -1336,77 +1334,27 @@ describe("ride review", () => {
 });
 
 describe("power progress", () => {
-  it("renders an accessible five-effort Power Progress comparison with secondary context", async () => {
-    const user = userEvent.setup();
-    setTraining(
-      ready(history(), {
-        trainingContext: { ...context(), performanceProgress: computedPowerProgress },
-      }),
-    );
+  it("keeps Power progress hidden for computed, stale, and unavailable data", () => {
     render(<TrainingView />);
 
-    const progress = screen.getByRole("region", { name: "Power progress" });
-    expect(
-      within(progress).getByText("Short efforts changed more favorably than long efforts."),
-    ).toBeInTheDocument();
-    expect(
-      within(progress).getByText("Jun 22, 1998–Jul 19, 1998 · compared with the prior 28 days"),
-    ).toBeInTheDocument();
-    expect(within(progress).getByText("Fresh")).toBeInTheDocument();
-    const powerTable = within(progress).getByRole("table", {
-      name: "Power curve for the current 28 days compared with the previous 28 days",
-    });
-    expect(within(powerTable).getAllByRole("row")).toHaveLength(6);
-    expect(within(powerTable).getByText("1120 W")).toBeInTheDocument();
-    expect(within(powerTable).getByLabelText("Increased, 6.7%")).toHaveTextContent("↑ +6.7%");
-    expect(within(powerTable).getByLabelText("Decreased, 2.5%")).toHaveTextContent("↓ -2.5%");
-    expect(within(powerTable).getAllByLabelText("Unavailable")).toHaveLength(3);
-    await user.click(within(progress).getByText("Heart-rate response · 4 efforts"));
-    expect(
-      within(progress).getByRole("table", {
-        name: "Heart-rate curve for the current 28 days compared with the previous 28 days",
-      }),
-    ).toBeVisible();
-    expect(within(progress).getByText("181 bpm")).toBeInTheDocument();
-    expect(
-      within(progress).getByText(
-        "42-day durability context · 83% curve coverage · indoor and outdoor rides",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("explains unavailable data and clearly labels a stale last-good comparison", () => {
-    setTraining(
-      ready(history(), {
-        trainingContext: {
-          ...context(),
-          performanceProgress: { kind: "unavailable", reason: "invalid-data" },
-        },
-      }),
-    );
-    render(<TrainingView />);
-    expect(
-      screen.getByText("Power progress data could not be verified. Sync again."),
-    ).toBeInTheDocument();
-
-    setTraining(
-      ready(history(), {
-        trainingContext: {
-          ...context(),
-          performanceProgress: {
-            kind: "stale",
-            lastGood: { ...computedPowerProgress, freshness: "stale" },
-            refreshFailure: { code: "timeout", failedAt: "1998-07-20T08:00:00.000Z" },
-          },
-        },
-      }),
-    );
-    const progress = screen.getByRole("region", { name: "Power progress" });
-    expect(within(progress).getByText(/latest refresh timed out/i)).toHaveTextContent(
-      "The latest refresh timed out. Showing the last complete comparison. Failed Jul 20, 1998, 8:00 AM.",
-    );
-    expect(within(progress).getByText("Stale")).toBeInTheDocument();
-    expect(within(progress).getByText("1120 W")).toBeInTheDocument();
+    for (const performanceProgress of [
+      computedPowerProgress,
+      {
+        kind: "stale",
+        lastGood: { ...computedPowerProgress, freshness: "stale" },
+        refreshFailure: { code: "timeout", failedAt: "1998-07-20T08:00:00.000Z" },
+      },
+      { kind: "unavailable", reason: "invalid-data" },
+    ] as const) {
+      setTraining(
+        ready(history(), {
+          trainingContext: { ...context(), performanceProgress },
+        }),
+      );
+      expect(screen.queryByRole("region", { name: "Power progress" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Power progress/i)).not.toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Recent rides" })).toBeInTheDocument();
+    }
   });
 });
 

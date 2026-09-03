@@ -140,7 +140,7 @@
     {
       "id": "training.view.panel-inventory",
       "surface": "training",
-      "expected": "Training renders Weekly summary, Recent rides, and Power progress in that order, with riding time, rides, distance, Load, a six-week trend, one scoped recent-ride callout, and non-idle import status.",
+      "expected": "Training renders Weekly summary and Recent rides in that order, with riding time, rides, distance, Load, a six-week trend, one scoped recent-ride callout, and non-idle import status.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-surface.test.tsx > training landing page > renders the week-first section order and ignores the rollback fields",
@@ -217,23 +217,16 @@
       ]
     },
     {
-      "id": "training.power-progress.comparison",
-      "surface": "power-progress",
-      "expected": "Power progress remains the third week-first section and compares five shipped effort durations across the current and prior 28 days with accessible direction labels, unavailable values, optional heart-rate response, freshness, and 42-day durability context.",
+      "id": "training.power-progress.hidden",
+      "surface": "training",
+      "expected": "Training hides Power progress for computed, stale, and unavailable data and preserves Recent rides.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/training-surface.test.tsx > power progress > renders an accessible five-effort Power Progress comparison with secondary context"
-    },
-    {
-      "id": "training.power-progress.recovery",
-      "surface": "power-progress",
-      "expected": "Unavailable Power progress explains why it cannot be shown, while a failed refresh labels and timestamps the failure and retains the last complete comparison as stale evidence.",
-      "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/training-surface.test.tsx > power progress > explains unavailable data and clearly labels a stale last-good comparison"
+      "test": "apps/desktop-renderer/tests/training-surface.test.tsx > power progress > keeps Power progress hidden for computed, stale, and unavailable data"
     },
     {
       "id": "training.wellness.trend",
       "surface": "wellness",
-      "expected": "Training omits the retired standalone Wellness trend and keeps the week-first section order limited to Weekly summary, Recent rides, and Power progress.",
+      "expected": "Training omits the retired standalone Wellness trend and keeps the week-first section order limited to Weekly summary and Recent rides.",
       "automation": "deterministic",
       "test": "apps/desktop-renderer/tests/training-surface.test.tsx > training landing page > renders the week-first section order and ignores the rollback fields"
     },

@@ -29,7 +29,6 @@ import {
 import { Page } from "../shared/Page";
 import { TRAINING_DEGRADED_COPY, TRAINING_HISTORY_COPY, trainingStatusCopy } from "./copy";
 import { overviewStyles as styles } from "./overviewStyles";
-import { PowerProgressContent } from "./PowerProgressPanel";
 import { RideDetailView, trainingRideDateTime, trainingRideKind } from "./RideReview";
 
 type Period = "anchor" | "previous";
@@ -385,19 +384,6 @@ function RecentRides(props: {
   );
 }
 
-function PowerProgressStatePanel(props: {
-  readonly panel: Parameters<typeof PowerProgressContent>[0]["panel"];
-}): ReactElement {
-  return (
-    <section className={styles.panel} data-panel="power-progress" aria-label="Power progress">
-      <h2 className={styles.panelTitle}>Power progress</h2>
-      <div className={styles.panelBody}>
-        <PowerProgressContent panel={props.panel} />
-      </div>
-    </section>
-  );
-}
-
 function PeriodNavigation(props: {
   readonly history: TrainingHistoryComputed;
   readonly period: Period;
@@ -705,7 +691,6 @@ export function TrainingView(): ReactElement {
       }
     >
       {historyContent}
-      <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
       <RideImportStatus />
     </Page>
   );

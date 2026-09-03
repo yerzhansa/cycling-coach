@@ -2224,7 +2224,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     `);
     expect(training).toEqual({
       current: "page",
-      order: ["weekly-summary", "recent-rides", "power-progress"],
+      order: ["weekly-summary", "recent-rides"],
       retiredPanelsAbsent: true,
       pageOverflow: false,
       documentOverflow: false,
@@ -2537,7 +2537,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       surfaceMinWidthZero: true,
       readableWrapping: true,
       trainingOpen: true,
-      panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
+      panelOrder: ["weekly-summary", "recent-rides"],
       retiredPanelsAbsent: true,
       chipResident: true,
       chipAccessibleLabel:
@@ -2783,7 +2783,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     `);
     expect(compact).toEqual({
       trainingOpen: true,
-      panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
+      panelOrder: ["weekly-summary", "recent-rides"],
       retiredPanelsAbsent: true,
       chipResident: true,
       chipReachable: true,
