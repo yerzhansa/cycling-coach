@@ -465,7 +465,8 @@ function RideImportAction(): ReactElement {
     <Button
       type="button"
       variant="outline"
-      size="icon"
+      size="icon-xs"
+      className={styles.periodButton}
       aria-label="Import ride files"
       title="Import ride files"
       disabled={actions === null || state.status === "running"}
@@ -480,9 +481,10 @@ function RideImportAction(): ReactElement {
 function RideImportStatus(): ReactElement {
   const state = useEnduragentStore((store) => store.rideImport);
   const suppressed = useEnduragentStore(rideImportStatusSuppressed);
-  const visible = state.status !== "idle" && !suppressed;
+  const active = state.status !== "idle" && !suppressed;
+  const visible = active && (state.status !== "running" || state.stage !== "choosing");
   const progress = visible && state.status === "running" ? state.progress : null;
-  const copy = visible ? rideImportStatusCopy(state) : "";
+  const copy = active ? rideImportStatusCopy(state) : "";
   return (
     <>
       {visible ? (
@@ -505,7 +507,7 @@ function RideImportStatus(): ReactElement {
       <p
         id="ride-import-status"
         className={`${styles.srOnly} ride-import-status`}
-        data-state={visible ? state.status : "idle"}
+        data-state={active ? state.status : "idle"}
         role="status"
         aria-live="polite"
         aria-atomic="true"

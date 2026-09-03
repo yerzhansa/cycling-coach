@@ -1558,6 +1558,9 @@ describe("training history states and import status", () => {
     expect(importButton).toBeEnabled();
     expect(importButton.textContent).toBe("");
     expect(importButton).toHaveAttribute("title", "Import ride files");
+    const previousWeek = within(screen.getByRole("group", { name: "Completed riding period" }))
+      .getByRole("button", { name: "Previous week" });
+    expect(importButton.className).toBe(previousWeek.className);
     await user.click(importButton);
     expect(choose).toHaveBeenCalledOnce();
     const status = document.querySelector("#ride-import-status");
@@ -1573,6 +1576,7 @@ describe("training history states and import status", () => {
       result: null,
     });
     expect(status).toHaveTextContent("Waiting for ride file selection…");
+    expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Import ride files" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Import ride files" })).toHaveAttribute(
       "aria-describedby",
@@ -1596,6 +1600,7 @@ describe("training history states and import status", () => {
     });
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveTextContent("Importing ride files…");
+    expect(screen.getByRole("region", { name: "Import ride files" })).toBeInTheDocument();
     expect(screen.getByText("2 of 4 files processed")).toBeInTheDocument();
 
     setRideImport({
