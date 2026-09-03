@@ -92,12 +92,14 @@ function rideCountCopy(value: number): string {
 }
 
 function weekRangeLabel(week: CompletedActivityWeek): string {
+  const year =
+    week.window.start.slice(0, 4) === week.window.end.slice(0, 4) ? undefined : "numeric";
   const startMonth = formatCivilDate(week.window.start, { month: "short" });
   const endMonth = formatCivilDate(week.window.end, { month: "short" });
-  const start = formatCivilDate(week.window.start, { day: "numeric", month: "short" });
+  const start = formatCivilDate(week.window.start, { day: "numeric", month: "short", year });
   const end = formatCivilDate(
     week.window.end,
-    startMonth === endMonth ? { day: "numeric" } : { day: "numeric", month: "short" },
+    startMonth === endMonth ? { day: "numeric", year } : { day: "numeric", month: "short", year },
   );
   return `${start}–${end}`;
 }
@@ -156,7 +158,9 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
         ))}
       </div>
       <table className={styles.srOnly}>
-        <caption>{TRAINING_HISTORY_COPY.trendTitle} data</caption>
+        <caption>
+          {TRAINING_HISTORY_COPY.trendLabel} {TRAINING_HISTORY_COPY.trendPeriod}
+        </caption>
         <thead>
           <tr>
             <th scope="col">Week</th>

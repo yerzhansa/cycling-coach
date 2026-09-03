@@ -380,6 +380,22 @@ describe("training landing page", () => {
     expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["en-US", "1998-07-06", "1998-07-12", "Jul 6–12"],
+    ["en-US", "1998-06-29", "1998-07-05", "Jun 29–Jul 5"],
+    ["en-US", "1997-12-29", "1998-01-04", "Dec 29, 1997–Jan 4, 1998"],
+    ["en-GB", "1998-07-06", "1998-07-12", "6 Jul–12"],
+    ["en-GB", "1998-06-29", "1998-07-05", "29 Jun–5 Jul"],
+    ["en-GB", "1997-12-29", "1998-01-04", "29 Dec 1997–4 Jan 1998"],
+  ] as const)("formats the %s week subtitle for %s through %s", (locale, start, end, label) => {
+    vi.restoreAllMocks();
+    pinDefaultLocale(locale);
+    setTraining(ready(history({ anchorWeek: week("anchor", { window: { start, end } }) })));
+    render(<TrainingView />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
   it("uses adjacent pressed period buttons and announces the selected period with one warning", async () => {
     const user = userEvent.setup();
     setTraining(
@@ -537,7 +553,7 @@ describe("training landing page", () => {
     expect(bars.item(3)).toHaveStyle({ height: "75%" });
     expect(figure.querySelector('[aria-hidden="true"]')).toHaveClass("max-[761px]:min-h-[76px]");
     const table = within(figure).getByRole("table", {
-      name: "Six complete weeks of riding time data",
+      name: "Weekly time 6 weeks",
     });
     expect(within(figure).getByText("6/15")).toBeInTheDocument();
     expect(within(table).getByText("Jun 15, 1998 to Jun 21, 1998")).toBeInTheDocument();
@@ -1618,11 +1634,16 @@ describe("training history states and import status", () => {
     expect(screen.queryByText("9,999")).not.toBeInTheDocument();
   });
 
-  it("reports the picker, progress, success and failure stages", () => {
+  it("reports the picker, progress, success and failure stages", async () => {
+    const user = userEvent.setup();
     const choose = vi.fn();
     useEnduragentStore.setState({ rideImportActions: { choose } });
     render(<TrainingView />);
     expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
+    const importButton = screen.getByRole("button", { name: "Import ride files" });
+    expect(importButton).toBeEnabled();
+    await user.click(importButton);
+    expect(choose).toHaveBeenCalledOnce();
     const status = document.querySelector("#ride-import-status");
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveClass("sr-only");
