@@ -15,7 +15,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { formatCivilDate } from "../../lib/date";
 import { rideImportStatusCopy } from "../../ride-import";
@@ -29,7 +29,6 @@ import {
 import { Page } from "../shared/Page";
 import { TRAINING_DEGRADED_COPY, TRAINING_HISTORY_COPY, trainingStatusCopy } from "./copy";
 import { overviewStyles as styles } from "./overviewStyles";
-import { PowerProgressContent } from "./PowerProgressPanel";
 import { RideDetailView, trainingRideDateTime, trainingRideKind } from "./RideReview";
 
 type Period = "anchor" | "previous";
@@ -385,19 +384,6 @@ function RecentRides(props: {
   );
 }
 
-function PowerProgressStatePanel(props: {
-  readonly panel: Parameters<typeof PowerProgressContent>[0]["panel"];
-}): ReactElement {
-  return (
-    <section className={styles.panel} data-panel="power-progress" aria-label="Power progress">
-      <h2 className={styles.panelTitle}>Power progress</h2>
-      <div className={styles.panelBody}>
-        <PowerProgressContent panel={props.panel} />
-      </div>
-    </section>
-  );
-}
-
 function PeriodNavigation(props: {
   readonly history: TrainingHistoryComputed;
   readonly period: Period;
@@ -479,11 +465,15 @@ function RideImportAction(): ReactElement {
     <Button
       type="button"
       variant="outline"
+      size="icon-xs"
+      className={styles.periodButton}
+      aria-label="Import ride files"
+      title="Import ride files"
       disabled={actions === null || state.status === "running"}
       aria-describedby={state.status === "idle" ? undefined : "ride-import-status"}
       onClick={() => actions?.choose()}
     >
-      Import ride files
+      <Upload aria-hidden="true" />
     </Button>
   );
 }
@@ -491,9 +481,10 @@ function RideImportAction(): ReactElement {
 function RideImportStatus(): ReactElement {
   const state = useEnduragentStore((store) => store.rideImport);
   const suppressed = useEnduragentStore(rideImportStatusSuppressed);
-  const visible = state.status !== "idle" && !suppressed;
+  const active = state.status !== "idle" && !suppressed;
+  const visible = active && (state.status !== "running" || state.stage !== "choosing");
   const progress = visible && state.status === "running" ? state.progress : null;
-  const copy = visible ? rideImportStatusCopy(state) : "";
+  const copy = active ? rideImportStatusCopy(state) : "";
   return (
     <>
       {visible ? (
@@ -516,7 +507,7 @@ function RideImportStatus(): ReactElement {
       <p
         id="ride-import-status"
         className={`${styles.srOnly} ride-import-status`}
-        data-state={visible ? state.status : "idle"}
+        data-state={active ? state.status : "idle"}
         role="status"
         aria-live="polite"
         aria-atomic="true"
@@ -702,7 +693,6 @@ export function TrainingView(): ReactElement {
       }
     >
       {historyContent}
-      <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
       <RideImportStatus />
     </Page>
   );

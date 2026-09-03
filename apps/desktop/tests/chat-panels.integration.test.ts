@@ -2224,7 +2224,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     `);
     expect(training).toEqual({
       current: "page",
-      order: ["weekly-summary", "recent-rides", "power-progress"],
+      order: ["weekly-summary", "recent-rides"],
       retiredPanelsAbsent: true,
       pageOverflow: false,
       documentOverflow: false,
@@ -2277,7 +2277,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const title = page.querySelector("h1");
       const titleFocused = document.activeElement === title;
       const analysisDisclosure = [...page.querySelectorAll("summary")].find(
-        (entry) => entry.textContent.includes("Recorded analysis and export"),
+        (entry) => entry.textContent.includes("Recorded analysis"),
       );
       analysisDisclosure.click();
       const analysisDeadline = Date.now() + 5000;
@@ -2537,7 +2537,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       surfaceMinWidthZero: true,
       readableWrapping: true,
       trainingOpen: true,
-      panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
+      panelOrder: ["weekly-summary", "recent-rides"],
       retiredPanelsAbsent: true,
       chipResident: true,
       chipAccessibleLabel:
@@ -2783,7 +2783,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     `);
     expect(compact).toEqual({
       trainingOpen: true,
-      panelOrder: ["weekly-summary", "recent-rides", "power-progress"],
+      panelOrder: ["weekly-summary", "recent-rides"],
       retiredPanelsAbsent: true,
       chipResident: true,
       chipReachable: true,
