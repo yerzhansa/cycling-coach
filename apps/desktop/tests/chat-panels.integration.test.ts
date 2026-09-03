@@ -2277,7 +2277,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const title = page.querySelector("h1");
       const titleFocused = document.activeElement === title;
       const analysisDisclosure = [...page.querySelectorAll("summary")].find(
-        (entry) => entry.textContent.includes("Recorded analysis and export"),
+        (entry) => entry.textContent.includes("Recorded analysis"),
       );
       analysisDisclosure.click();
       const analysisDeadline = Date.now() + 5000;

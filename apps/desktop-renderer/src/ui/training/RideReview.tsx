@@ -18,7 +18,6 @@ import { Page } from "../shared/Page";
 import { TRAINING_HISTORY_COPY, analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy";
 import { RideResponseReview } from "./RideResponseReview";
 import { rideStyles as styles } from "./rideStyles";
-import { ActivityExportControl } from "./TrainingExportControls";
 
 const RIDE_KIND: Readonly<Record<string, string>> = {
   road: "Road ride",
@@ -796,10 +795,6 @@ export function RideDetailView(props: {
       >
         <summary>{TRAINING_HISTORY_COPY.disclosure}</summary>
         <div className={styles.recordedDisclosureBody}>
-          <ActivityExportControl
-            canonicalActivityId={props.ride.id}
-            localDate={props.ride.localDate}
-          />
           <AerobicDriftPanel
             rideId={props.ride.id}
             analysis={props.analysis}

@@ -81,7 +81,7 @@ export const TRAINING_HISTORY_COPY = {
   review: "Ride review",
   back: "Back to training",
   keyStats: "Key stats",
-  disclosure: "Recorded analysis and export",
+  disclosure: "Recorded analysis",
 } as const;
 
 export function analysisUnavailableCopy(reason: AnalysisUnavailableReason): string {

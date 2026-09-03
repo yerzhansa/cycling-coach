@@ -250,11 +250,10 @@
     {
       "id": "training.export.activity-formats",
       "surface": "training-export",
-      "expected": "Inline Ride review reveals Export ride only inside Recorded analysis and export, offers FIT and GPX, sends the selected canonical ride without rendering its identifier, reports a saved export, and lets the trusted main process add the destination through the native save dialog.",
+      "expected": "Inline Ride review keeps ride-export controls hidden when Recorded analysis opens. The retained export contract sends a closed ride request, reports a saved export, and lets the trusted main process add the destination through the native save dialog.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > shows recorded facts in order, caps key metrics at four, and lazy-starts the disclosure",
-        "apps/desktop-renderer/tests/training-surface.test.tsx > ride review > offers FIT and GPX and exports a ride without rendering its canonical ID",
         "apps/desktop-renderer/tests/training-export.test.ts > sends a closed ride request and publishes a saved result",
         "apps/desktop/tests/training-export-ipc.test.ts > uses the native save dialog and adds the destination only in the trusted main process"
       ]

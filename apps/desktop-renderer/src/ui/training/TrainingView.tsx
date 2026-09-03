@@ -15,7 +15,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileInput } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { formatCivilDate } from "../../lib/date";
 import { rideImportStatusCopy } from "../../ride-import";
@@ -479,11 +479,14 @@ function RideImportAction(): ReactElement {
     <Button
       type="button"
       variant="outline"
+      size="icon"
+      aria-label="Import ride files"
+      title="Import ride files"
       disabled={actions === null || state.status === "running"}
       aria-describedby={state.status === "idle" ? undefined : "ride-import-status"}
       onClick={() => actions?.choose()}
     >
-      Import ride files
+      <FileInput aria-hidden="true" />
     </Button>
   );
 }

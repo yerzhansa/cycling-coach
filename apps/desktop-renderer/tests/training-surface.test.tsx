@@ -312,7 +312,7 @@ async function openFirstRide(user: ReturnType<typeof userEvent.setup>): Promise<
 
 async function openFirstRideAnalysis(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await openFirstRide(user);
-  await user.click(screen.getByText("Recorded analysis and export"));
+  await user.click(screen.getByText("Recorded analysis"));
 }
 
 beforeEach(() => {
@@ -829,53 +829,19 @@ describe("ride review", () => {
     expect(document.body).not.toHaveTextContent(FIRST_ID);
     expect(within(keyStats).queryByText("Energy")).not.toBeInTheDocument();
 
-    const disclosure = screen.getByText("Recorded analysis and export").closest("details");
+    const disclosure = screen.getByText("Recorded analysis").closest("details");
     expect(disclosure).not.toHaveAttribute("open");
     expect(start).not.toHaveBeenCalled();
 
-    await user.click(screen.getByText("Recorded analysis and export"));
+    await user.click(screen.getByText("Recorded analysis"));
     expect(disclosure).toHaveAttribute("open");
     expect(start).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByText("Recorded analysis and export"));
-    await user.click(screen.getByText("Recorded analysis and export"));
+    await user.click(screen.getByText("Recorded analysis"));
+    await user.click(screen.getByText("Recorded analysis"));
     expect(start).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("region", { name: "Export ride" })).toBeInTheDocument();
-  });
-
-  it("offers FIT and GPX and exports a ride without rendering its canonical ID", async () => {
-    const user = userEvent.setup();
-    const exportActivity = vi.fn(async () => {});
-    const exportWorkoutArchive = vi.fn(async () => {});
-    useEnduragentStore.setState({
-      trainingExportActions: { exportActivity, exportWorkoutArchive },
-    });
-    render(<TrainingView />);
-
-    await openFirstRideAnalysis(user);
-
-    const panel = screen.getByRole("region", { name: "Export ride" });
-    const formatLabel = within(panel).getByText("File format");
-    expect(formatLabel).toHaveClass("font-medium");
-    await user.click(within(panel).getByRole("combobox", { name: "File format" }));
-    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
-      "FIT",
-      "GPX",
-    ]);
-    await user.click(screen.getByRole("option", { name: "GPX" }));
-    await user.click(within(panel).getByRole("button", { name: "Export ride" }));
-    expect(exportActivity).toHaveBeenCalledWith({
-      canonicalActivityId: FIRST_ID,
-      localDate: "1998-07-09",
-      format: "gpx",
-    });
-    expect(document.body).not.toHaveTextContent(FIRST_ID);
-
-    act(() => {
-      useEnduragentStore.setState({
-        trainingExport: { status: "saved", target: "activity", byteLength: 4_096 },
-      });
-    });
-    expect(within(panel).getByRole("status")).toHaveTextContent("Export saved locally.");
+    expect(screen.queryByRole("region", { name: "Export ride" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export ride" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "File format" })).not.toBeInTheDocument();
   });
 
   it("uses the prototype label weight for workout archive export", () => {
@@ -1229,7 +1195,7 @@ describe("ride review", () => {
         name: "Open ride review: River tempo, Jul 9, 1998 · 10:00 PM",
       }),
     );
-    await user.click(screen.getByText("Recorded analysis and export"));
+    await user.click(screen.getByText("Recorded analysis"));
 
     expect(screen.getByRole("heading", { level: 2, name: "River tempo" })).toBeInTheDocument();
     expect(screen.getAllByText(/could not be (analyzed|loaded)/u).length).toBeGreaterThan(1);
@@ -1642,6 +1608,8 @@ describe("training history states and import status", () => {
     expect(screen.queryByRole("region", { name: "Import ride files" })).not.toBeInTheDocument();
     const importButton = screen.getByRole("button", { name: "Import ride files" });
     expect(importButton).toBeEnabled();
+    expect(importButton.textContent).toBe("");
+    expect(importButton).toHaveAttribute("title", "Import ride files");
     await user.click(importButton);
     expect(choose).toHaveBeenCalledOnce();
     const status = document.querySelector("#ride-import-status");
