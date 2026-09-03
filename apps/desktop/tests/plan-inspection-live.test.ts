@@ -117,16 +117,38 @@ describe("Plan inspection live fixture", () => {
     if (noPowerCallout?.kind !== "longest-ride-28d") {
       throw new TypeError("expected longest ride callout");
     }
-    const longestDuration = Math.max(
-      ...noPower.recentRides.items
-        .filter(
-          (ride) =>
-            ride.localDate >= noPowerCallout.window.start &&
-            ride.localDate <= noPowerCallout.window.end,
-        )
-        .map((ride) => ride.movingSeconds ?? 0),
-    );
-    expect(noPowerCallout.durationSeconds).toBe(longestDuration);
+    const noPowerRideLists = [
+      {
+        name: "recent rides",
+        items: noPower.recentRides.items.map((ride) => ({
+          id: ride.id,
+          localDate: ride.localDate,
+          ridingSeconds: ride.movingSeconds ?? ride.elapsedSeconds,
+        })),
+      },
+      {
+        name: "Training history",
+        items: [
+          ...noPower.trainingHistory.anchorWeek.rides.items,
+          ...(noPower.trainingHistory.previousWeek?.rides.items ?? []),
+        ],
+      },
+    ];
+    for (const rideList of noPowerRideLists) {
+      const comparisonRides = rideList.items.filter(
+        (ride) =>
+          ride.localDate >= noPowerCallout.window.start &&
+          ride.localDate <= noPowerCallout.window.end,
+      );
+      const longestDuration = Math.max(...comparisonRides.map((ride) => ride.ridingSeconds ?? 0));
+      expect(noPowerCallout.durationSeconds, rideList.name).toBe(longestDuration);
+      expect(
+        comparisonRides
+          .filter((ride) => ride.ridingSeconds === longestDuration)
+          .map((ride) => ride.id),
+        rideList.name,
+      ).toEqual([noPowerCallout.rideId]);
+    }
 
     const limited = TRAINING_LIMITED_ATHLETE_STATE.trainingContext?.trainingHistory;
     expect(limited?.kind).toBe("computed");
@@ -182,10 +204,6 @@ describe("Plan inspection live fixture", () => {
       "Park tempo",
       "Country endurance",
     ]);
-    expect(incomplete.anchorWeek.trend).toEqual({
-      kind: "unavailable",
-      reason: "incomplete-source",
-    });
     expect(incomplete.anchorWeek.callout).toBeNull();
     expect(incomplete.previousWeek?.coverage).toEqual({ kind: "complete" });
     expect(incomplete.previousWeek?.totals).toEqual({
@@ -209,6 +227,66 @@ describe("Plan inspection live fixture", () => {
     expect(stale.lastGood.previousWeek).toBeNull();
   });
 
+  it("counts the no-power callout population from its comparison weeks", () => {
+    const history = TRAINING_NO_POWER_ATHLETE_STATE.trainingContext?.trainingHistory;
+    if (history?.kind !== "computed") throw new TypeError("expected history");
+    const { anchorWeek } = history;
+    const { callout, trend } = anchorWeek;
+    if (callout?.kind !== "longest-ride-28d") throw new TypeError("expected longest ride callout");
+    if (trend.kind !== "computed") throw new TypeError("expected computed trend");
+    const comparisonWeeks = [
+      ...trend.buckets,
+      { window: anchorWeek.window, rideCount: anchorWeek.rides.items.length },
+    ].filter(
+      (week) => week.window.start >= callout.window.start && week.window.end <= callout.window.end,
+    );
+
+    expect(comparisonWeeks).toHaveLength(4);
+    expect(comparisonWeeks[0]?.window.start).toBe(callout.window.start);
+    expect(comparisonWeeks.at(-1)?.window.end).toBe(callout.window.end);
+    expect(comparisonWeeks.map((week) => week.rideCount)).toEqual([4, 3, 2, 4]);
+    expect(callout.comparisonRideCount).toBe(13);
+  });
+
+  it("keeps the incomplete fixture's proven closed weeks as zero trend buckets", () => {
+    const context = TRAINING_INCOMPLETE_ATHLETE_STATE.trainingContext;
+    if (context === undefined) throw new TypeError("expected Training context");
+    const history = context.trainingHistory;
+    if (history.kind !== "computed") throw new TypeError("expected history");
+    const { coverage, anchorWeek, previousWeek } = history;
+    if (coverage.kind !== "incomplete") throw new TypeError("expected incomplete coverage");
+    if (coverage.provenStart === null || coverage.provenThrough === null) {
+      throw new TypeError("expected proven coverage");
+    }
+    if (context.recentRides.kind !== "computed") throw new TypeError("expected recent rides");
+    expect(anchorWeek.trend.kind).toBe("computed");
+    if (anchorWeek.trend.kind !== "computed") throw new TypeError("expected computed trend");
+    expect(previousWeek?.trend).toEqual(anchorWeek.trend);
+    expect(anchorWeek.trend.buckets.map((bucket) => bucket.window)).toEqual([
+      { start: "1998-07-13", end: "1998-07-19" },
+      { start: "1998-07-20", end: "1998-07-26" },
+      { start: "1998-07-27", end: "1998-08-02" },
+      { start: "1998-08-03", end: "1998-08-09" },
+      { start: "1998-08-10", end: "1998-08-16" },
+      { start: "1998-08-17", end: "1998-08-23" },
+    ]);
+    const rides = [...anchorWeek.rides.items, ...(previousWeek?.rides.items ?? [])];
+    for (const bucket of anchorWeek.trend.buckets) {
+      expect(bucket.window.start >= coverage.provenStart).toBe(true);
+      expect(bucket.window.end <= coverage.provenThrough).toBe(true);
+      expect(bucket.window.end < anchorWeek.window.start).toBe(true);
+      expect(bucket.rideCount).toBe(0);
+      expect(bucket.ridingSeconds).toBe(0);
+      for (const rideList of [rides, context.recentRides.items]) {
+        expect(
+          rideList.filter(
+            (ride) => ride.localDate >= bucket.window.start && ride.localDate <= bucket.window.end,
+          ),
+        ).toHaveLength(0);
+      }
+    }
+  });
+
   it("keeps Training fixture ride IDs distinct across data states", () => {
     const states = [
       TRAINING_CURRENT_ATHLETE_STATE,
@@ -217,13 +295,32 @@ describe("Plan inspection live fixture", () => {
       TRAINING_INCOMPLETE_ATHLETE_STATE,
       TRAINING_STALE_ATHLETE_STATE,
     ];
-    const rideIds = states.flatMap((state) =>
-      state.trainingContext?.recentRides.kind === "computed"
-        ? state.trainingContext.recentRides.items.map((ride) => ride.id)
-        : [],
-    );
+    const rideLists = [
+      {
+        name: "recent rides",
+        ids: states.flatMap((state) =>
+          state.trainingContext?.recentRides.kind === "computed"
+            ? state.trainingContext.recentRides.items.map((ride) => ride.id)
+            : [],
+        ),
+      },
+      {
+        name: "Training history",
+        ids: states.flatMap((state) => {
+          const panel = state.trainingContext?.trainingHistory;
+          const history =
+            panel?.kind === "computed" ? panel : panel?.kind === "stale" ? panel.lastGood : null;
+          return [
+            ...(history?.anchorWeek.rides.items ?? []),
+            ...(history?.previousWeek?.rides.items ?? []),
+          ].map((ride) => ride.id);
+        }),
+      },
+    ];
 
-    expect(new Set(rideIds).size).toBe(rideIds.length);
+    for (const rideList of rideLists) {
+      expect(new Set(rideList.ids).size, rideList.name).toBe(rideList.ids.length);
+    }
   });
 
   it("uses privacy-safe ordinary Main Chat turns", async () => {
