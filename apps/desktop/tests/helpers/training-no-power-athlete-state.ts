@@ -114,6 +114,41 @@ const previousRides = [
   },
 ];
 
+const comparisonWindow = { start: "1998-08-03", end: "1998-08-30" };
+
+const trendBuckets = [
+  {
+    window: { start: "1998-07-13", end: "1998-07-19" },
+    rideCount: 3,
+    ridingSeconds: 12_480,
+  },
+  {
+    window: { start: "1998-07-20", end: "1998-07-26" },
+    rideCount: 3,
+    ridingSeconds: 11_400,
+  },
+  {
+    window: { start: "1998-07-27", end: "1998-08-02" },
+    rideCount: 3,
+    ridingSeconds: 14_100,
+  },
+  {
+    window: { start: "1998-08-03", end: "1998-08-09" },
+    rideCount: 4,
+    ridingSeconds: 16_800,
+  },
+  {
+    window: { start: "1998-08-10", end: "1998-08-16" },
+    rideCount: 3,
+    ridingSeconds: 14_880,
+  },
+  {
+    window: { start: "1998-08-17", end: "1998-08-23" },
+    rideCount: 2,
+    ridingSeconds: 9_660,
+  },
+];
+
 export const TRAINING_NO_POWER_ATHLETE_STATE = createInspectionAthleteState(
   {
     ...currentTrainingContext,
@@ -162,45 +197,25 @@ export const TRAINING_NO_POWER_ATHLETE_STATE = createInspectionAthleteState(
         },
         trend: {
           kind: "computed",
-          buckets: [
-            {
-              window: { start: "1998-07-13", end: "1998-07-19" },
-              rideCount: 3,
-              ridingSeconds: 12_480,
-            },
-            {
-              window: { start: "1998-07-20", end: "1998-07-26" },
-              rideCount: 3,
-              ridingSeconds: 11_400,
-            },
-            {
-              window: { start: "1998-07-27", end: "1998-08-02" },
-              rideCount: 3,
-              ridingSeconds: 14_100,
-            },
-            {
-              window: { start: "1998-08-03", end: "1998-08-09" },
-              rideCount: 4,
-              ridingSeconds: 16_800,
-            },
-            {
-              window: { start: "1998-08-10", end: "1998-08-16" },
-              rideCount: 3,
-              ridingSeconds: 14_880,
-            },
-            {
-              window: { start: "1998-08-17", end: "1998-08-23" },
-              rideCount: 2,
-              ridingSeconds: 9_660,
-            },
-          ],
+          buckets: trendBuckets,
         },
         callout: {
           kind: "longest-ride-28d",
           rideId: rides[0].id,
           durationSeconds: rides[0].ridingSeconds,
-          window: { start: "1998-08-03", end: "1998-08-30" },
-          comparisonRideCount: 10,
+          window: comparisonWindow,
+          comparisonRideCount:
+            rides.filter(
+              (ride) =>
+                ride.localDate >= comparisonWindow.start && ride.localDate <= comparisonWindow.end,
+            ).length +
+            trendBuckets
+              .filter(
+                (bucket) =>
+                  bucket.window.start >= comparisonWindow.start &&
+                  bucket.window.end <= comparisonWindow.end,
+              )
+              .reduce((sum, bucket) => sum + bucket.rideCount, 0),
         },
       },
       previousWeek: {
@@ -227,31 +242,7 @@ export const TRAINING_NO_POWER_ATHLETE_STATE = createInspectionAthleteState(
               rideCount: 3,
               ridingSeconds: 14_760,
             },
-            {
-              window: { start: "1998-07-13", end: "1998-07-19" },
-              rideCount: 3,
-              ridingSeconds: 12_480,
-            },
-            {
-              window: { start: "1998-07-20", end: "1998-07-26" },
-              rideCount: 3,
-              ridingSeconds: 11_400,
-            },
-            {
-              window: { start: "1998-07-27", end: "1998-08-02" },
-              rideCount: 3,
-              ridingSeconds: 14_100,
-            },
-            {
-              window: { start: "1998-08-03", end: "1998-08-09" },
-              rideCount: 4,
-              ridingSeconds: 16_800,
-            },
-            {
-              window: { start: "1998-08-10", end: "1998-08-16" },
-              rideCount: 3,
-              ridingSeconds: 14_880,
-            },
+            ...trendBuckets.slice(0, -1),
           ],
         },
         callout: null,

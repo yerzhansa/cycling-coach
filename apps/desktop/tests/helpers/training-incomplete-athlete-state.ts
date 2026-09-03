@@ -1,3 +1,4 @@
+import type { RidingTimeTrend } from "@enduragent/coach-contract";
 import { createInspectionAthleteState } from "./inspection-athlete-states.js";
 import { TRAINING_CURRENT_ATHLETE_STATE } from "./training-current-athlete-state.js";
 
@@ -43,6 +44,27 @@ const recordedRides = [
     energyKilojoules: 1_137,
   },
 ];
+
+const trend = {
+  kind: "computed",
+  buckets: [
+    { start: "1998-07-13", end: "1998-07-19" },
+    { start: "1998-07-20", end: "1998-07-26" },
+    { start: "1998-07-27", end: "1998-08-02" },
+    { start: "1998-08-03", end: "1998-08-09" },
+    { start: "1998-08-10", end: "1998-08-16" },
+    { start: "1998-08-17", end: "1998-08-23" },
+  ].map((window) => {
+    const rides = recordedRides.filter(
+      (ride) => ride.localDate >= window.start && ride.localDate <= window.end,
+    );
+    return {
+      window,
+      rideCount: rides.length,
+      ridingSeconds: rides.reduce((sum, ride) => sum + ride.ridingSeconds, 0),
+    };
+  }),
+} satisfies RidingTimeTrend;
 
 export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
   {
@@ -96,7 +118,7 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
           items: recordedRides,
           truncated: true,
         },
-        trend: { kind: "unavailable", reason: "incomplete-source" },
+        trend,
         callout: null,
       },
       previousWeek: {
@@ -115,7 +137,7 @@ export const TRAINING_INCOMPLETE_ATHLETE_STATE = createInspectionAthleteState(
           items: [],
           truncated: false,
         },
-        trend: { kind: "unavailable", reason: "incomplete-source" },
+        trend,
         callout: null,
       },
     },
