@@ -671,7 +671,23 @@ export const PlanCreationPreviewRpcResultSchema = z.discriminatedUnion("status",
 ]);
 export type PlanCreationPreviewRpcResult = z.infer<typeof PlanCreationPreviewRpcResultSchema>;
 
+export const PlanCreationActivateRpcParamsSchema = PlanCreationDiscardRpcParamsSchema;
+export type PlanCreationActivateRpcParams = z.infer<typeof PlanCreationActivateRpcParamsSchema>;
+
+export const PlanCreationActivateRpcResultSchema = z
+  .object({
+    creationId: PlanCreationUlidSchema,
+    planId: PlanCreationUlidSchema,
+    closedPlanId: PlanCreationUlidSchema.nullable(),
+    activatedAt: PlanCreationCivilDateSchema,
+  })
+  .strict();
+export type PlanCreationActivateRpcResult = z.infer<typeof PlanCreationActivateRpcResultSchema>;
+
 export interface PlanCreationOperations {
+  "plan_creation.activate"(
+    request: PlanCreationActivateRpcParams,
+  ): Promise<PlanCreationActivateRpcResult>;
   "plan_creation.preview"(
     request: PlanCreationPreviewRpcParams,
   ): Promise<PlanCreationPreviewRpcResult>;

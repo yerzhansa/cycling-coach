@@ -140,6 +140,8 @@ import {
   type PlanningRequestOperations,
 } from "./planning-request.js";
 import {
+  PlanCreationActivateRpcParamsSchema,
+  PlanCreationActivateRpcResultSchema,
   PlanCreationAnswerRpcParamsSchema,
   PlanCreationAnswerRpcResultSchema,
   PlanCreationPreviewRpcParamsSchema,
@@ -314,6 +316,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "plan_creation.answer",
   "plan_creation.preview",
   "plan_creation.discard",
+  "plan_creation.activate",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -1916,6 +1919,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: PlanCreationDiscardRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("plan_creation.activate"),
+      params: PlanCreationActivateRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -2458,6 +2469,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "plan_creation.discard",
     requestSchema: PlanCreationDiscardRpcParamsSchema,
     responseSchema: PlanCreationDiscardRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan_creation.activate": {
+    wireName: "plan_creation.activate",
+    requestSchema: PlanCreationActivateRpcParamsSchema,
+    responseSchema: PlanCreationActivateRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;

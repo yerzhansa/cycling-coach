@@ -20,4 +20,7 @@ export const planCreationOperationStubs = {
     reason: "no-unfinished-creation",
     planCreation: null,
   }),
+  "plan_creation.activate": async () => {
+    throw new Error("No unfinished creation");
+  },
 } satisfies PlanCreationOperations;

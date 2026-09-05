@@ -1464,6 +1464,12 @@ describe("coach request and event projection", () => {
         planCreation: null,
       }),
       "plan_creation.discard": async () => ({ status: "discarded" }),
+      "plan_creation.activate": async () => ({
+        creationId: "01J00000000000000000000000",
+        planId: "01J00000000000000000000001",
+        closedPlanId: null,
+        activatedAt: "1998-09-07",
+      }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));

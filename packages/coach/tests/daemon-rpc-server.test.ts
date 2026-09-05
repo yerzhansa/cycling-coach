@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
+import { PlanCreationStoreError } from "@enduragent/kernel/planning";
 import {
   WindowsPrivatePathPolicyError,
   type CreateTelegramChannelInput,
@@ -2215,6 +2216,54 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it.each([
+    ["not-ready", "Build a current complete Draft and resolve pending answers before activation."],
+    ["version-conflict", "version-conflict"],
+    ["command-conflict", "command-conflict"],
+  ] as const)(
+    "preserves the safe activation %s rejection for the renderer",
+    async (code, message) => {
+      const failure = new PlanCreationStoreError(code);
+      failure.message = "Private unexpected error text";
+      const rpc = createCoachRpcServer({
+        engine: engine(),
+        operations: {
+          ...operations,
+          "plan_creation.activate": async () => {
+            throw failure;
+          },
+        },
+        token: "x".repeat(43),
+        owner: "app-supervised",
+      });
+      const renderer = await openSocket(rpc);
+      renderer.ws.send(
+        JSON.stringify(
+          createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+        ),
+      );
+      await renderer.frames.next();
+      renderer.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "activate",
+          method: "plan_creation.activate",
+          params: {
+            commandId: "activate",
+            creationId: "01J00000000000000000000000",
+            expectedVersion: 2,
+          },
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await renderer.frames.next())).toEqual({
+        jsonrpc: "2.0",
+        id: "activate",
+        error: { code: -32000, message, data: { code } },
+      });
+      await renderer.close();
+    },
+  );
+
   it("dispatches strict Plan Creation operations for the renderer", async () => {
     const token = "x".repeat(43);
     const creationId = "01J00000000000000000000000";
@@ -2338,6 +2387,15 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const discardPlanCreation = vi.fn<PlanCreationOperations["plan_creation.discard"]>(
       async () => ({ status: "discarded" }),
     );
+    const activationResult = {
+      creationId,
+      planId: "01J00000000000000000000001",
+      closedPlanId: null,
+      activatedAt: "1998-09-07",
+    };
+    const activatePlanCreation = vi.fn<PlanCreationOperations["plan_creation.activate"]>(
+      async () => activationResult,
+    );
     const rpc = createCoachRpcServer({
       engine: engine(),
       operations: {
@@ -2346,6 +2404,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         "plan_creation.answer": answerPlanCreation,
         "plan_creation.preview": previewPlanCreation,
         "plan_creation.discard": discardPlanCreation,
+        "plan_creation.activate": activatePlanCreation,
       },
       token,
       owner: "app-supervised",
@@ -2366,6 +2425,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     };
     const previewParams = { commandId: "preview-1", creationId, expectedVersion: 2 };
     const discardParams = { commandId: "discard-1", creationId, expectedVersion: 2 };
+    const activateParams = { commandId: "activate-1", creationId, expectedVersion: 2 };
     for (const { result, ...request } of [
       {
         id: "start",
@@ -2391,6 +2451,12 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         params: discardParams,
         result: { status: "discarded" },
       },
+      {
+        id: "activate",
+        method: "plan_creation.activate",
+        params: activateParams,
+        result: activationResult,
+      },
     ]) {
       renderer.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
       expect(parseCoachRpcEnvelope(await renderer.frames.next())).toEqual({
@@ -2403,6 +2469,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(answerPlanCreation).toHaveBeenCalledWith(answerParams);
     expect(previewPlanCreation).toHaveBeenCalledWith(previewParams);
     expect(discardPlanCreation).toHaveBeenCalledWith(discardParams);
+    expect(activatePlanCreation).toHaveBeenCalledWith(activateParams);
 
     for (const request of [
       {
@@ -2425,6 +2492,11 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         method: "plan_creation.discard",
         params: { ...discardParams, extra: true },
       },
+      {
+        id: "invalid-activate",
+        method: "plan_creation.activate",
+        params: { ...activateParams, extra: true },
+      },
     ]) {
       renderer.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
       expect(parseCoachRpcEnvelope(await renderer.frames.next())).toMatchObject({
@@ -2436,6 +2508,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(answerPlanCreation).toHaveBeenCalledOnce();
     expect(previewPlanCreation).toHaveBeenCalledOnce();
     expect(discardPlanCreation).toHaveBeenCalledOnce();
+    expect(activatePlanCreation).toHaveBeenCalledOnce();
     await renderer.close();
   });
 

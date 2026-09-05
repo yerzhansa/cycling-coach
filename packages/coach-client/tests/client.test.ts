@@ -250,6 +250,15 @@ const rpcDeadlineCases = [
     },
     30_000,
   ],
+  [
+    "plan_creation.activate",
+    {
+      commandId: "plan-activate",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+    },
+    30_000,
+  ],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -1214,6 +1223,12 @@ describe("RPC receive and observers", () => {
           planCreation: null,
         },
         "plan_creation.discard": { status: "discarded" },
+        "plan_creation.activate": {
+          creationId: "01J00000000000000000000000",
+          planId: "01J00000000000000000000001",
+          closedPlanId: null,
+          activatedAt: "1998-09-07",
+        },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({

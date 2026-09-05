@@ -579,6 +579,11 @@ export async function launchDesktopFixture(input: {
         ReturnType<PlanCreationOperations["plan_creation.discard"]>
       >;
     },
+    async "plan_creation.activate"(request) {
+      return finalFrame(await invoke("plan_creation.activate", request)) as Awaited<
+        ReturnType<PlanCreationOperations["plan_creation.activate"]>
+      >;
+    },
     async getPlanState(request) {
       return finalFrame(await invoke("getPlanState", request)) as Awaited<
         ReturnType<NonNullable<PlanningOperations["getPlanState"]>>

@@ -47,6 +47,7 @@ import {
   type SetDailySpendCapRpcParams,
   type SpendSummary,
 } from "@enduragent/coach-contract";
+import { PlanCreationStoreError } from "@enduragent/kernel/planning";
 import { unavailableChatAttachmentAdmission } from "../attachment-operations.js";
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
@@ -551,6 +552,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "plan_creation.answer",
   "plan_creation.preview",
   "plan_creation.discard",
+  "plan_creation.activate",
 ]);
 
 const PLAN_CHAT_RENDERER_METHODS = new Set<CoachRpcMethodName>([
@@ -1867,6 +1869,39 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 ),
               );
             } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan_creation.activate":
+            try {
+              result = await input.operations["plan_creation.activate"](
+                COACH_RPC_METHOD_REGISTRY["plan_creation.activate"].requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              if (
+                error instanceof PlanCreationStoreError &&
+                (error.code === "not-ready" ||
+                  error.code === "version-conflict" ||
+                  error.code === "command-conflict")
+              ) {
+                await enqueueSerialized(
+                  state,
+                  serializeCoachRpcEnvelope(
+                    JsonRpcErrorResponseEnvelopeSchema.parse({
+                      jsonrpc: "2.0",
+                      id: generic.data.id,
+                      error: {
+                        code: -32000,
+                        message: new PlanCreationStoreError(error.code).message,
+                        data: { code: error.code },
+                      },
+                    }),
+                  ),
+                );
+                return;
+              }
               invocationFailure = { error };
             }
             break;

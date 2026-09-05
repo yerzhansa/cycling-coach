@@ -1,3 +1,9 @@
+import {
+  validatePlanRecord,
+  validatePlanWorkoutRecord,
+  type PlanRecord,
+  type PlanWorkoutRecord,
+} from "./repository.js";
 import { canonicalJson } from "../archive/canonical.js";
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
@@ -9,11 +15,17 @@ export type PlanCreationErrorCode =
   | "stale-version"
   | "missing-creation"
   | "no-unfinished-creation"
-  | "corrupt-record";
+  | "corrupt-record"
+  | "version-conflict"
+  | "not-ready";
 
 export class PlanCreationStoreError extends Error {
   constructor(readonly code: PlanCreationErrorCode) {
-    super(code);
+    super(
+      code === "not-ready"
+        ? "Build a current complete Draft and resolve pending answers before activation."
+        : code,
+    );
     this.name = "PlanCreationStoreError";
   }
 }
@@ -124,7 +136,35 @@ export interface DiscardPlanCreationInput {
   readonly expectedVersion: number;
 }
 
+export const PlanCreationActivationResultSchema = z
+  .object({
+    creationId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/u),
+    planId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/u),
+    closedPlanId: z
+      .string()
+      .regex(/^[0-9A-HJKMNP-TV-Z]{26}$/u)
+      .nullable(),
+    activatedAt: z.iso.date(),
+  })
+  .strict();
+export type PlanCreationActivationResult = z.infer<typeof PlanCreationActivationResultSchema>;
+
+export interface ActivatePlanCreationInput extends DiscardPlanCreationInput {
+  readonly activatedAt: string;
+  readonly revisionId: string;
+  readonly materialize: (snapshot: PlanCreationSnapshot) => {
+    readonly plan: PlanRecord;
+    readonly workouts: readonly PlanWorkoutRecord[];
+  };
+}
+
+const ActivationDraftSchema = z.object({
+  weeks: z.array(z.object({ workouts: z.array(z.unknown()) })),
+  outputFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
+});
+
 export interface PlanCreationRepository {
+  activate(input: ActivatePlanCreationInput): Promise<PlanCreationActivationResult>;
   readUnfinished(): Promise<PlanCreationSnapshot | undefined>;
   start(input: StartPlanCreationInput): Promise<{
     outcome: "created" | "resumed" | "replayed";
@@ -241,7 +281,8 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
       | "plan_creation.start"
       | "plan_creation.answer"
       | "plan_creation.discard"
-      | "plan_creation.preview",
+      | "plan_creation.preview"
+      | "plan_creation.activate",
     command: PlanCreationCommandStamp,
   ) => {
     const row = await store.get(
@@ -269,7 +310,8 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
       | "plan_creation.start"
       | "plan_creation.answer"
       | "plan_creation.discard"
-      | "plan_creation.preview",
+      | "plan_creation.preview"
+      | "plan_creation.activate",
     command: PlanCreationCommandStamp,
     creationId: string,
     result: unknown,
@@ -435,6 +477,159 @@ WHERE id=? AND status IN ('in-progress','review') AND version=?`,
           throw new PlanCreationStoreError("stale-version");
         await recordCommand("plan_creation.preview", command, creationId, snapshot);
         return { outcome: "recorded", snapshot };
+      });
+    },
+    async activate({ command, creationId, expectedVersion, activatedAt, revisionId, materialize }) {
+      return store.transaction(async () => {
+        const prior = await hasReplay("plan_creation.activate", command);
+        if (prior !== undefined) {
+          const parsed = PlanCreationActivationResultSchema.safeParse(
+            json(text(prior, "result_json")),
+          );
+          return parsed.success ? parsed.data : fail();
+        }
+        const current = await readUnfinished();
+        if (current === undefined || current.id !== creationId)
+          throw new PlanCreationStoreError("not-ready");
+        if (current.version !== expectedVersion)
+          throw new PlanCreationStoreError("version-conflict");
+        const revision = current.currentDraft;
+        if (
+          current.status !== "review" ||
+          revision === null ||
+          revision.inputVersion + 1 !== current.version
+        )
+          throw new PlanCreationStoreError("not-ready");
+        const draft = ActivationDraftSchema.safeParse(json(revision.outputSnapshotJson));
+        if (!draft.success || !draft.data.weeks.some((week) => week.workouts.length > 0))
+          throw new PlanCreationStoreError("not-ready");
+        if (draft.data.outputFingerprint !== revision.activationFingerprint) return fail();
+        const { plan, workouts } = materialize(current);
+        validatePlanRecord(plan);
+        for (const workout of workouts) validatePlanWorkoutRecord(plan, workout);
+        if (plan.status !== "active") return fail();
+        const incumbent = await store.get(
+          "SELECT plan_id FROM planning_plan WHERE status='active'",
+        );
+        const closedPlanId = incumbent === undefined ? null : text(incumbent, "plan_id");
+        const result = PlanCreationActivationResultSchema.parse({
+          creationId,
+          planId: plan.id,
+          closedPlanId,
+          activatedAt,
+        });
+        if (closedPlanId !== null) {
+          await store.run(
+            `UPDATE planning_plan SET status='closed',close_reason='stopped',close_actor=?,closed_at_ms=?,
+version=version+1,updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=? WHERE plan_id=? AND status='active'`,
+            [
+              command.deviceId,
+              command.nowMs,
+              command.nowMs,
+              command.deviceId,
+              command.hlcPhysicalMs,
+              command.hlcCounter,
+              closedPlanId,
+            ],
+          );
+          await store.run(
+            `UPDATE plan SET status='ended',updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=? WHERE id=?`,
+            [
+              command.nowMs,
+              command.deviceId,
+              command.hlcPhysicalMs,
+              command.hlcCounter,
+              closedPlanId,
+            ],
+          );
+        }
+        await store.run(
+          `INSERT INTO plan (id,origin_id,name,primary_goal,start_date_key,target_date_key,status,kind,
+total_weeks,week_start_day,structure_json,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            plan.id,
+            plan.originId,
+            plan.name,
+            plan.primaryGoal,
+            plan.startDateKey,
+            plan.targetDateKey,
+            plan.status,
+            plan.kind,
+            plan.totalWeeks,
+            plan.weekStartDay,
+            plan.structureJson,
+            plan.createdAtMs,
+            plan.updatedAtMs,
+            plan.deviceId,
+            plan.hlcPhysicalMs,
+            plan.hlcCounter,
+          ],
+        );
+        for (const workout of workouts) {
+          await store.run(
+            `INSERT INTO plan_workout (id,plan_id,date_key,sport,name,duration_s,structure_json,origin,device_id,hlc_physical_ms,hlc_counter)
+VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+            [
+              workout.id,
+              workout.planId,
+              workout.dateKey,
+              workout.sport,
+              workout.name,
+              workout.durationS,
+              workout.structureJson,
+              workout.origin,
+              workout.deviceId,
+              workout.hlcPhysicalMs,
+              workout.hlcCounter,
+            ],
+          );
+        }
+        await store.run(
+          `INSERT INTO planning_plan (plan_id,status,version,current_revision_number,activated_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES (?,'active',1,1,?,?,?,?,?)`,
+          [
+            plan.id,
+            command.nowMs,
+            command.nowMs,
+            command.deviceId,
+            command.hlcPhysicalMs,
+            command.hlcCounter,
+          ],
+        );
+        await store.run(
+          `INSERT INTO plan_revision (id,plan_id,revision_number,parent_revision_number,source_kind,source_id,snapshot_json,fingerprint,created_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES (?,?,1,NULL,'activation',?,?,?,?,?,?,?)`,
+          [
+            revisionId,
+            plan.id,
+            creationId,
+            revision.outputSnapshotJson,
+            draft.data.outputFingerprint,
+            command.nowMs,
+            command.deviceId,
+            command.hlcPhysicalMs,
+            command.hlcCounter,
+          ],
+        );
+        const updated = await store.get(
+          `UPDATE plan_creation SET status='activated',activated_plan_id=?,terminal_at_ms=?,version=version+1,
+updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=? WHERE id=? AND status='review' AND version=? RETURNING version`,
+          [
+            plan.id,
+            command.nowMs,
+            command.nowMs,
+            command.deviceId,
+            command.hlcPhysicalMs,
+            command.hlcCounter,
+            creationId,
+            expectedVersion,
+          ],
+        );
+        if (updated === undefined || integer(updated, "version") !== expectedVersion + 1)
+          throw new PlanCreationStoreError("version-conflict");
+        await recordCommand("plan_creation.activate", command, creationId, result);
+        return result;
       });
     },
     async discard({ command, creationId, expectedVersion }) {
