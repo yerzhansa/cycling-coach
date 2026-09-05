@@ -32,6 +32,7 @@ jobs:
           elif ! git diff --quiet "$BASE_SHA" HEAD -- \
             apps/desktop \
             apps/desktop-renderer \
+            tools/ui-verification \
             packages/coach \
             packages/coach-cli \
             packages/coach-client \
@@ -216,6 +217,10 @@ jobs:
         run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
       - name: Test Desktop E2E on macOS
         run: pnpm --filter @enduragent/desktop test:e2e
+      - name: Install pinned UI preview browser
+        run: pnpm --filter @enduragent/desktop exec playwright install chromium
+      - name: Verify production component previews
+        run: pnpm check:ui-previews
       - name: Upload Desktop E2E artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
