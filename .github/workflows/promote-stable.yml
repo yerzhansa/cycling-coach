@@ -36,7 +36,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: source
-        name: Derive immutable source tag
+        name: Derive source tag
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
@@ -131,7 +131,9 @@ jobs:
               exit 1
             fi
 
-            if ! run_count=$(jq -er 'arrays | length' <<< "$runs_json"); then
+            if ! runs_json=$(jq -ce --arg sha "$HEAD_SHA" --arg repository "$REPOSITORY" \
+              'map(select(.head_sha == $sha and .event == "push" and .head_branch == "main" and .repository.full_name == $repository and .head_repository.full_name == $repository))' <<< "$runs_json") ||
+              ! run_count=$(jq -er 'arrays | length' <<< "$runs_json"); then
               echo "::error::GitHub Actions API returned an invalid workflow-runs response."
               exit 1
             fi
@@ -142,7 +144,7 @@ jobs:
                 exit 1
               fi
 
-              echo "::notice::No publish-image.yml run exists for ${HEAD_SHA}; the push was skipped by its path filters, so stable remains unchanged."
+              echo "::notice::No matching main-push publish-image.yml run exists for ${HEAD_SHA}; stable remains unchanged."
               echo "ready=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -214,7 +216,7 @@ jobs:
           done
 
       - id: images
-        name: Check immutable images
+        name: Check source image digests
         if: steps.publish.outputs.ready == 'true'
         env:
           SHORT_SHA: ${{ steps.source.outputs.short_sha }}
@@ -225,56 +227,48 @@ jobs:
           expected_digest=""
           for image in "$IMAGE_NAME" "$ALIAS_IMAGE_NAME"; do
             source="${image}:main-${SHORT_SHA}"
-            if ! source_digest=$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' | jq -er '.digest'); then
-              echo "::error::publish-image.yml succeeded, but immutable image $source does not exist."
+            if ! source_digest=$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))'); then
+              echo "::error::publish-image.yml succeeded, but image $source has no valid digest."
               exit 1
             fi
 
             if [[ -n "$expected_digest" && "$source_digest" != "$expected_digest" ]]; then
-              echo "::error::Immutable image names do not resolve to the same digest"
+              echo "::error::Source image names do not resolve to the same digest"
               exit 1
             fi
             expected_digest="$source_digest"
           done
 
+          echo "digest=$expected_digest" >> "$GITHUB_OUTPUT"
           echo "available=true" >> "$GITHUB_OUTPUT"
 
-      - name: Promote immutable images
+      - name: Promote checked image digest
         if: steps.images.outputs.available == 'true'
         env:
-          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+          SOURCE_DIGEST: ${{ steps.images.outputs.digest }}
         shell: bash
         run: |
           set -euo pipefail
 
-          docker buildx imagetools create -t "${IMAGE_NAME}:stable" "${IMAGE_NAME}:main-${SHORT_SHA}"
-          docker buildx imagetools create -t "${ALIAS_IMAGE_NAME}:stable" "${ALIAS_IMAGE_NAME}:main-${SHORT_SHA}"
+          docker buildx imagetools create -t "${IMAGE_NAME}:stable" "${IMAGE_NAME}@${SOURCE_DIGEST}"
+          docker buildx imagetools create -t "${ALIAS_IMAGE_NAME}:stable" "${ALIAS_IMAGE_NAME}@${SOURCE_DIGEST}"
 
       - name: Verify stable image digests
         if: steps.images.outputs.available == 'true'
         env:
-          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+          SOURCE_DIGEST: ${{ steps.images.outputs.digest }}
         shell: bash
         run: |
           set -euo pipefail
 
-          expected_digest=""
           for image in "$IMAGE_NAME" "$ALIAS_IMAGE_NAME"; do
-            source="${image}:main-${SHORT_SHA}"
             stable="${image}:stable"
-            source_digest=$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' | jq -er '.digest')
             stable_digest=$(docker buildx imagetools inspect "$stable" --format '{{json .Manifest}}' | jq -er '.digest')
 
-            if [[ "$stable_digest" != "$source_digest" ]]; then
-              echo "::error::Digest mismatch for $stable: expected $source_digest, got $stable_digest"
+            if [[ "$stable_digest" != "$SOURCE_DIGEST" ]]; then
+              echo "::error::Digest mismatch for $stable: expected $SOURCE_DIGEST, got $stable_digest"
               exit 1
             fi
-
-            if [[ -n "$expected_digest" && "$stable_digest" != "$expected_digest" ]]; then
-              echo "::error::Stable image names do not resolve to the same digest"
-              exit 1
-            fi
-            expected_digest="$stable_digest"
           done
 
-          echo "Promoted both stable image names at digest $expected_digest"
+          echo "Promoted both stable image names at digest $SOURCE_DIGEST"
