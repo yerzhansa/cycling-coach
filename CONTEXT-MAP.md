@@ -1,38 +1,46 @@
 # Context Map
 
-This repo is a multi-package monorepo for the enduragent AI coaching agent platform — Core publishes the Sport contract, sport packages implement it, binary packages ship them.
+This repo is a multi-package monorepo for the enduragent AI coaching agent platform. Engine defines the Sport contract, sport packages supply domain behavior, and host packages compose them.
 
 ## Contexts
 
-- [Core](./packages/core/CONTEXT.md) — sport-agnostic infrastructure: agent loop, memory, session, secrets, channels (Telegram), LLM transport, intervals.icu client (shared tools), setup wizard, runBinary entry-point, updater. Owns no sport vocabulary. Publishes the `Sport` and `BinaryConfig` contracts.
+- [Core](./packages/core/CONTEXT.md) — shared CLI entry point, setup, memory, secrets, and channels. Defines `BinaryConfig` and re-exports Engine’s sport contract. Depends on Engine and Kernel through transitional edges.
+- [Engine](./packages/engine/src/sport.ts) — defines `Sport`, `SportRuntimePorts`, and the `CoreDeps` alias at `@enduragent/engine/sport`.
+- [Kernel](./packages/kernel/package.json) — declares portable compute, store, planning, and Reference exports. Its dependency rule forbids workspace imports and Node builtins.
+- [Kernel Node](./packages/kernel-node/package.json) — declares Node host adapter exports and depends on Kernel.
+- [Coach](./packages/coach/package.json) — declares runtime, sync, store-runtime, and serve exports; depends on Engine, Kernel, Kernel Node, and transitionally Core.
 - [Cycling](./packages/sport-cycling/CONTEXT.md) — FTP-based zones, power-prescribed workouts, bike equipment, cyclist persona. Implements `Sport`. Bundled into the `cycling-coach` binary.
-- [Running](./packages/sport-running/CONTEXT.md) — VDOT/pace-based zones, impact-aware progression, injury-first intake, runner persona. Stub.
+- [Running](./packages/sport-running/CONTEXT.md) — critical-speed pace zones, schemas, workout serialization, running tools, and a Reference adapter. Implements `Sport`.
 - [Duathlon](./packages/sport-duathlon/CONTEXT.md) — coordinator context. Brick workouts, transitions, dual periodization. Stub.
 - [Cycling Coach](./packages/cycling-coach/CONTEXT.md) — published `cycling-coach` binary; 7-line shim wiring cyclingSport + cyclingBinary into Core's runBinary.
-- [Running Coach](./packages/running-coach/CONTEXT.md) — `running-coach` binary stub; placeholder banner.
+- [Running Coach](./packages/running-coach/CONTEXT.md) — private binary whose entry point calls Core’s `runBinary(runningSport, runningBinary)`.
 - [Duathlon Coach](./packages/duathlon-coach/CONTEXT.md) — `duathlon-coach` binary stub; placeholder banner.
 
 ## Relationships
 
-- **Core → Cycling, Running, Duathlon**: **Open Host Service**. Core publishes the `Sport` interface; each sport conforms. Core changes are coordinated across all sports.
+- **Engine → sport packages**: **Open Host Service**. Engine defines `Sport` at `@enduragent/engine/sport`; Cycling and Running implement it. Coordinate contract changes across consumers. Consult [the dependency checker](./tools/check-package-deps.ts) for allowed and transitional package edges.
 - **Cycling ↔ Running**: **Partnership**. Peer contexts that evolve in lockstep when the `Sport` interface or shared infrastructure changes. Neither is upstream of the other.
-- **Duathlon → Cycling, Running**: **Customer/Supplier (Conformist flavor)**. Duathlon imports `sport-cycling` and `sport-running` as workspace dependencies, reuses their tools/personas/zones verbatim, and adds duathlon-only concepts (brick, transition, dual periodization). Duathlon never redefines cycling or running vocabulary.
+- **Duathlon → Cycling, Running**: intended **Customer/Supplier (Conformist flavor)**. The planned coordinator reuses their tools, personas, and zones and adds brick workouts, transitions, and dual periodization. The current Duathlon source is a stub; this relationship is not implemented.
 
 ## Why Duathlon is a Customer, not a peer
+
+The intended composition follows two rules:
 
 1. **It doesn't redefine upstream vocabulary.** "FTP" means the same thing inside Duathlon as inside Cycling. If a duathlete asks about FTP, Cycling's persona answers verbatim.
 2. **It adds, never overrides.** Brick, transition, dual periodization are _new_ concepts that don't exist in Cycling or Running.
 
-If sport-cycling improves its FTP-test guidance, sport-duathlon inherits the improvement automatically. This is the load-bearing reason for the Customer pattern over Partnership.
+Once that composition is implemented, improvements to sport-cycling’s FTP-test guidance will also reach sport-duathlon. This is the load-bearing reason for the Customer pattern over Partnership.
 
 ## Status
 
 Current state of the Core/Sport seam:
 
-- **Core** — implemented at `packages/core/`. Sport-agnostic; no cycling vocabulary leaks. Three-category tool split per ADR-0004 (Pure-Core memory + intervals tools live in Core; sport-injected config flows in via `BinaryConfig`/`Sport.intervalsActivityTypes`). Private workspace package (`@enduragent/core`); bundled into the `cycling-coach` binary at publish time, not separately published. See ADR-0009.
+- **Core** — implemented private workspace package consumed by CLI binaries. Its `Sport` export forwards Engine’s definition. The dependency checker explicitly marks its Engine and Kernel dependencies transitional; shared infrastructure has not all moved out of Core.
 - **Cycling** — implemented at `packages/sport-cycling/`. SOUL.md + skills/\*.md inlined into the bundle via tsup `.md: text` loader and skills.generated.ts codegen. Private workspace package (`@enduragent/sport-cycling`); bundled into the `cycling-coach` binary at publish time, not separately published.
 - **Cycling Coach** — implemented at `packages/cycling-coach/`. 7-line bin shim. Published as `cycling-coach` on npm (CalVer continues). The published tarball is self-contained — `@enduragent/*` workspace code is inlined via `tsup` `noExternal`.
-- **Running, Duathlon, Running Coach, Duathlon Coach** — empty stubs at `packages/{sport-running,sport-duathlon,running-coach,duathlon-coach}/`. Private workspace packages (SemVer); not published. They graduate to public CalVer-versioned npm binaries once a real implementation lands.
+- **Running and Running Coach** — private workspace packages with implemented sport/tool composition and a CLI entry point. Source inspection establishes this wiring; it does not establish end-to-end coaching behavior or publication readiness.
+- **Duathlon and Duathlon Coach** — private stubs at `packages/sport-duathlon/` and `packages/duathlon-coach/`; the sport exports a status constant and the binary prints a placeholder banner.
+- **Scoped packages** — `check:package-deps` requires `@enduragent/*` packages to remain private. A declared export is a workspace API, not a publication commitment.
 
 ## Release flow
 

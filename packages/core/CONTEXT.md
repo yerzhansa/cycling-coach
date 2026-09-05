@@ -1,13 +1,13 @@
 # Core
 
-Sport-agnostic infrastructure for AI coaching agents. Provides the agent loop, memory, secrets, channels, LLM transport, and intervals.icu client. Publishes the `Sport` contract that domain packages implement.
+Sport-agnostic CLI infrastructure for AI coaching agents, including setup, memory, secrets, and channels. Engine defines the `Sport` contract at `@enduragent/engine/sport`; Core re-exports it for existing consumers.
 
-> Status: this directory is a planning placeholder. Source still lives at the repo root in `src/agent/`, `src/secrets/`, `src/auth/`, `src/channels/`. The refactor will move that code here.
+> Status: implemented private workspace package. Core depends on Engine and Kernel through explicitly transitional edges. Consult the [context map](../../CONTEXT-MAP.md) and [dependency checker](../../tools/check-package-deps.ts) for current package boundaries.
 
 ## Language
 
 **Sport**:
-A pluggable coaching domain (cycling, running, duathlon) that conforms to Core's `Sport` interface — pure domain knowledge, no deployment concerns.
+A pluggable coaching domain (cycling, running, duathlon) that conforms to Engine's `Sport` interface — pure domain knowledge, no deployment concerns.
 _Avoid_: Discipline, modality, mode
 
 **Binary**:
@@ -15,7 +15,7 @@ A deployed CLI executable wrapping a `Sport` with deployment-shell config (npm n
 _Avoid_: Build, distro, app
 
 **Agent**:
-The Core-owned conversation loop that runs LLM calls with tool dispatch, compaction, and memory flush; sport-agnostic.
+The sport-agnostic conversation loop that runs LLM calls with tool dispatch, compaction, and memory flush. Core supplies a compatibility host around Engine’s runtime.
 
 **Memory**:
 A file-backed sectioned store of long-lived athlete information at `~/.enduragent/<binary>/memory/MEMORY.md` (or legacy `~/.cycling-coach/memory/MEMORY.md` for grandfathered cycling-coach users).
@@ -42,7 +42,7 @@ The ephemeral compaction path (`summarizeInStages`). Reshapes only the in-memory
 Every freshly generated compaction summary (all four sites: trim, preemptive, overflow recovery, timeout recovery) is also mirrored into the day's note under the fixed marker `### Compaction summary`, heading-demoted, with an exact-block duplicate-skip. This makes the summary recoverable via `memory_read` after a session reset destroys the live JSONL and its archives.
 
 **CoreDeps**:
-The runtime services Core supplies to a Sport's tool factory: `LLM`, `IntervalsClient`, `MemoryStore`, `SecretsResolver`.
+An alias for Engine’s `SportRuntimePorts`, the runtime services received by a Sport’s tool factory. The [contract definition](../engine/src/sport.ts) specifies the required services and optional capabilities.
 
 **BinaryConfig**:
 Deployment-shell config injected into `runBinary` and `runSetup`. Fields: `binaryName` (npm name + CLI invocation), `displayName` (human-readable for prompts), `dataSubdir` (under `~/.enduragent/`), `keychainPrefix` (Apple Keychain entry prefix), `homeEnvVar` (env override variable name). Each binary package declares one and passes it through.
@@ -147,4 +147,4 @@ Golden fixtures (sanitized real intervals.icu responses) live at
 
 ## Flagged ambiguities
 
-- "Coach" was used to mean both **Sport** (coaching domain) and **Binary** (CLI executable). Resolved: code uses **Sport** for domain, **Binary** for deployment shell. "Coach" remains in product surfaces (display names, READMEs) but is not a code-level term.
+- Distinguish **Sport** for coaching domain, **Binary** for deployment shell, and `@enduragent/coach` for the Node composition package.
