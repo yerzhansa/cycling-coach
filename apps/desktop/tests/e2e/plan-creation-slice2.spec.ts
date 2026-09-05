@@ -26,6 +26,7 @@ async function connect(
   playwright: Playwright,
   fixture: RunningDesktopFixture,
   colorScheme: "light" | "dark",
+  initializeAppearance = false,
 ) {
   const browser = await playwright.chromium.connectOverCDP(fixture.remoteDebuggingUrl);
   const page = browser
@@ -34,17 +35,24 @@ async function connect(
     .find((candidate) => candidate.url().startsWith("enduragent://app/"));
   if (page === undefined) throw new TypeError("Plan Creation renderer is unavailable");
   await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
-  const appearanceChanged = await page.evaluate((appearance) => {
-    const key = "enduragent.ui.appearance";
-    if (localStorage.getItem(key) === appearance) return false;
-    localStorage.setItem(key, appearance);
-    return true;
-  }, colorScheme);
-  if (appearanceChanged) await page.reload();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
   await expect(page.locator("[data-shell]")).toHaveAttribute("data-onboarding", "settled", {
     timeout: 30_000,
   });
+  if (initializeAppearance) {
+    const navigation = page.getByRole("navigation", { name: "Main navigation" });
+    await navigation.getByRole("button", { name: "Settings", exact: true }).click();
+    const appearance = page.getByRole("group", { name: "Appearance", exact: true }).getByRole(
+      "button",
+      { name: colorScheme === "light" ? "Light" : "Dark", exact: true },
+    );
+    await appearance.click();
+    await expect(appearance).toHaveAttribute("aria-pressed", "true");
+    await navigation.getByRole("button", { name: "Chat", exact: true }).click();
+  }
+  await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
+  expect(await page.evaluate(() => localStorage.getItem("enduragent.ui.appearance"))).toBe(
+    colorScheme,
+  );
   return { browser, page };
 }
 
@@ -76,7 +84,7 @@ async function launch(
       fixture,
       scratch,
       colorScheme: appearance.colorScheme,
-      ...(await connect(playwright, fixture, appearance.colorScheme)),
+      ...(await connect(playwright, fixture, appearance.colorScheme, true)),
     };
   } catch (error) {
     try {
