@@ -1,10 +1,12 @@
 # Sport-Running
 
-Implements the `Sport` contract from `@enduragent/core` for running. This wave ships **critical-speed-anchored pace zones** — the rest of the Sport surface (plan builder, periodization, workout serializer) is deferred.
+Implements Engine’s `Sport` contract at `@enduragent/engine/sport` for running. The [public index](./src/index.ts) exports critical-speed pace zones, schemas, workout serialization, sport/tools, and a Reference adapter.
 
 ## Status: alpha — zones vertical only
 
-Private workspace package, not published to npm. Becomes a published `@enduragent/sport-running` (SemVer) when a real consumer needs it. See ADR-0009.
+Private workspace package. The heading records the initial zones scope; the implemented surface now includes workout serialization and sport/tool composition. [runningSport](./src/sport.ts) composes memory, intervals.icu, and running tools and supplies the Reference adapter. [Running Coach](../running-coach/CONTEXT.md) consumes it. This source wiring does not establish end-to-end coaching behavior or planning completeness.
+
+`check:package-deps` requires `@enduragent/*` packages to remain private. Publication requires a separate policy decision.
 
 ## Pace zones (the shipped surface)
 
@@ -19,7 +21,7 @@ Primary = **intervals.icu-supplied** value (`threshold_pace`, stored in SI m/s; 
 
 ## Validation gate
 
-`checkCsSource` lives in **core** (`packages/core/src/reference/validation/checks/step5-cs-source.ts`, registered in `sync-gate.ts` as `step5_cs_source`), not here — core owns sync-time validation gates uniformly, following the step1 FTP-source gate precedent (ADR-0021 §4). It refuses to emit zones when a running row carries no sane CS anchor (manual `critical_speed` > platform `threshold_pace`), resolve-or-skip for non-runners. This is the first live instance of the CS-family gate pattern the swim CSS gate (ADR-0021) will follow.
+[checkCsSource](../core/src/reference/validation/checks/step5-cs-source.ts) remains in Core and is called by its [sync gate](../core/src/reference/validation/sync-gate.ts) as `step5_cs_source`. It rejects collected CS values outside the sanity range and gives manual `critical_speed` values precedence over platform `threshold_pace`. It returns no failure when no values are collected. The running `calculate_zones` tool separately returns `no_cs_anchor` when no anchor is available.
 
 ## Monitoring/analyze copy discipline
 
