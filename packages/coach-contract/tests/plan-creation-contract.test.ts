@@ -4,6 +4,8 @@ import {
   COACH_RPC_METHOD_REGISTRY,
   CoachRpcRequestEnvelopeSchema,
   PLAN_CREATION_ANSWER_KEYS,
+  PlanCreationActivateRpcParamsSchema,
+  PlanCreationActivateRpcResultSchema,
   PlanCreationAnswerInputSchema,
   PlanCreationAnswerRpcParamsSchema,
   PlanCreationAnswerRpcResultSchema,
@@ -688,7 +690,51 @@ describe("Plan Creation contract", () => {
       "plan_creation.answer",
       "plan_creation.preview",
       "plan_creation.discard",
+      "plan_creation.activate",
     ]);
+  });
+
+  it("validates activation identity, command boundaries, and civil dates", () => {
+    const request = { commandId: "activate", creationId, expectedVersion: 2 };
+    expect(PlanCreationActivateRpcParamsSchema.parse(request)).toEqual(request);
+    for (const extra of [
+      { expectedVersion: 0 },
+      { commandId: "" },
+      { creationId: "invalid" },
+      { activatedAt: "1998-09-07" },
+      { planId: creationId },
+    ]) {
+      expect(PlanCreationActivateRpcParamsSchema.safeParse({ ...request, ...extra }).success).toBe(
+        false,
+      );
+    }
+    const result = {
+      creationId,
+      planId: "01J00000000000000000000001",
+      closedPlanId: null,
+      activatedAt: "1998-09-07",
+    };
+    expect(PlanCreationActivateRpcResultSchema.parse(result)).toEqual(result);
+    expect(
+      PlanCreationActivateRpcResultSchema.parse({ ...result, closedPlanId: creationId }),
+    ).toEqual({ ...result, closedPlanId: creationId });
+    for (const extra of [
+      { activatedAt: "1998-02-30" },
+      { activatedAt: "1998-09-07T00:00:00Z" },
+      { planId: "invalid" },
+      { closedPlanId: "invalid" },
+      { status: "activated" },
+    ]) {
+      expect(PlanCreationActivateRpcResultSchema.safeParse({ ...result, ...extra }).success).toBe(
+        false,
+      );
+    }
+    expect(COACH_RPC_METHOD_REGISTRY["plan_creation.activate"]).toEqual({
+      wireName: "plan_creation.activate",
+      requestSchema: PlanCreationActivateRpcParamsSchema,
+      responseSchema: PlanCreationActivateRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
   });
 
   it("registers strict Plan Creation envelopes without events", () => {
@@ -706,6 +752,10 @@ describe("Plan Creation contract", () => {
         method: "plan_creation.discard",
         params: { commandId: "discard", creationId, expectedVersion: 1 },
       },
+      {
+        method: "plan_creation.activate",
+        params: { commandId: "activate", creationId, expectedVersion: 1 },
+      },
     ] as const;
     requests.forEach((request, id) =>
       expect(CoachRpcRequestEnvelopeSchema.parse({ jsonrpc: "2.0", id, ...request }).method).toBe(
@@ -717,6 +767,7 @@ describe("Plan Creation contract", () => {
       "plan_creation.answer",
       "plan_creation.preview",
       "plan_creation.discard",
+      "plan_creation.activate",
     ] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse({}).success).toBe(false);
     }

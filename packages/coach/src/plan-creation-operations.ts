@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  PlanCreationActivateRpcParamsSchema,
+  PlanCreationActivateRpcResultSchema,
   PlanCreationAnswerRpcParamsSchema,
   PlanCreationAnswerRpcResultSchema,
   PlanCreationDiscardRpcParamsSchema,
@@ -15,6 +17,10 @@ import {
 import { buildCreationDraft } from "@enduragent/sport-cycling";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
+  dateKeyFromText,
+  inclusiveCivilDays,
+  MIN_FULL_PLAN_DAYS,
+  weekdayForDateKey,
   PlanCreationStoreError,
   type PlanCreationRepository,
   type PlanCreationSnapshot,
@@ -321,6 +327,85 @@ export function createPlanCreationOperations(input: {
         }
         throw error;
       }
+    },
+    async "plan_creation.activate"(request) {
+      const parsed = PlanCreationActivateRpcParamsSchema.parse(request);
+      const command = await stamp(parsed.commandId, await requestDigest(input.crypto, parsed));
+      const result = await input.repository.activate({
+        command,
+        creationId: parsed.creationId,
+        expectedVersion: parsed.expectedVersion,
+        activatedAt: today(),
+        revisionId: input.identity.newUlid(),
+        materialize(snapshot) {
+          if (snapshot.currentDraft === null || resolvePlanCreationDraftAnswers(snapshot) === null)
+            throw new PlanCreationStoreError("not-ready");
+          const draft = PlanCreationDraftSchema.parse(
+            JSON.parse(snapshot.currentDraft.outputSnapshotJson),
+          );
+          const planId = input.identity.newUlid();
+          const startDateKey = dateKeyFromText(draft.start);
+          const targetDateKey = dateKeyFromText(draft.end);
+          const name = draft.goal.kind === "event" ? draft.goal.name : "Improve fitness";
+          const primaryGoal =
+            draft.answeredSummaries.find((answer) => answer.answerKey === "success")?.detail ??
+            name;
+          const totalWeeks = draft.weeks.length;
+          const kind =
+            inclusiveCivilDays(startDateKey, targetDateKey) >= MIN_FULL_PLAN_DAYS
+              ? "full_plan"
+              : "short_race_preparation";
+          const authored = {
+            deviceId: command.deviceId,
+            hlcPhysicalMs: command.hlcPhysicalMs,
+            hlcCounter: command.hlcCounter,
+          };
+          return {
+            plan: {
+              id: planId,
+              originId: null,
+              name,
+              primaryGoal,
+              startDateKey,
+              targetDateKey,
+              status: "active",
+              kind,
+              totalWeeks,
+              weekStartDay: weekdayForDateKey(startDateKey),
+              structureJson: canonicalJson({
+                source: "plan-creation",
+                creationId: snapshot.id,
+                draftRevisionNumber: snapshot.currentDraft.revisionNumber,
+                spanKind: draft.spanKind,
+                mode: draft.mode,
+              }),
+              createdAtMs: command.nowMs,
+              updatedAtMs: command.nowMs,
+              ...authored,
+            },
+            workouts: draft.weeks.flatMap((week) =>
+              week.workouts.flatMap((workout) =>
+                workout.date === null
+                  ? []
+                  : [
+                      {
+                        id: input.identity.newUlid(),
+                        planId,
+                        dateKey: dateKeyFromText(workout.date),
+                        sport: "Ride",
+                        name: workout.name,
+                        durationS: Math.round(workout.minutes * 60),
+                        structureJson: canonicalJson(workout),
+                        origin: "coach" as const,
+                        ...authored,
+                      },
+                    ],
+              ),
+            ),
+          };
+        },
+      });
+      return PlanCreationActivateRpcResultSchema.parse(result);
     },
     async "plan_creation.discard"(request) {
       const parsed = PlanCreationDiscardRpcParamsSchema.parse(request);
