@@ -258,20 +258,6 @@ try {
   }
   [Console]::Out.WriteLine(($result | ConvertTo-Json -Compress -Depth 8))
 } catch {
-  $failure = $_
-  if ($null -ne $requestFile) {
-    try {
-      $diagnostic = [ordered]@{
-        stage = $script:FailureStage
-        exceptionType = $failure.Exception.GetType().FullName
-        hresult = $failure.Exception.HResult
-        errorId = $failure.FullyQualifiedErrorId
-        category = [string]$failure.CategoryInfo.Category
-        lineNumber = $failure.InvocationInfo.ScriptLineNumber
-      }
-      [IO.File]::WriteAllText("$requestFile.diagnostic.json", ($diagnostic | ConvertTo-Json -Compress -Depth 4))
-    } catch {}
-  }
   $allowedStages = @(
     "request",
     "install-location",
