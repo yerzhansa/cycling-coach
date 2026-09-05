@@ -36,7 +36,7 @@
 
 import * as ts from "typescript";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, resolve, relative, sep } from "node:path";
 import { isBuiltin } from "node:module";
 import { TS_EXTS, ext, collectFiles, makeSkipCheck, nonFlagArgs, runGateCli } from "./lint-fs.js";
 
@@ -361,6 +361,69 @@ interface ConcreteDir {
   readonly fsDir: string;
 }
 
+interface WorkspacePackage {
+  readonly fsDir: string;
+  readonly name: string;
+  readonly exports: Record<string, unknown>;
+}
+
+function workspacePackages(root: string): WorkspacePackage[] {
+  const packages: WorkspacePackage[] = [];
+  for (const group of ["packages", "apps"]) {
+    const parent = join(root, group);
+    if (!existsSync(parent)) continue;
+    for (const entry of readdirSync(parent, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const fsDir = resolve(parent, entry.name);
+      const manifest = readManifestDeps(fsDir, "");
+      if (manifest.packageName.startsWith(WORKSPACE_SCOPE)) {
+        packages.push({ fsDir, name: manifest.packageName, exports: manifest.packageExports });
+      }
+    }
+  }
+  return packages;
+}
+
+function modulePath(path: string): string {
+  return path
+    .replaceAll(sep, "/")
+    .replace(/^\.\//, "")
+    .replace(/^(?:src|dist)\//, "")
+    .replace(/(?:\.d)?\.[cm]?[jt]sx?$/, "");
+}
+
+function exportTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (value === null || typeof value !== "object") return [];
+  return Object.values(value).flatMap(exportTargets);
+}
+
+function relativeWorkspaceSpecifier(
+  file: string,
+  specifier: string,
+  ownerDir: string,
+  packages: readonly WorkspacePackage[],
+): string | undefined {
+  const target = resolve(dirname(file), specifier);
+  const owner = packages.find((pkg) => target === pkg.fsDir || target.startsWith(pkg.fsDir + sep));
+  if (!owner || owner.fsDir === resolve(ownerDir)) return undefined;
+  const targetPath = modulePath(relative(owner.fsDir, target));
+  for (const [key, value] of Object.entries(owner.exports)) {
+    if (!key.startsWith("./")) continue;
+    if (
+      exportTargets(value).some((entry) => {
+        const entryPath = modulePath(entry);
+        return (
+          entryPath === targetPath || (ext(target) === "" && entryPath === `${targetPath}/index`)
+        );
+      })
+    ) {
+      return owner.name + key.slice(1);
+    }
+  }
+  return owner.name;
+}
+
 function expandRuleDirs(root: string, rule: PackageDepRule): ConcreteDir[] {
   if (rule.dir.includes("*")) {
     const parent = dirname(rule.dir);
@@ -393,6 +456,7 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
   const warnSet = new Map<string, TransitionalEdge>();
   const notPresent: string[] = [];
   let scannedFileCount = 0;
+  const packages = workspacePackages(root);
 
   const recordWarn = (dir: string, target: string): void => {
     const key = `${dir} -> ${target}`;
@@ -416,7 +480,11 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
         if (!TS_EXTS.has(ext(file))) continue;
         scannedFileCount++;
         for (const ref of collectSpecifiers(file)) {
-          const spec = ref.specifier;
+          const isRelative = ref.specifier.startsWith("./") || ref.specifier.startsWith("../");
+          const spec = isRelative
+            ? relativeWorkspaceSpecifier(file, ref.specifier, fsDir, packages)
+            : ref.specifier;
+          if (spec === undefined) continue;
           if (isNodeSpecifier(spec)) {
             if (rule.forbidNode) {
               violations.push({
@@ -424,7 +492,7 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
                 line: ref.line,
                 column: ref.column,
                 ruleId: rule.ruleId,
-                specifier: spec,
+                specifier: ref.specifier,
                 pkg: dir,
               });
             }
@@ -444,7 +512,7 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
                 line: ref.line,
                 column: ref.column,
                 ruleId: rule.ruleId,
-                specifier: spec,
+                specifier: ref.specifier,
                 pkg: dir,
               });
               continue;
@@ -460,12 +528,11 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
               line: ref.line,
               column: ref.column,
               ruleId: rule.ruleId,
-              specifier: spec,
+              specifier: ref.specifier,
               pkg: dir,
             });
             continue;
           }
-          if (spec.startsWith("./") || spec.startsWith("../")) continue;
           if (
             rule.allowedExternal === undefined ||
             rule.allowedExternal.some((entry) => matchesEntry(spec, entry))
