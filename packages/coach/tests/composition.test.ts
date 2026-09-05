@@ -5697,7 +5697,9 @@ describe("local coach composition", () => {
     await writeFile(legacyPath, "synthetic malformed legacy bytes");
     let present = true;
     const oauthOwner: OAuthCredentialOwner = {
-      hasProfile: vi.fn(async (name) => name === "custom-desktop" && present),
+      hasProfile: vi.fn(
+        async (name) => name === "openai-codex" || (name === "custom-desktop" && present),
+      ),
       getAccessToken: vi.fn(async () => "synthetic-private-access"),
       deleteProfile: vi.fn(async () => {
         present = false;
@@ -5757,6 +5759,10 @@ describe("local coach composition", () => {
       await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
         llm: { credential_configured: false },
       });
+      expect(await readFile(join(home.configDir, "config.yaml"), "utf8")).toContain(
+        "auth_profile: custom-desktop",
+      );
+      expect(await oauthOwner.hasProfile("openai-codex")).toBe(true);
       expect(await readFile(legacyPath, "utf8")).toBe("synthetic malformed legacy bytes");
     } finally {
       await lifecycle.close();

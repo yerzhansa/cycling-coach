@@ -365,7 +365,16 @@ function runtimePatch(request: ConfigureRuntimeRpcParams, config: Config): Runti
 }
 
 function mergedRuntimeConfig(config: Config, request: ConfigureRuntimeRpcParams): Config {
-  return { ...config, ...resolveRuntimeConfig(runtimePatch(request, config), config) };
+  return {
+    ...config,
+    ...resolveRuntimeConfig(
+      runtimePatch(request, config),
+      config,
+      request.llm?.clear_credential === true && config.llm.provider === "openai-codex"
+        ? { authProfile: config.llm.authProfile ?? "openai-codex" }
+        : undefined,
+    ),
+  };
 }
 
 const LLM_CREDENTIAL_ENVIRONMENT_KEYS = {
@@ -1663,7 +1672,7 @@ export async function createLocalCoachComposition(
               if (input.oauthOwner === undefined) {
                 deleteStoredProfile(
                   join(input.home.configDir, "auth-profiles.json"),
-                  "openai-codex",
+                  unapprovedConfig.llm.authProfile ?? "openai-codex",
                 );
               } else {
                 await input.oauthOwner.deleteProfile(
