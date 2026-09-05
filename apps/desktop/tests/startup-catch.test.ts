@@ -103,9 +103,9 @@ describe("desktop startup catch", () => {
       event: "startup_failed",
       err: {
         name: "TypeError",
-        message: mocks.startupError.message,
-        stack: mocks.startupError.stack,
       },
     });
+    expect(JSON.stringify(record)).not.toContain(mocks.startupError.message);
+    expect(record.err).not.toHaveProperty("stack");
   }, 30_000);
 });

@@ -183,6 +183,19 @@ describe("never throws on an unwritable target", () => {
 });
 
 describe("serializeError unit cases", () => {
+  it.each([TypeError, RangeError, SyntaxError])("keeps the safe built-in error name", (ErrorType) => {
+    expect(serializeError(new ErrorType("marker"))).toEqual({ name: ErrorType.name });
+  });
+
+  it("does not inspect a proxied error prototype", () => {
+    const callback = vi.fn(() => { throw new Error("marker"); });
+    const error = Object.setPrototypeOf(new Error("marker"), new Proxy(TypeError.prototype, {
+      get: callback,
+      getOwnPropertyDescriptor: callback,
+    }));
+    expect(serializeError(error)).toEqual({ name: "Error" });
+    expect(callback).not.toHaveBeenCalled();
+  });
   it("keeps name without message or stack for a plain Error", () => {
     const out = serializeError(new Error("plain failure"));
     expect(out.name).toBe("Error");

@@ -79,16 +79,17 @@ function redactAt(value: unknown, depth: number, seen: WeakSet<object>, errorTex
 
   const out: Record<string, unknown> = Object.create(null);
   const isError = isNativeError(value);
-  if (isError) out.name = "Error";
+  if (isError) {
+    const prototype = Object.getPrototypeOf(value);
+    const name = descriptors.name ?? (prototype !== null && !isProxy(prototype)
+      ? Object.getOwnPropertyDescriptor(prototype, "name") : undefined);
+    out.name = name && "value" in name && ERROR_NAMES.has(name.value) ? name.value : "Error";
+  }
   for (const [key, descriptor] of Object.entries(descriptors)) {
     if (DROP_FIELDS.has(key) || key === "toJSON") continue;
     if (!descriptor.enumerable && !(isError && ["name", "code", "statusCode"].includes(key)))
       continue;
-    if (isError && key === "name") {
-      out.name =
-        "value" in descriptor && ERROR_NAMES.has(descriptor.value) ? descriptor.value : "Error";
-      continue;
-    }
+    if (isError && key === "name") continue;
     if (isError && key === "code" && "value" in descriptor && ERROR_CODES.has(descriptor.value)) {
       out.code = descriptor.value;
       continue;
