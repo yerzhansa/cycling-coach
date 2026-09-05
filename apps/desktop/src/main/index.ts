@@ -1591,7 +1591,6 @@ if (process.argv.includes("--desktop-keychain-binding-probe")) {
   traceDesktopStartupStage("single-instance-lock");
   const primaryInstance = app.requestSingleInstanceLock();
   if (!primaryInstance) {
-    traceDesktopStartupStage("secondary-instance");
     void exitSecondaryDesktop();
   } else {
     disableChromiumMediaSessionIntegration();
