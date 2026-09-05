@@ -12,6 +12,10 @@ import {
 } from "../../../../packages/coach/src/plan-creation-operations.js";
 import type { DesktopFixtureScript } from "./desktop-fixture.js";
 import { createPlanQaFixtureScript } from "./plan-qa-live.js";
+import {
+  createPlanInspectionFixtureScript,
+  PLAN_INSPECTION_TURNS,
+} from "./plan-inspection-live.js";
 
 const emptyAttachmentComposer = {
   schemaVersion: 1,
@@ -49,17 +53,52 @@ const response = (value: unknown): readonly string[] => [JSON.stringify(value)];
 
 export class PlanCreationBackend {
   readonly script: DesktopFixtureScript;
+  readonly creationRequests: ScriptRequest[] = [];
   private store: (SqlStore & MigratorStore) | undefined;
   private repository: PlanCreationRepository | undefined;
   private host: PlanCreationHost | undefined;
   private sequence = 0;
   private instant = 883_612_800_000;
 
-  constructor(private readonly databasePath: string) {
-    const base = createPlanQaFixtureScript();
+  constructor(
+    private readonly databasePath: string,
+    coexistence = false,
+  ) {
+    const base = coexistence ? createPlanInspectionFixtureScript() : createPlanQaFixtureScript();
     this.script = {
       onRequest: async (value) => {
         const request = value as ScriptRequest;
+        if (request.method.startsWith("plan_creation.")) this.creationRequests.push(request);
+        if (coexistence && request.method === "listArchivedConversations") {
+          return response({
+            schemaVersion: 1,
+            conversations: [
+              {
+                boundaryRef: "b".repeat(64),
+                boundaryAt: "1998-08-25T08:00:00.000Z",
+                reason: "explicit-reset",
+                turnCount: 2,
+              },
+            ],
+            truncated: false,
+          });
+        }
+        if (coexistence && request.method === "getArchivedTranscriptPage") {
+          return response({
+            schemaVersion: 1,
+            status: "page",
+            turns: PLAN_INSPECTION_TURNS,
+            nextCursor: null,
+          });
+        }
+        if (coexistence && request.method === "getRuntimeConfig") {
+          const frames = await base.onRequest(value);
+          const config = JSON.parse(frames[0] ?? "null");
+          return response({
+            ...config,
+            intervals: { ...config.intervals, credential_configured: false },
+          });
+        }
         if (request.method === "getChatAttachmentComposer") {
           return response(emptyAttachmentComposer);
         }

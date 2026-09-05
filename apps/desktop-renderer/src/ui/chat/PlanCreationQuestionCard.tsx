@@ -90,8 +90,14 @@ function ChoiceActions(props: QuestionFormProps): ReactElement {
   return (
     <div className="flex justify-end gap-inset px-2 pt-[calc(var(--inset)/2)] pb-2">
       {props.editing ? (
-        <Button type="button" variant="outline" disabled={props.busy} onClick={props.onCancel}>
-          Back
+        <Button
+          type="button"
+          variant="outline"
+          className="mr-auto"
+          disabled={props.busy}
+          onClick={props.onCancel}
+        >
+          Back to answers
         </Button>
       ) : null}
       <Button type="button" variant="outline" disabled={props.busy} onClick={props.onLater}>
@@ -102,18 +108,33 @@ function ChoiceActions(props: QuestionFormProps): ReactElement {
 }
 
 function CustomActions(props: {
+  readonly editing: boolean;
+  readonly onCancel: () => void;
   readonly busy: boolean;
   readonly continueDisabled: boolean;
   readonly onBack: () => void;
 }): ReactElement {
   return (
-    <div className="flex justify-end gap-inset" data-parity="custom.actions">
-      <Button type="button" variant="outline" disabled={props.busy} onClick={props.onBack}>
-        Back
-      </Button>
-      <Button type="submit" disabled={props.busy || props.continueDisabled}>
-        Continue
-      </Button>
+    <div className="flex flex-wrap justify-end gap-inset" data-parity="custom.actions">
+      {props.editing ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="mr-auto"
+          disabled={props.busy}
+          onClick={props.onCancel}
+        >
+          Back to answers
+        </Button>
+      ) : null}
+      <div className="flex gap-inset">
+        <Button type="button" variant="outline" disabled={props.busy} onClick={props.onBack}>
+          Back
+        </Button>
+        <Button type="submit" disabled={props.busy || props.continueDisabled}>
+          Continue
+        </Button>
+      </div>
     </div>
   );
 }
@@ -214,6 +235,8 @@ function GoalForm(props: QuestionFormProps): ReactElement {
           </label>
         </div>
         <CustomActions
+          editing={props.editing}
+          onCancel={props.onCancel}
           busy={props.busy}
           continueDisabled={name.trim().length === 0 || date.length === 0}
           onBack={back}
@@ -348,7 +371,13 @@ function SuccessForm(props: QuestionFormProps): ReactElement {
           />
         </label>
         <ErrorText id={errorId}>{error}</ErrorText>
-        <CustomActions busy={props.busy} continueDisabled={!/\S/u.test(text)} onBack={back} />
+        <CustomActions
+          editing={props.editing}
+          onCancel={props.onCancel}
+          busy={props.busy}
+          continueDisabled={!/\S/u.test(text)}
+          onBack={back}
+        />
       </form>
     );
   }
@@ -570,8 +599,14 @@ function AvailabilityForm(props: QuestionFormProps): ReactElement {
       )}
       <div className="flex justify-end gap-inset px-4 pb-4">
         {props.editing ? (
-          <Button type="button" variant="outline" disabled={props.busy} onClick={props.onCancel}>
-            Back
+          <Button
+            type="button"
+            variant="outline"
+            className="mr-auto"
+            disabled={props.busy}
+            onClick={props.onCancel}
+          >
+            Back to answers
           </Button>
         ) : null}
         <Button type="button" variant="outline" disabled={props.busy} onClick={props.onLater}>
@@ -661,8 +696,14 @@ function StartTimingForm(props: QuestionFormProps): ReactElement {
       <ErrorText id={errorId}>{error}</ErrorText>
       <div className="flex justify-end gap-inset px-4 pb-4">
         {props.editing ? (
-          <Button type="button" variant="outline" disabled={props.busy} onClick={props.onCancel}>
-            Back
+          <Button
+            type="button"
+            variant="outline"
+            className="mr-auto"
+            disabled={props.busy}
+            onClick={props.onCancel}
+          >
+            Back to answers
           </Button>
         ) : null}
         <Button type="button" variant="outline" disabled={props.busy} onClick={props.onLater}>
@@ -739,7 +780,13 @@ function CommitmentsForm(props: QuestionFormProps): ReactElement {
           />
         </label>
         <ErrorText id={errorId}>{error}</ErrorText>
-        <CustomActions busy={props.busy} continueDisabled={!/\S/u.test(text)} onBack={back} />
+        <CustomActions
+          editing={props.editing}
+          onCancel={props.onCancel}
+          busy={props.busy}
+          continueDisabled={!/\S/u.test(text)}
+          onBack={back}
+        />
       </form>
     );
   }
@@ -903,8 +950,14 @@ function RestrictionForm(props: QuestionFormProps): ReactElement {
       <ErrorText id={errorId}>{error}</ErrorText>
       <div className="flex justify-end gap-inset px-4 pb-4">
         {props.editing ? (
-          <Button type="button" variant="outline" disabled={props.busy} onClick={props.onCancel}>
-            Back
+          <Button
+            type="button"
+            variant="outline"
+            className="mr-auto"
+            disabled={props.busy}
+            onClick={props.onCancel}
+          >
+            Back to answers
           </Button>
         ) : null}
         <Button type="button" variant="outline" disabled={props.busy} onClick={props.onLater}>

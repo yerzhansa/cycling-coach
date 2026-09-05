@@ -2,7 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Browser, type Page, type PlaywrightWorkerArgs } from "@playwright/test";
-import type { PlanCreationCardModel } from "@enduragent/coach-contract";
+import {
+  GetPlanStateRpcResultSchema,
+  type PlanCreationCardModel,
+} from "@enduragent/coach-contract";
 import { launchDesktopFixture, type RunningDesktopFixture } from "../helpers/desktop-fixture.js";
 import { PlanCreationBackend } from "../helpers/plan-creation-backend.js";
 
@@ -12,42 +15,69 @@ interface Scenario {
   readonly backend: PlanCreationBackend;
   readonly fixture: RunningDesktopFixture;
   readonly scratch: string;
+  readonly colorScheme: "light" | "dark";
   browser: Browser;
   page: Page;
 }
 
 type Playwright = PlaywrightWorkerArgs["playwright"];
 
-async function connect(playwright: Playwright, fixture: RunningDesktopFixture) {
+async function connect(
+  playwright: Playwright,
+  fixture: RunningDesktopFixture,
+  colorScheme: "light" | "dark",
+) {
   const browser = await playwright.chromium.connectOverCDP(fixture.remoteDebuggingUrl);
   const page = browser
     .contexts()[0]
     ?.pages()
     .find((candidate) => candidate.url().startsWith("enduragent://app/"));
   if (page === undefined) throw new TypeError("Plan Creation renderer is unavailable");
+  await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
+  const appearanceChanged = await page.evaluate((appearance) => {
+    const key = "enduragent.ui.appearance";
+    if (localStorage.getItem(key) === appearance) return false;
+    localStorage.setItem(key, appearance);
+    return true;
+  }, colorScheme);
+  if (appearanceChanged) await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
   await expect(page.locator("[data-shell]")).toHaveAttribute("data-onboarding", "settled", {
     timeout: 30_000,
   });
   return { browser, page };
 }
 
-async function launch(playwright: Playwright): Promise<Scenario> {
+async function launch(
+  playwright: Playwright,
+  appearance: {
+    readonly width: number;
+    readonly height: number;
+    readonly colorScheme: "light" | "dark";
+    readonly coexistence?: boolean;
+  } = { width: 1180, height: 820, colorScheme: "light" },
+): Promise<Scenario> {
   const scratch = await mkdtemp(join(tmpdir(), "plan-creation-"));
-  const backend = new PlanCreationBackend(join(scratch, "store.db"));
+  const backend = new PlanCreationBackend(join(scratch, "store.db"), appearance.coexistence);
   let fixture: RunningDesktopFixture | undefined;
   try {
     await backend.open();
     fixture = await launchDesktopFixture({
       script: backend.script,
       token,
-      width: 1180,
-      height: 820,
-      colorScheme: "light",
+      ...appearance,
+      inspectMain: appearance.width === 760,
       reducedMotion: true,
       hidden: true,
       routeChatAttachmentComposer: true,
     });
-    return { backend, fixture, scratch, ...(await connect(playwright, fixture)) };
+    return {
+      backend,
+      fixture,
+      scratch,
+      colorScheme: appearance.colorScheme,
+      ...(await connect(playwright, fixture, appearance.colorScheme)),
+    };
   } catch (error) {
     try {
       await fixture?.close();
@@ -64,19 +94,48 @@ async function launch(playwright: Playwright): Promise<Scenario> {
 
 async function relaunch(scenario: Scenario, playwright: Playwright): Promise<void> {
   await scenario.browser.close();
+  const started = performance.now();
   await scenario.fixture.relaunch(() => scenario.backend.reopen());
-  Object.assign(scenario, await connect(playwright, scenario.fixture));
+  Object.assign(scenario, await connect(playwright, scenario.fixture, scenario.colorScheme));
+  await expect(scenario.page.getByRole("region", { name: "Plan Creation progress" })).toBeVisible();
+  await test.info().attach("relaunch-timing", {
+    body: JSON.stringify({
+      event: "relaunch-to-restored-progress",
+      milliseconds: performance.now() - started,
+    }),
+    contentType: "application/json",
+  });
 }
 
 async function close(scenario: Scenario): Promise<void> {
-  await scenario.browser.close().catch(() => {});
   try {
-    await expect(scenario.fixture.close()).resolves.toEqual({ livePids: [], listenerCount: 0 });
+    await test.info().attach("final-state", {
+      body: JSON.stringify({
+        card: await scenario.backend.card(),
+        store: await scenario.backend.inspect(),
+        answers: await scenario.backend.answers(),
+        requests: scenario.backend.creationRequests,
+      }),
+      contentType: "application/json",
+    });
+    const screenshotPath = test.info().outputPath("final-desktop.png");
+    await scenario.fixture.screenshot(screenshotPath);
+    await test.info().attach("final-desktop", { path: screenshotPath, contentType: "image/png" });
+    await test.info().attach("final-dom", { body: scenario.fixture.readCapturedSurface("dom"), contentType: "text/html" });
   } finally {
+    await scenario.browser.close().catch(() => {});
     try {
-      await scenario.backend.close();
+      const cleanup = await scenario.fixture.close();
+      await test
+        .info()
+        .attach("cleanup", { body: JSON.stringify(cleanup), contentType: "application/json" });
+      expect(cleanup).toEqual({ livePids: [], listenerCount: 0 });
     } finally {
-      await rm(scenario.scratch, { recursive: true, force: true });
+      try {
+        await scenario.backend.close();
+      } finally {
+        await rm(scenario.scratch, { recursive: true, force: true });
+      }
     }
   }
 }
@@ -96,8 +155,30 @@ async function waitForVersion(
 }
 
 async function choose(page: Page, backend: PlanCreationBackend, version: number, answer: string) {
+  const started = performance.now();
   await page.locator(`[data-parity="choice.row"][data-answer="${answer}"]`).click();
-  return waitForVersion(backend, version);
+  const card = await waitForVersion(backend, version);
+  if (card.openQuestion !== null) {
+    await expect(
+      page.getByRole("heading", { name: card.openQuestion.prompt, exact: true }),
+    ).toBeVisible();
+  } else {
+    await expect(
+      page.getByText("The essentials are complete. Draft preview arrives in a later update.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+  }
+  await test.info().attach(`answer-${version}-timing`, {
+    body: JSON.stringify({
+      event: "choice-to-returned-card",
+      answer,
+      version,
+      milliseconds: performance.now() - started,
+    }),
+    contentType: "application/json",
+  });
+  return card;
 }
 
 async function startFitnessGoal(scenario: Scenario): Promise<void> {
@@ -225,6 +306,10 @@ test("edits the goal, pauses, and resumes the Event success Card", async ({ play
       .getByRole("textbox", { name: "Event name", exact: true })
       .fill("Highland Classic");
     await scenario.page.getByLabel("Event date", { exact: true }).fill("1998-06-20");
+    await test.info().attach("manual-event-editor", {
+      body: await scenario.page.screenshot(),
+      contentType: "image/png",
+    });
     await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
     const changed = await waitForVersion(scenario.backend, 11);
     expect(changed.answeredSummaries.map((summary) => summary.answerKey)).toEqual([
@@ -275,6 +360,261 @@ test("reinstalls the live Card after a stale-version rejection", async ({ playwr
     );
     await expect.poll(async () => (await scenario.backend.card())?.version).toBe(staleCard.version);
     expect((await scenario.backend.answers()).map((row) => row.answer_key)).toEqual(["goal"]);
+  } finally {
+    await close(scenario);
+  }
+});
+
+for (const appearance of [
+  { name: "wide-light", width: 1180, height: 820, colorScheme: "light" },
+  { name: "wide-dark", width: 1180, height: 820, colorScheme: "dark" },
+  { name: "compact-light", width: 760, height: 600, colorScheme: "light" },
+  { name: "compact-dark", width: 760, height: 600, colorScheme: "dark" },
+] as const) {
+  test(`completes a disconnected manual Event with editor cancellation and relaunch in ${appearance.name}`, async ({
+    playwright,
+  }) => {
+    const scenario = await launch(playwright, { ...appearance, coexistence: true });
+    const question = (key: string) =>
+      scenario.page.locator(`[data-parity="question.card"][data-question="${key}"]`);
+    const capture = async (name: string) => {
+      await expect(scenario.page.locator("html")).toHaveAttribute(
+        "data-theme",
+        appearance.colorScheme,
+      );
+      const path = test.info().outputPath(`${name}.png`);
+      await scenario.fixture.screenshot(path);
+      await test.info().attach(name, { path, contentType: "image/png" });
+      expect(
+        await scenario.page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+      expect(
+        await scenario.page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
+      ).toBe(true);
+    };
+    const cancelAuthoredEdit = async (title: string, field: string, next: string) => {
+      const before = await scenario.backend.inspect();
+      const answers = await scenario.backend.answers();
+      await scenario.page.getByRole("button", { name: `Edit ${title}`, exact: true }).click();
+      const editor = scenario.page.locator(field);
+      await expect(editor).toBeFocused();
+      await editor.fill("Unsaved change");
+      await expect(scenario.page.locator('[data-parity="composer"]')).toHaveCount(0);
+      await capture(`edit-${title}`);
+      if (appearance.width === 760 && title === "Goal") {
+        const cdp = await scenario.page.context().newCDPSession(scenario.page);
+        await cdp.send("Emulation.clearDeviceMetricsOverride");
+        const originalSize = await scenario.fixture.evaluateMain<readonly [number, number]>(`
+          const { BrowserWindow } = process.getBuiltinModule("module").createRequire(process.cwd() + "/")("electron");
+          const window = BrowserWindow.getAllWindows()[0];
+          if (!window) throw new Error("Missing fixture window");
+          const size = window.getContentSize();
+          window.setContentSize(${appearance.width}, ${appearance.height});
+          window.webContents.setZoomFactor(1.25);
+          return size;
+        `);
+        try {
+          await expect.poll(() => scenario.page.evaluate(() => window.innerWidth)).toBe(Math.round(appearance.width / 1.25));
+          await scenario.page.getByRole("button", { name: "Back to answers", exact: true }).focus();
+          await expect(
+            scenario.page.getByRole("button", { name: "Back to answers", exact: true }),
+          ).toBeInViewport();
+          await capture("manual-editor-125-percent");
+        } finally {
+          await scenario.fixture.evaluateMain<void>(`
+            const { BrowserWindow } = process.getBuiltinModule("module").createRequire(process.cwd() + "/")("electron");
+            const window = BrowserWindow.getAllWindows()[0];
+            if (!window) throw new Error("Missing fixture window");
+            window.webContents.setZoomFactor(1);
+            window.setContentSize(${originalSize[0]}, ${originalSize[1]});
+          `);
+          await cdp.detach();
+          await scenario.fixture.setViewport(appearance.width, appearance.height);
+        }
+      }
+      const cancel = scenario.page.getByRole("button", { name: "Back to answers", exact: true });
+      await cancel.focus();
+      await scenario.page.keyboard.press("Enter");
+      await expect(question(next).getByRole("heading")).toBeFocused();
+      await expect(scenario.page.locator('[data-parity="composer.textarea"]')).toBeDisabled();
+      expect(await scenario.backend.inspect()).toEqual(before);
+      expect(await scenario.backend.answers()).toEqual(answers);
+    };
+    try {
+      await scenario.page.getByRole("button", { name: "Start a Plan", exact: true }).click();
+      await waitForVersion(scenario.backend, 1);
+      await expect(question("goal").getByRole("heading")).toBeFocused();
+      await capture("goal");
+      await scenario.page.locator('[data-answer="event-not-listed"]').click();
+      await expect(
+        scenario.page.getByRole("button", { name: "Continue", exact: true }),
+      ).toBeDisabled();
+      await scenario.page
+        .getByRole("textbox", { name: "Event name", exact: true })
+        .fill("Autumn ride");
+      await expect(
+        scenario.page.getByRole("button", { name: "Continue", exact: true }),
+      ).toBeDisabled();
+      await scenario.page.getByLabel("Event date", { exact: true }).fill("1998-11-08");
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForVersion(scenario.backend, 2);
+      await cancelAuthoredEdit("Goal", '[data-parity="custom.textarea"]', "schedule-mode");
+      await scenario.page.getByRole("button", { name: "Edit Goal", exact: true }).click();
+      await scenario.page.keyboard.press("Escape");
+      await expect(
+        scenario.page.getByRole("button", { name: "Event not listed", exact: true }),
+      ).toBeFocused();
+      await scenario.page.getByRole("button", { name: "Back to answers", exact: true }).click();
+      await choose(scenario.page, scenario.backend, 3, "fixed");
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await expect(scenario.page.getByRole("alert").first()).toBeVisible();
+      expect((await requireCard(scenario.backend)).version).toBe(3);
+      await scenario.page.locator('[data-answer="hours-8"]').click();
+      await scenario.page.locator('[data-parity="availability.longest"]').fill("2");
+      for (const day of [2, 4, 6])
+        await scenario.page.locator(`input[name="usableWeekdays"][value="${day}"]`).check();
+      await capture("fixed-availability");
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForVersion(scenario.backend, 4);
+      await scenario.page.locator('[data-answer="earliest"]').click();
+      await scenario.page.getByLabel("Earliest start date", { exact: true }).fill("1998-09-07");
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForVersion(scenario.backend, 5);
+      await scenario.page.locator('[data-parity="choice.custom"]').click();
+      await scenario.page
+        .locator('[data-parity="custom.textarea"]')
+        .fill("Away each second Friday");
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForVersion(scenario.backend, 6);
+      await cancelAuthoredEdit("Commitments", '[data-parity="custom.textarea"]', "baseline");
+      await relaunch(scenario, playwright);
+      await expect(question("baseline")).toBeVisible();
+      await choose(scenario.page, scenario.backend, 7, "occasional");
+      for (const label of ["Finish comfortably", "Finish fast", "Race for a result"]) {
+        await expect(scenario.page.getByRole("button", { name: label, exact: true })).toBeVisible();
+      }
+      await scenario.page.locator('[data-parity="choice.custom"]').click();
+      await scenario.page
+        .locator('[data-parity="custom.textarea"]')
+        .fill("Finish the final climb steadily");
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForVersion(scenario.backend, 8);
+      await cancelAuthoredEdit("Success", '[data-parity="custom.textarea"]', "restriction");
+      await question("restriction").getByRole("heading").focus();
+      await scenario.page.keyboard.press("Escape");
+      await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeEnabled();
+      await scenario.page.getByRole("button", { name: "Edit Success", exact: true }).click();
+      await scenario.page.locator('[data-parity="custom.textarea"]').fill("Another unsaved change");
+      await scenario.page.getByRole("button", { name: "Back to answers", exact: true }).click();
+      await expect(question("restriction")).toHaveCount(0);
+      await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeEnabled();
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await scenario.page.locator('[data-answer="max-duration"]').click();
+      await scenario.page.getByLabel("Maximum duration hours", { exact: true }).fill("1.5");
+      await scenario.page.getByLabel("Optional end date", { exact: true }).fill("1998-11-01");
+      await capture("restriction");
+      if (appearance.width === 760) {
+        await scenario.fixture.setViewport(720, 600);
+        await capture("restriction-720");
+      }
+      await scenario.page.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForVersion(scenario.backend, 9);
+      const card = await requireCard(scenario.backend);
+      expect(card).toMatchObject({ readiness: "ready", openQuestion: null });
+      const answers = await scenario.backend.answers();
+      expect(answers.map((row) => row.answer_key)).toEqual([
+        "goal",
+        "schedule-mode",
+        "availability",
+        "start-timing",
+        "commitments",
+        "baseline",
+        "success",
+        "restriction",
+      ]);
+      expect(JSON.parse(answers.at(-1)?.value_json ?? "null")).toEqual({
+        answer: {
+          kind: "restriction",
+          restriction: { kind: "max-duration", hours: 1.5, endDate: "1998-11-01" },
+        },
+        source: { kind: "athlete" },
+      });
+      await relaunch(scenario, playwright);
+      await expect(scenario.page.locator('[data-parity="question.card"]')).toHaveCount(0);
+      expect(await requireCard(scenario.backend)).toEqual(card);
+      expect(await scenario.backend.answers()).toEqual(answers);
+      await expect(
+        scenario.page.getByText(
+          "The essentials are complete. Draft preview arrives in a later update.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+    } finally {
+      await close(scenario);
+    }
+  });
+}
+
+test("preserves ordinary Chat, Past chats, and active Plan editing during creation", async ({
+  playwright,
+}) => {
+  const scenario = await launch(playwright, {
+    width: 1180,
+    height: 820,
+    colorScheme: "light",
+    coexistence: true,
+  });
+  const navigation = scenario.page.getByRole("navigation", { name: "Main navigation" });
+  const composer = scenario.page.getByRole("combobox", { name: "Message your coach" });
+  const historyText = "Keep Sunday easy if recovery slips.";
+  const readPlanFacts = async () => {
+    const frames = await scenario.backend.script.onRequest({ method: "getPlanState", params: {} });
+    const result = GetPlanStateRpcResultSchema.parse(JSON.parse(frames[0] ?? "null"));
+    if (result.status !== "ready") throw new TypeError("Active Plan is unavailable");
+    const state = { ...result.state, data: { ...result.state.data } };
+    delete state.data.returnFocusId;
+    return state;
+  };
+  try {
+    const originalPlan = await readPlanFacts();
+    await expect(scenario.page.getByText(historyText, { exact: true })).toBeVisible();
+    await composer.fill("Keep this ordinary Chat draft.");
+    await startFitnessGoal(scenario);
+    await expect(composer).toBeDisabled();
+    await expect(composer).toHaveValue("Keep this ordinary Chat draft.");
+    await scenario.page.getByRole("button", { name: "Later", exact: true }).click();
+    await expect(composer).toBeEnabled();
+    await expect(composer).toHaveValue("Keep this ordinary Chat draft.");
+    const creation = await scenario.backend.inspect();
+    await navigation.getByRole("button", { name: "Past chats", exact: true }).click();
+    await scenario.page.locator("button.archive-entry").click();
+    await expect(scenario.page.getByText(historyText, { exact: true }).last()).toBeVisible();
+    await expect(
+      scenario.page.getByRole("main", { name: "Past chats" }).getByRole("combobox"),
+    ).toHaveCount(0);
+    await navigation.getByRole("button", { name: "Chat", exact: true }).click();
+    await expect(composer).toHaveValue("Keep this ordinary Chat draft.");
+    await navigation.getByRole("button", { name: "Plan", exact: true }).click();
+    await scenario.page.getByRole("button", { name: "Plan history", exact: true }).click();
+    await scenario.page.getByRole("button", { name: "Open settings", exact: true }).click();
+    await expect(
+      scenario.page.getByRole("heading", { name: "Plan settings", exact: true }),
+    ).toBeVisible();
+    await expect(
+      scenario.page.getByRole("switch", { name: "Weekly review", exact: true }),
+    ).toBeEnabled();
+    await scenario.page.getByRole("button", { name: "Back to history", exact: true }).click();
+    await scenario.page.getByRole("button", { name: "Back to Plan", exact: true }).click();
+    expect(await readPlanFacts()).toEqual(originalPlan);
+    await navigation.getByRole("button", { name: "Chat", exact: true }).click();
+    expect(await scenario.backend.inspect()).toEqual(creation);
+    await expect(composer).toHaveValue("Keep this ordinary Chat draft.");
+    await relaunch(scenario, playwright);
+    await expect(scenario.page.getByText(historyText, { exact: true })).toBeVisible();
+    expect(await scenario.backend.inspect()).toEqual(creation);
+    expect(await readPlanFacts()).toEqual(originalPlan);
   } finally {
     await close(scenario);
   }

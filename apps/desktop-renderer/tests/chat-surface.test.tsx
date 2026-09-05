@@ -104,10 +104,7 @@ type ScheduleModeQuestion = Extract<
   PlanCreationOpenQuestion,
   { readonly kind: "schedule-mode-question" }
 >;
-type BaselineQuestion = Extract<
-  PlanCreationOpenQuestion,
-  { readonly kind: "baseline-question" }
->;
+type BaselineQuestion = Extract<PlanCreationOpenQuestion, { readonly kind: "baseline-question" }>;
 type RestrictionQuestion = Extract<
   PlanCreationOpenQuestion,
   { readonly kind: "restriction-question" }
@@ -2143,21 +2140,18 @@ describe("chat surface", () => {
       ).not.toBe(0);
       expect(heading.closest('[data-slot="card"]')).toHaveClass("min-w-0");
       setChat({
-        planCreation: planCreationModel(
-          fitnessSuccessQuestion("What would success mean?"),
-          {
-            version: 2,
-            answeredSummaries: [
-              {
-                answerKey: "goal",
-                title: "Goal",
-                detail: "Build steady power",
-                question: goalQuestion("What are you preparing for?"),
-                answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
-              },
-            ],
-          },
-        ),
+        planCreation: planCreationModel(fitnessSuccessQuestion("What would success mean?"), {
+          version: 2,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Build steady power",
+              question: goalQuestion("What are you preparing for?"),
+              answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
+            },
+          ],
+        }),
       });
       expect(screen.queryByRole("textbox", { name: "Success meaning" })).toBeNull();
       await userEvent.click(screen.getByRole("button", { name: "Something else" }));
@@ -2199,24 +2193,21 @@ describe("chat surface", () => {
       render(<Harness />);
       setChat({
         planCreationLoaded: true,
-        planCreation: planCreationModel(
-          eventSuccessQuestion("What would success mean?"),
-          {
-            version: 2,
-            answeredSummaries: [
-              {
-                answerKey: "goal",
-                title: "Goal",
-                detail: "Highland Tour · 1998-10-18",
-                question: goalQuestion("What are you preparing for?"),
-                answer: {
-                  kind: "goal",
-                  goal: { kind: "event-manual", name: "Highland Tour", date: "1998-10-18" },
-                },
+        planCreation: planCreationModel(eventSuccessQuestion("What would success mean?"), {
+          version: 2,
+          answeredSummaries: [
+            {
+              answerKey: "goal",
+              title: "Goal",
+              detail: "Highland Tour · 1998-10-18",
+              question: goalQuestion("What are you preparing for?"),
+              answer: {
+                kind: "goal",
+                goal: { kind: "event-manual", name: "Highland Tour", date: "1998-10-18" },
               },
-            ],
-          },
-        ),
+            },
+          ],
+        }),
       });
       const options = [
         ["Finish comfortably", "finish-comfortably"],
@@ -2490,7 +2481,7 @@ describe("chat surface", () => {
         "aria-pressed",
         "true",
       );
-      await user.click(screen.getByRole("button", { name: "Back" }));
+      await user.click(screen.getByRole("button", { name: "Back to answers" }));
       const openHeading = screen.getByRole("heading", { name: "When could this Plan start?" });
       await waitFor(() => expect(openHeading).toHaveFocus());
       expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
@@ -2641,9 +2632,7 @@ describe("chat surface", () => {
               answerKey: "success",
               title: "Success",
               detail: "Ride steadily",
-              question: fitnessSuccessQuestion(
-                "What would success mean for this Fitness Goal?",
-              ),
+              question: fitnessSuccessQuestion("What would success mean for this Fitness Goal?"),
               answer: {
                 kind: "success",
                 success: { kind: "authored", text: "Ride steadily" },
@@ -2683,7 +2672,15 @@ describe("chat surface", () => {
       expect(screen.getByRole("textbox", { name: "Success meaning" })).toHaveValue("Ride steadily");
       await user.click(screen.getByRole("button", { name: "Back" }));
       expect(screen.getByRole("button", { name: "Something else" })).toBeVisible();
-      await user.click(screen.getByRole("button", { name: "Back" }));
+      await user.click(screen.getByRole("button", { name: "Back to answers" }));
+      await user.click(screen.getByRole("button", { name: "Edit Success" }));
+      await user.clear(screen.getByRole("textbox", { name: "Success meaning" }));
+      await user.type(screen.getByRole("textbox", { name: "Success meaning" }), "Unsaved success");
+      await user.click(screen.getByRole("button", { name: "Back to answers" }));
+      expect(actions.answerPlanCreation).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("heading", { name: "Should this Plan use a Fixed or Flexible Schedule?" }),
+      ).toBeVisible();
 
       await user.click(screen.getByRole("button", { name: "Edit Start timing" }));
       const startDate = screen.getByLabelText("Earliest start date");
@@ -2699,9 +2696,7 @@ describe("chat surface", () => {
 
     it("pauses with Later or Escape and Continue restores the focused Card", async () => {
       const user = userEvent.setup();
-      const model = planCreationModel(
-        planLengthQuestion("How long should this Fitness Plan be?"),
-      );
+      const model = planCreationModel(planLengthQuestion("How long should this Fitness Plan be?"));
       vi.mocked(actions.pausePlanCreation).mockImplementation(() => {
         setChat({ planCreationPaused: true, sendDisabled: false });
       });
@@ -2736,14 +2731,8 @@ describe("chat surface", () => {
     });
 
     it.each([
-      [
-        "Goal",
-        goalQuestion("What do you want this Plan to prepare you for?"),
-      ],
-      [
-        "Success",
-        fitnessSuccessQuestion("What would success mean for this Fitness Goal?"),
-      ],
+      ["Goal", goalQuestion("What do you want this Plan to prepare you for?")],
+      ["Success", fitnessSuccessQuestion("What would success mean for this Fitness Goal?")],
       [
         "Commitments",
         commitmentsQuestion(
@@ -2772,9 +2761,7 @@ describe("chat surface", () => {
 
     it("lets Escape close command suggestions before it pauses the Card", async () => {
       const user = userEvent.setup();
-      const model = planCreationModel(
-        planLengthQuestion("How long should this Fitness Plan be?"),
-      );
+      const model = planCreationModel(planLengthQuestion("How long should this Fitness Plan be?"));
       setChat({ planCreationLoaded: true, planCreation: model, sendDisabled: true });
       render(<Harness />);
 
@@ -2844,24 +2831,21 @@ describe("chat surface", () => {
       useEnduragentStore.getState().bindChatActions(actions);
       render(<Harness />);
       const successQuestion = fitnessSuccessQuestion("What would success mean?");
-      const model = planCreationModel(
-        successQuestion,
-        {
-          version: 2,
-          answeredSummaries: [
-            {
-              answerKey: "goal" as const,
-              title: "Goal",
-              detail: "Build steady power",
-              question: goalQuestion("What are you preparing for?"),
-              answer: {
-                kind: "goal" as const,
-                goal: { kind: "fitness" as const, outcome: "Build steady power" },
-              },
+      const model = planCreationModel(successQuestion, {
+        version: 2,
+        answeredSummaries: [
+          {
+            answerKey: "goal" as const,
+            title: "Goal",
+            detail: "Build steady power",
+            question: goalQuestion("What are you preparing for?"),
+            answer: {
+              kind: "goal" as const,
+              goal: { kind: "fitness" as const, outcome: "Build steady power" },
             },
-          ],
-        },
-      );
+          },
+        ],
+      });
       setChat({
         planCreation: model,
         planCreationLoaded: true,

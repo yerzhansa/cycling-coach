@@ -187,7 +187,7 @@ export function ChatView(): ReactElement {
       <div
         className={`chat-layout row-start-2 grid min-h-0 min-w-0 ${contextOpen && !compact ? "grid-cols-[minmax(0,1fr)_300px]" : "grid-cols-[minmax(0,1fr)]"}`}
       >
-        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]">
+        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] has-[[data-parity='question.card']]:grid-rows-[minmax(calc(var(--ctl-h-lg)*4),1fr)_minmax(0,auto)]">
           <main
             className="conversation overflow-auto pt-[calc(var(--inset)*4)] pb-[calc(var(--inset)*3)] [overflow-anchor:none] max-[760px]:pt-[calc(var(--inset)*3)]"
             aria-label="Coaching conversation"
