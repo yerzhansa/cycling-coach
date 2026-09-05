@@ -4,6 +4,12 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { preferencesContract } from "../../../tools/ui-verification/contracts.js";
+import {
+  checkStructure,
+  probeExpression,
+  type StructuralSnapshot,
+} from "../../../tools/ui-verification/structure.js";
 import { isDesktopRendererUrl } from "../src/main/renderer-navigation.js";
 import {
   launchDesktopFixture,
@@ -2650,6 +2656,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       retentionWarningVisible: true,
       paletteSwatchesFillButtons: true,
     });
+    const preferences = await fixture.evaluate<StructuralSnapshot>(
+      `return ${probeExpression(preferencesContract.anchors)}`,
+    );
+    expect(checkStructure(preferences, preferencesContract)).toEqual([]);
     const runtimeReads = calls.filter((call) => call.method === "getRuntimeConfig");
     expect(runtimeReads.length).toBeGreaterThan(runtimeReadsBeforeSettings);
     expect(runtimeReads).toEqual(

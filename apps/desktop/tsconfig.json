@@ -13,6 +13,11 @@
     "resolveJsonModule": true,
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src", "electron.vite.config.ts", "playwright.e2e.config.ts"],
+  "include": [
+    "src",
+    "electron.vite.config.ts",
+    "playwright.e2e.config.ts",
+    "playwright.previews.config.ts"
+  ],
   "exclude": ["node_modules", "out", "dist"]
 }

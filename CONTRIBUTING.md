@@ -81,6 +81,14 @@ docs(readme): document the /whatsnew command
 - **Never run fake-timer tests under `isolate: false`.** Shared fake-timer state across files corrupts unrelated suites. The root `vitest.config.ts` pins `pool: "forks"` + `isolate: true` precisely so each file gets its own process and clock; do not weaken that to `isolate: false`.
 - **Prefer fake-timer or injected-clock determinism over wall-clock sleeps.** Tests that assert on elapsed time (mutex acquire timeouts, run-sync phase ordering) drive time through `vi.advanceTimersByTimeAsync` or an injected clock seam rather than racing a real `setTimeout`, so they cannot flake on a slow runner.
 
+## Desktop UI previews
+
+Run `pnpm storybook` to inspect production components with fictional fixtures at `http://127.0.0.1:5187`. Stories belong in `apps/desktop-renderer/preview/` and must import their production owners. Register page scenarios in `catalogue` and component scenarios in `coverage` in `preview/catalogue.ts`; keep unavailable features pending with their delivery dependency.
+
+Run `pnpm check:ui-structure` for structural checker unit tests. Stop the development preview, then run `pnpm check:ui-previews` to build Storybook and check the wide/compact, light/dark browser matrix. This covers representative pages and selected controls; affected desktop journeys still require application QA.
+
+Screenshot verification uses the platform and browser pinned in `apps/desktop/tests/e2e/previews/baseline.json`. To change reviewed captures, choose a new baseline version, build Storybook, capture with Playwright’s `--update-snapshots=all`, inspect every image, and record the source identity and PNG hashes in `baselines/<version>/manifest.json`. Keep prior versions intact. A sealed version refuses recapture, and normal verification rejects altered or missing reviewed images. Regression-reference review does not replace feature acceptance.
+
 ## Trademark hygiene
 
 The Reference submodule (`packages/core/src/reference/`) ports from an MIT-licensed upstream; the full attribution (author, copyright, license text, and source link) lives in [`NOTICE.md`](./NOTICE.md). That upstream was authored against TrainingPeaks vocabulary; this codebase uses [intervals.icu](https://intervals.icu)'s plain-English alternatives throughout. **PRs that introduce the forbidden tokens in Reference source or docs are rejected by the lint.**

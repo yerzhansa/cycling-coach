@@ -228,6 +228,23 @@ describe("formatCliReply", () => {
 });
 
 describe("_promptProposalConfirm", () => {
+  it("prints a refusal from the real gate without claiming success", async () => {
+    const { ConfirmationGate } = await import("../src/agent/confirmation-gate.js");
+    const gate = new ConfirmationGate();
+    gate.propose("cli", "Delete workout", async () => ({
+      error: "not_a_workout",
+      details: "This entry is no longer a workout.",
+    }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { _promptProposalConfirm } = await import("../src/run-binary.js");
+    await _promptProposalConfirm(
+      { question: (_prompt, answer) => answer("yes") },
+      { confirmations: gate },
+    );
+    expect(log).toHaveBeenCalledWith("Nothing was changed — This entry is no longer a workout.");
+    expect(gate.peek("cli")).toBeUndefined();
+  });
+
   it.each(["y", "yes", " Y ", "YeS\n"])("confirms explicit yes answer %j", async (answer) => {
     const confirm = vi.fn(async () => ({
       status: "executed" as const,

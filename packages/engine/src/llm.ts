@@ -316,12 +316,16 @@ export class LLM {
       ];
     }
 
+    const astra = this.config.llm.provider === "openai" && this.config.llm.model === "gpt-6-astra";
     const base = {
       model: this.aiSdkModel,
+      ...(astra ? { providerOptions: { openai: { forceReasoning: true } } } : {}),
       system,
       tools: opts.tools,
       stopWhen: opts.stopWhen,
-      maxOutputTokens: opts.maxOutputTokens,
+      maxOutputTokens: astra
+        ? Math.min(opts.maxOutputTokens ?? 128_000, 128_000)
+        : opts.maxOutputTokens,
       maxRetries: 0,
       abortSignal: opts.signal,
       experimental_context: opts.context,
@@ -355,6 +359,7 @@ export class LLM {
             });
             break;
           case "finish":
+            if (astra && part.finishReason === "error") throw new Error("OpenAI response failed.");
             break;
           case "error":
             throw part.error;
@@ -397,6 +402,7 @@ export class LLM {
         ? await generateText({ ...base, prompt: opts.prompt })
         : await generateText({ ...base, messages });
 
+    if (astra && result.finishReason === "error") throw new Error("OpenAI response failed.");
     return {
       text: result.text,
       toolCalls: result.toolCalls as GenerateResult["toolCalls"],

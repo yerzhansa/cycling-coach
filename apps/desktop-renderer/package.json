@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "test": "vitest run"
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.preview.json",
+    "test": "vitest run",
+    "storybook": "storybook dev --host 127.0.0.1 -p 5187 --no-open --disable-telemetry",
+    "build-storybook": "storybook build --output-dir dist-storybook --disable-telemetry"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -24,6 +26,8 @@
     "zustand": "5.0.14"
   },
   "devDependencies": {
+    "@storybook/addon-docs": "10.6.0",
+    "@storybook/react-vite": "10.6.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
@@ -32,6 +36,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.2.0",
     "jsdom": "30.0.0",
+    "storybook": "10.6.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.2",
     "vite": "7.3.6",

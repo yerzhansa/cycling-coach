@@ -851,6 +851,7 @@ describe("local coach composition", () => {
         undefined,
         {
           ...base,
+          contextWindowTokens: 120_000,
           llm: {
             provider: "openai-codex",
             model: "gpt-5.4",
@@ -2506,16 +2507,22 @@ describe("local coach composition", () => {
         return generation(`reply-${generateCalls}`);
       },
     });
-    const lifecycle = await compose(home, {
-      bootstrap: async () => reference(),
-      createRuntime: () => runtime(),
-      createRepository: () => ({
-        insertIfAbsent: async () => false,
-        readCurrent: async () => undefined,
-      }),
-      createResolver: () => missingResolver(),
-      modelTransportDecorator: decorator,
-    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        modelTransportDecorator: decorator,
+      },
+      fakeContext(home),
+      undefined,
+      { ...config(home), contextWindowTokens: 120_000 },
+    );
     const completion: string[] = [];
     const first = lifecycle.engine.chat({ chatId: "same", message: "first" }).then((value) => {
       completion.push("first");
