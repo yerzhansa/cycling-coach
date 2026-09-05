@@ -2477,7 +2477,7 @@ export async function runEnduragent(
     }
 
     if (invocation.kind === "self-test") {
-      return runSelfTestInvocation(input, resolvedDependencies);
+      return await runSelfTestInvocation(input, resolvedDependencies);
     }
 
     if (invocation.kind === "verb") {

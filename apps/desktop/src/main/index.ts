@@ -1,8 +1,8 @@
+import "./keychain-binding-probe-deprecation.js";
 import {
   createDesktopOAuthCredentialOwner,
   readDesktopOAuthProfileName,
 } from "./oauth-credential-owner.js";
-import "./keychain-binding-probe-deprecation.js";
 import { bindDevelopmentUserData } from "./development-user-data.js";
 import { bindWindowsUserData } from "./windows-user-data.js";
 import {
