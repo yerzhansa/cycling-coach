@@ -518,7 +518,7 @@ export async function summarizeDroppedMessages(params: {
   const unsummarized: ModelMessage[] = [];
   let lastError: unknown;
 
-  for (const chunk of chunks) {
+  for (const [index, chunk] of chunks.entries()) {
     const transcript = formatTranscript(chunk);
     const carriedSummary = summary ?? previousSummary;
 
@@ -534,13 +534,14 @@ export async function summarizeDroppedMessages(params: {
       summaryProvenance = unionProvenance(summaryProvenance, provenanceOfMessages(chunk));
     } catch (err) {
       lastError = err;
-      unsummarized.push(...chunk);
+      unsummarized.push(...chunks.slice(index).flat());
       console.warn("Dropped message summarization LLM call failed, using fallback", err);
+      break;
     }
   }
 
   if (summary === undefined) {
-    throw new Error("Dropped message summarization failed for every chunk", {
+    throw new Error("Dropped message summarization failed before any chunk was summarized", {
       cause: lastError,
     });
   }
@@ -603,7 +604,8 @@ export async function summarizeInStages(params: {
 
   // Thread previousSummary through chunk loop
   let summary = previousSummary;
-  for (const chunk of chunks) {
+  const unsummarized: ModelMessage[] = [];
+  for (const [index, chunk] of chunks.entries()) {
     const transcript = formatTranscript(chunk);
 
     try {
@@ -617,13 +619,21 @@ export async function summarizeInStages(params: {
       summary = text;
       summaryProvenance = unionProvenance(summaryProvenance, provenanceOfMessages(chunk));
     } catch (err) {
-      console.warn("Staged summarization chunk failed; continuing with carried summary", err);
+      unsummarized.push(...chunks.slice(index).flat());
+      console.warn("Staged summarization chunk failed; retaining original messages", err);
+      break;
     }
   }
 
-  if (summary === undefined) {
-    console.warn("Staged summarization produced no summary; dropping oldest messages without one");
-    return { messages: [...recent] };
+  if (summary === undefined || unsummarized.length === toSummarize.length) {
+    return {
+      messages: [
+        ...(previousSummary === undefined
+          ? []
+          : [makeSummaryMessage(previousSummary, previousSummaryProvenance ?? UNKNOWN_PROVENANCE)]),
+        ...messages,
+      ],
+    };
   }
 
   const finalSummary = await finalizeSummary({
@@ -636,7 +646,7 @@ export async function summarizeInStages(params: {
   });
   const durableProvenance = summaryProvenance ?? UNKNOWN_PROVENANCE;
   return {
-    messages: [makeSummaryMessage(finalSummary, durableProvenance), ...recent],
+    messages: [makeSummaryMessage(finalSummary, durableProvenance), ...unsummarized, ...recent],
     summary: finalSummary,
     summaryProvenance: durableProvenance,
   };
