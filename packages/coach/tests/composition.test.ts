@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2348,6 +2348,274 @@ describe("local coach composition", () => {
       }
     },
   );
+
+  it("discards Plan Creation through real composition while preserving stored Plans and Chat", async () => {
+    const home = await freshHome();
+    await mkdir(home.storeDir, { recursive: true });
+    const databasePath = join(home.storeDir, "store.db");
+    let store = openSqliteStorage(databasePath);
+    stores.push(store);
+    await runMigrations(store, MIGRATIONS);
+    const instant = Date.UTC(1998, 6, 13, 12);
+    for (const [id, status] of [
+      ["0000000000000000000000000A", "active"],
+      ["0000000000000000000000000B", "ended"],
+    ] as const) {
+      await createPlanRepository(store).replace(
+        {
+          id,
+          originId: null,
+          name: `${status} endurance Plan`,
+          primaryGoal: "Ride consistently",
+          startDateKey: 19980713,
+          targetDateKey: 19981004,
+          status,
+          kind: "full_plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          structureJson: "{}",
+          createdAtMs: instant,
+          updatedAtMs: instant,
+          deviceId: "fixture-device",
+          hlcPhysicalMs: instant,
+          hlcCounter: 0,
+        },
+        [],
+      );
+      await store.run(
+        `INSERT INTO planning_plan (plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES (?,?,1,1,?,?,?,?,?,'fixture-device',?,0)`,
+        [
+          id,
+          status === "active" ? "active" : "closed",
+          instant,
+          status === "active" ? null : instant,
+          status === "active" ? null : "stopped",
+          status === "active" ? null : "athlete",
+          instant,
+          instant,
+        ],
+      );
+    }
+    await store.run(
+      `INSERT INTO planned_workout (id,date_key,sport,structure_json,provenance,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000C',19980714,'cycling','{"durationMinutes":45}','manual','fixture-device',?,0)`,
+      [instant],
+    );
+    await store.run(
+      `INSERT INTO athlete_preference (id,preference_key,value_json,status,version,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000D','weekly-hours','8','active',1,?,?,'fixture-device',?,0)`,
+      [instant, instant, instant],
+    );
+    await store.run(
+      `INSERT INTO training_restriction (id,kind,status,version,start_date_key,end_date_key,confirmed_at_ms,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000E','no-hard-training','active',1,19980713,19980720,?,?,?,'fixture-device',?,0)`,
+      [instant, instant, instant, instant],
+    );
+    let engineInput: CreateCoachEngineInput | undefined;
+    const dependencies: LocalCoachCompositionDependencies = {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: (input) => {
+        engineInput = input;
+        return backend();
+      },
+      now: () => instant,
+    };
+    let lifecycle = await compose(home, dependencies, {
+      home,
+      store,
+      listener: inertWriterProtocolListener,
+    });
+    try {
+      if (engineInput === undefined) throw new TypeError("Production Chat ports are unavailable");
+      const lineage = {
+        templateHash: "template",
+        assembledHash: "assembled",
+        provider: "synthetic",
+        model: "synthetic",
+        lineageVersion: "1",
+      };
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        for (const [turnId, completedAt] of [
+          ["archived-discard-turn", "1998-07-06T00:00:00.000Z"],
+          ["current-discard-turn", "1998-07-13T00:00:00.000Z"],
+        ] as const) {
+          vi.setSystemTime(completedAt);
+          engineInput.ports.chatStore.appendTurn("desktop", turnId, `coach-${turnId}`, lineage);
+          engineInput.ports.transcriptWriter.appendCompletedTurn({
+            chatId: "desktop",
+            turnId,
+            completedAt,
+            athleteText: turnId,
+            coachText: `coach-${turnId}`,
+          });
+          if (turnId === "archived-discard-turn")
+            engineInput.ports.chatStore.resetConversation({
+              chatId: "desktop",
+              boundaryAt: "1998-07-06T00:00:01.000Z",
+              reason: "explicit-reset",
+            });
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+      const storedChat = async () => {
+        const result: Record<string, string> = {};
+        for (const directory of ["sessions", "transcripts"]) {
+          for (const name of (await readdir(join(home.root, directory))).sort()) {
+            result[`${directory}/${name}`] = (
+              await readFile(join(home.root, directory, name))
+            ).toString("base64");
+          }
+        }
+        return result;
+      };
+      const unrelated = async () => ({
+        plans: await store.all("SELECT * FROM plan ORDER BY id"),
+        planningPlans: await store.all("SELECT * FROM planning_plan ORDER BY plan_id"),
+        schedule: await store.all("SELECT * FROM planned_workout ORDER BY id"),
+        preferences: await store.all("SELECT * FROM athlete_preference ORDER BY id"),
+        restrictions: await store.all("SELECT * FROM training_restriction ORDER BY id"),
+        chat: await storedChat(),
+      });
+      const archive = await lifecycle.operations.listArchivedConversations({});
+      expect(archive.conversations).toHaveLength(1);
+      const boundaryRef = archive.conversations[0]?.boundaryRef;
+      if (boundaryRef === undefined) throw new TypeError("Archived Chat is unavailable");
+      const archivedPage = await lifecycle.operations.getArchivedTranscriptPage({
+        boundaryRef,
+        cursor: null,
+        limit: 25,
+      });
+      const currentPage = await lifecycle.operations.getTranscriptPage({ cursor: null, limit: 25 });
+      expect(archivedPage.turns).toHaveLength(1);
+      expect(currentPage.turns).toHaveLength(1);
+      const before = await unrelated();
+      expect(before.plans).toHaveLength(2);
+      expect(before.planningPlans.map((row) => row.status)).toEqual(["active", "closed"]);
+      expect(before.schedule).toHaveLength(1);
+      expect(before.preferences).toHaveLength(1);
+      expect(before.restrictions).toHaveLength(1);
+      expect(Object.keys(before.chat).length).toBeGreaterThan(1);
+      const started = await lifecycle.operations["plan_creation.start"]({
+        commandId: "discard-start",
+      });
+      if (started.status !== "started") throw new TypeError("Plan Creation did not start");
+      const answered = await lifecycle.operations["plan_creation.answer"]({
+        commandId: "discard-goal",
+        creationId: started.planCreation.creationId,
+        expectedVersion: 1,
+        answer: { kind: "goal", goal: { kind: "fitness" } },
+      });
+      if (answered.status !== "answered") throw new TypeError("Goal was not accepted");
+      const request = {
+        commandId: "discard-confirm",
+        creationId: answered.planCreation.creationId,
+        expectedVersion: answered.planCreation.version,
+      };
+      const answers = await store.all("SELECT * FROM plan_creation_answer ORDER BY id");
+      const audit = await store.all(
+        "SELECT * FROM planning_command ORDER BY command_name,command_id",
+      );
+      expect(answers).toHaveLength(1);
+      expect(audit).toHaveLength(2);
+      const first = await lifecycle.operations["plan_creation.discard"](request);
+      expect(first).toEqual({ status: "discarded" });
+      expect(await unrelated()).toEqual(before);
+      expect(await store.all("SELECT * FROM plan_creation_answer ORDER BY id")).toEqual(answers);
+      expect(
+        await store.all(
+          "SELECT * FROM planning_command WHERE command_name != 'plan_creation.discard' ORDER BY command_name,command_id",
+        ),
+      ).toEqual(audit);
+      const terminal = await store.get(
+        "SELECT status,version,terminal_at_ms,updated_at_ms FROM plan_creation WHERE id=?",
+        [request.creationId],
+      );
+      expect(terminal).toEqual({
+        status: "discarded",
+        version: request.expectedVersion + 1,
+        terminal_at_ms: expect.any(Number),
+        updated_at_ms: expect.any(Number),
+      });
+      expect(terminal?.terminal_at_ms).toBe(terminal?.updated_at_ms);
+      expect(
+        await lifecycle.operations.listPlanningRequests?.({ chatId: "desktop" }),
+      ).toMatchObject({ planCreation: null });
+      await lifecycle.close();
+      await store.close();
+      stores.splice(stores.indexOf(store), 1);
+      store = openSqliteStorage(databasePath);
+      stores.push(store);
+      lifecycle = await compose(home, dependencies, {
+        home,
+        store,
+        listener: inertWriterProtocolListener,
+      });
+      expect(await unrelated()).toEqual(before);
+      expect(await lifecycle.operations.getTranscriptPage({ cursor: null, limit: 25 })).toEqual(
+        currentPage,
+      );
+      expect(await lifecycle.operations.listArchivedConversations({})).toEqual(archive);
+      expect(
+        await lifecycle.operations.getArchivedTranscriptPage({
+          boundaryRef,
+          cursor: null,
+          limit: 25,
+        }),
+      ).toEqual(archivedPage);
+      expect(
+        await lifecycle.operations.listPlanningRequests?.({ chatId: "desktop" }),
+      ).toMatchObject({ planCreation: null });
+      const fresh = await lifecycle.operations["plan_creation.start"]({
+        commandId: "discard-fresh",
+      });
+      if (fresh.status !== "started") throw new TypeError("Fresh creation did not start");
+      expect(fresh.planCreation.creationId).not.toBe(request.creationId);
+      const freshRows = await store.all("SELECT * FROM plan_creation ORDER BY id");
+      await expect(lifecycle.operations["plan_creation.discard"](request)).resolves.toEqual(first);
+      await expect(
+        lifecycle.operations["plan_creation.discard"]({
+          ...request,
+          expectedVersion: request.expectedVersion + 1,
+        }),
+      ).resolves.toMatchObject({
+        status: "rejected",
+        reason: "command-conflict",
+        planCreation: fresh.planCreation,
+      });
+      await expect(
+        lifecycle.operations["plan_creation.discard"]({ ...request, commandId: "discard-old" }),
+      ).resolves.toMatchObject({
+        status: "rejected",
+        reason: "no-unfinished-creation",
+        planCreation: fresh.planCreation,
+      });
+      await expect(
+        lifecycle.operations["plan_creation.discard"]({
+          commandId: "discard-stale",
+          creationId: fresh.planCreation.creationId,
+          expectedVersion: 2,
+        }),
+      ).resolves.toMatchObject({
+        status: "rejected",
+        reason: "stale-version",
+        planCreation: fresh.planCreation,
+      });
+      expect(await store.all("SELECT * FROM plan_creation ORDER BY id")).toEqual(freshRows);
+      expect(await store.all("SELECT * FROM plan_creation_answer ORDER BY id")).toEqual(answers);
+      expect(
+        await store.all(
+          "SELECT * FROM planning_command WHERE command_name='plan_creation.discard'",
+        ),
+      ).toHaveLength(1);
+      expect(await unrelated()).toEqual(before);
+    } finally {
+      await lifecycle.close();
+    }
+  });
 
   it("composes durable Plan intake through a structured Draft and activates locally before provider work", async () => {
     const home = await freshHome();

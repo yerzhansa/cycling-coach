@@ -223,6 +223,52 @@ describe("Plan Creation repository", () => {
     ).toBeUndefined();
   });
 
+  it("rolls back the terminal update when the discard ledger insert fails", async () => {
+    await start();
+    await answer();
+    const snapshot = async () => ({
+      creations: await store.all("SELECT * FROM plan_creation ORDER BY id"),
+      answers: await store.all("SELECT * FROM plan_creation_answer ORDER BY id"),
+      commands: await store.all("SELECT * FROM planning_command ORDER BY command_name,command_id"),
+    });
+    const before = await snapshot();
+    let terminalUpdateObserved = false;
+    const failingRepository = createPlanCreationRepository({
+      exec: (sql) => store.exec(sql),
+      async run(sql, params) {
+        if (sql.includes("INSERT INTO planning_command")) {
+          const row = await store.get("SELECT status,version FROM plan_creation WHERE id=?", [
+            creationId,
+          ]);
+          expect(row).toEqual({ status: "discarded", version: 3 });
+          terminalUpdateObserved = true;
+          throw new Error("Synthetic ledger write failure");
+        }
+        return store.run(sql, params);
+      },
+      get: (sql, params) => store.get(sql, params),
+      all: (sql, params) => store.all(sql, params),
+      close: () => store.close(),
+      transaction: (operation) => store.transaction(operation),
+    });
+    await expect(
+      failingRepository.discard({
+        command: stamp("discard", "c", 883_612_800_002),
+        creationId,
+        expectedVersion: 2,
+      }),
+    ).rejects.toThrow("Synthetic ledger write failure");
+    expect(terminalUpdateObserved).toBe(true);
+    expect(await snapshot()).toEqual(before);
+    await expect(discard(2)).resolves.toEqual({ outcome: "discarded" });
+    expect(await store.all("SELECT * FROM plan_creation_answer ORDER BY id")).toEqual(
+      before.answers,
+    );
+    expect(
+      await store.all("SELECT * FROM planning_command WHERE command_name='plan_creation.discard'"),
+    ).toHaveLength(1);
+  });
+
   it("replays a discard without touching a later creation", async () => {
     await start();
     const firstResult = await discard();

@@ -35,14 +35,16 @@ export function PlanCreationDiscardDialog(): ReactElement {
       }}
     >
       <DialogContent
-        className="w-[min(520px,calc(100vw-32px))] max-w-none gap-normal border-line p-5 shadow-elev-4 sm:max-w-none"
+        className="w-[min(520px,calc(100vw-32px))] max-w-none gap-0 border-line p-5 shadow-elev-4 sm:max-w-none"
         showCloseButton={false}
         initialFocus={keepCreating}
         finalFocus={false}
         aria-busy={busy ? "true" : undefined}
       >
         <DialogHeader className="gap-inset">
-          <DialogTitle className="m-0 text-lg font-bold">Discard this Plan creation?</DialogTitle>
+          <DialogTitle className="m-0 text-lg font-semibold">
+            Discard this Plan creation?
+          </DialogTitle>
           <DialogDescription className="m-0 leading-5">
             No Plan is created. Your active Plan, Schedule, training restrictions, closed Plans,
             saved preferences, and chat history are unchanged.
@@ -53,7 +55,7 @@ export function PlanCreationDiscardDialog(): ReactElement {
             {error}
           </p>
         )}
-        <DialogFooter className="mx-0 mt-ctl-px-lg mb-0 flex-row justify-end rounded-none border-0 bg-transparent p-0">
+        <DialogFooter className="mx-0 mt-row mb-0 flex-row justify-end rounded-none border-0 bg-transparent p-0">
           <DialogClose
             render={
               <Button
@@ -103,10 +105,7 @@ export function PlanCreationDock(props: {
   if (!loaded) return null;
   if (model === null) {
     return (
-      <div
-        className="flex min-w-0 justify-end gap-[calc(var(--inset)*0.75)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2"
-        data-parity="start.row"
-      >
+      <div className="flex min-w-0 justify-end gap-inset" data-parity="start.row">
         <Button
           ref={startButton}
           variant="outline"
@@ -150,12 +149,10 @@ export function PlanCreationConversation(props: {
   return <PlanCreationSummary model={props.model} />;
 }
 
-export function PlanCreationDiscardConsequence(props: {
-  readonly eventId: string;
-}): ReactElement {
+export function PlanCreationDiscardConsequence(props: { readonly eventId: string }): ReactElement {
   return (
     <article
-      className="grid gap-row rounded-card border border-line bg-surface p-3"
+      className="grid gap-[calc(var(--inset)/2)] rounded-ctl bg-surface-2 p-row"
       data-plan-creation-discard-event={props.eventId}
       data-parity="discarded.record"
     >

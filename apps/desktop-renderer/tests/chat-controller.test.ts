@@ -1919,6 +1919,49 @@ describe("chat controller", () => {
     });
   });
 
+  it("retries a failed discard with the identical command and no premature consequence", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    const discardPlanCreation = vi
+      .fn<(request: PlanCreationDiscardRpcParams) => Promise<PlanCreationDiscardRpcResult>>()
+      .mockRejectedValueOnce(new Error("Synthetic response loss"))
+      .mockResolvedValueOnce({ status: "discarded" });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+      discardPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    controller.openPlanCreationDiscard();
+    await controller.confirmPlanCreationDiscard();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      busy: false,
+      discardConfirmationOpen: true,
+      discardEvents: [],
+      error: expect.any(String),
+    });
+    const request = discardPlanCreation.mock.calls[0]?.[0];
+    expect(request).toMatchObject({ creationId: card.creationId, expectedVersion: card.version });
+    await controller.confirmPlanCreationDiscard();
+    expect(discardPlanCreation).toHaveBeenCalledTimes(2);
+    expect(discardPlanCreation.mock.calls[1]?.[0]).toEqual(request);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      busy: false,
+      discardConfirmationOpen: false,
+      error: null,
+      discardEvents: [{ eventId: card.creationId, afterMessageId: null }],
+      focusRequest: { target: "start" },
+    });
+  });
+
   it("cancels discard with focus restoration and keeps Chat gated only while open", async () => {
     const completeCard: PlanCreationCardModel = {
       creationId: "01J00000000000000000000000",

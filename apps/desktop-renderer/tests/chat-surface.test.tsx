@@ -2911,29 +2911,18 @@ describe("chat surface", () => {
 
     it("confirms discarding in a modal and restores the initiating control on Escape", async () => {
       const actions = stubActions();
-      const model = planCreationModel(
-        {
-          kind: "success-question",
-          prompt: "What would success mean?",
-          input: { kind: "authored", placeholder: "Describe success" },
-        },
-        {
-          version: 2,
-          answeredSummaries: [
-            {
-              answerKey: "goal",
-              title: "Goal",
-              detail: "Build steady power",
-              question: {
-                kind: "goal-question",
-                prompt: "What are you preparing for?",
-                candidates: [],
-              },
-              answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
-            },
-          ],
-        },
-      );
+      const model = planCreationModel(fitnessSuccessQuestion("What would success mean?"), {
+        version: 2,
+        answeredSummaries: [
+          {
+            answerKey: "goal",
+            title: "Goal",
+            detail: "Build steady power",
+            question: goalQuestion("What are you preparing for?"),
+            answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
+          },
+        ],
+      });
       actions.openPlanCreationDiscard = vi.fn(() => {
         setChat({
           planCreationDiscardConfirmationOpen: true,
@@ -2996,11 +2985,7 @@ describe("chat surface", () => {
             answerKey: "goal",
             title: "Goal",
             detail: "Build steady power",
-            question: {
-              kind: "goal-question",
-              prompt: "What are you preparing for?",
-              candidates: [],
-            },
+            question: goalQuestion("What are you preparing for?"),
             answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build steady power" } },
           },
         ],
@@ -3036,9 +3021,7 @@ describe("chat surface", () => {
         planCreationFocusRequest: { target: "start", revision: 1 },
         sendDisabled: false,
         inputDisabled: false,
-        timeline: [
-          { kind: "plan-creation-discard", eventId: "01J00000000000000000000000" },
-        ],
+        timeline: [{ kind: "plan-creation-discard", eventId: "01J00000000000000000000000" }],
       });
       const start = screen.getByRole("button", { name: "Start a Plan" });
       await waitFor(() => expect(start).toHaveFocus());
@@ -3057,35 +3040,21 @@ describe("chat surface", () => {
 
     it("closes discard confirmation and shows the returned Card after rejection", async () => {
       const actions = stubActions();
-      const model = planCreationModel(
-        {
-          kind: "plan-length-question",
-          prompt: "How long should this Fitness Plan be?",
-          options: [
-            { weeks: 4 as const, label: "4 weeks" },
-            { weeks: 8 as const, label: "8 weeks" },
-          ],
-        },
-        {
-          version: 3,
-          answeredSummaries: [
-            {
-              answerKey: "goal",
-              title: "Goal",
-              detail: "Build steady power",
-              question: {
-                kind: "goal-question",
-                prompt: "What are you preparing for?",
-                candidates: [],
-              },
-              answer: {
-                kind: "goal",
-                goal: { kind: "fitness", outcome: "Build steady power" },
-              },
+      const model = planCreationModel(planLengthQuestion("How long should this Fitness Plan be?"), {
+        version: 3,
+        answeredSummaries: [
+          {
+            answerKey: "goal",
+            title: "Goal",
+            detail: "Build steady power",
+            question: goalQuestion("What are you preparing for?"),
+            answer: {
+              kind: "goal",
+              goal: { kind: "fitness", outcome: "Build steady power" },
             },
-          ],
-        },
-      );
+          },
+        ],
+      });
       const returned = { ...model, version: 4 };
       actions.openPlanCreationDiscard = vi.fn(() => {
         setChat({

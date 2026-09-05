@@ -144,8 +144,10 @@ export class PlanCreationBackend {
         ) {
           return response(emptyAttachmentComposer);
         }
-        if (!coexistence && request.method === "getChatQueue") return response(this.queueSnapshot());
-        if (!coexistence && request.method === "enqueueChatMessage") return response(this.enqueue(request.params));
+        if (!coexistence && request.method === "getChatQueue")
+          return response(this.queueSnapshot());
+        if (!coexistence && request.method === "enqueueChatMessage")
+          return response(this.enqueue(request.params));
         if (!coexistence && request.method === "resumeChatQueue") return this.runScriptedCoach();
         if (!coexistence && request.method === "getTranscriptPage") {
           return response({
@@ -249,6 +251,7 @@ export class PlanCreationBackend {
       "SELECT id,creation_id,sequence,creation_version,answer_key,value_json FROM plan_creation_answer ORDER BY creation_id,sequence,id",
     );
     return {
+      commands: await store.all("SELECT * FROM planning_command ORDER BY command_name,command_id"),
       creations: creations.map((row) => ({
         id: String(row.id),
         status: String(row.status),
@@ -315,16 +318,26 @@ updated_at_ms,device_id,hlc_physical_ms,hlc_counter
 ) VALUES (?,'closed',2,1,875000000000,882000000000,'stopped','athlete',882000000000,'fixture-device',882000000000,0)`,
       [closedPlanId],
     );
+    await store.run(`INSERT INTO planned_workout (id,date_key,sport,structure_json,provenance,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000C',19980714,'cycling','{"durationMinutes":45}','manual','fixture-device',883200000000,0)`);
+    await store.run(`INSERT INTO athlete_preference (id,preference_key,value_json,status,version,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000D','weekly-hours','8','active',1,883200000000,883200000000,'fixture-device',883200000000,0)`);
+    await store.run(`INSERT INTO training_restriction (id,kind,status,version,start_date_key,end_date_key,confirmed_at_ms,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000E','no-hard-training','active',1,19980713,19980720,883200000000,883200000000,883200000000,'fixture-device',883200000000,0)`);
   }
 
   async inspectUnrelated() {
     const store = this.requireStore();
     return {
+      plans: await store.all("SELECT * FROM plan ORDER BY id"),
+      schedule: await store.all("SELECT * FROM planned_workout ORDER BY id"),
+      preferences: await store.all("SELECT * FROM athlete_preference ORDER BY id"),
+      restrictions: await store.all("SELECT * FROM training_restriction ORDER BY id"),
       activePlans: await store.all(
-        "SELECT plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,updated_at_ms FROM planning_plan WHERE status='active' ORDER BY plan_id",
+        "SELECT * FROM planning_plan WHERE status='active' ORDER BY plan_id",
       ),
       closedPlans: await store.all(
-        "SELECT plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,updated_at_ms FROM planning_plan WHERE status='closed' ORDER BY plan_id",
+        "SELECT * FROM planning_plan WHERE status='closed' ORDER BY plan_id",
       ),
     };
   }
