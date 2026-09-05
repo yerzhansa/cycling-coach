@@ -731,6 +731,16 @@ describe("Plan Creation contract", () => {
 
 const draft = {
   kind: "draft",
+  answeredSummaries: [
+    {
+      answerKey: "goal",
+      title: "Goal",
+      detail: "Build fitness",
+      source: { kind: "athlete" },
+      question: goalQuestion,
+      answer: { kind: "goal", goal: { kind: "fitness" } },
+    },
+  ],
   goal: { kind: "fitness", weeks: 4 },
   mode: "flexible",
   start: "1998-09-02",
@@ -780,6 +790,34 @@ describe("Plan Creation Draft contract", () => {
     expect(PlanCreationCardModelSchema.parse({ ...review, draftStale: true }).draftStale).toBe(
       true,
     );
+  });
+
+  it("requires valid answer summaries and limits them to sixteen", () => {
+    expect(PlanCreationDraftSchema.parse(draft).answeredSummaries).toEqual(draft.answeredSummaries);
+    expect(
+      PlanCreationDraftSchema.safeParse({ ...draft, answeredSummaries: undefined }).success,
+    ).toBe(false);
+    expect(PlanCreationDraftSchema.safeParse({ ...draft, answeredSummaries: [] }).success).toBe(
+      true,
+    );
+    expect(
+      PlanCreationDraftSchema.safeParse({
+        ...draft,
+        answeredSummaries: Array(16).fill(draft.answeredSummaries[0]),
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanCreationDraftSchema.safeParse({
+        ...draft,
+        answeredSummaries: Array(17).fill(draft.answeredSummaries[0]),
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanCreationDraftSchema.safeParse({
+        ...draft,
+        answeredSummaries: [{ ...draft.answeredSummaries[0], answerKey: "baseline" }],
+      }).success,
+    ).toBe(false);
   });
 
   it("requires a stored Draft for review and valid fingerprints and dates", () => {

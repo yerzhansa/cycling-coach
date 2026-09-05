@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { canonicalJson } from "@enduragent/kernel/archive";
 import { describe, expect, it, vi, onTestFinished } from "vitest";
 import {
   PlanCreationCardModelSchema,
@@ -911,7 +913,23 @@ describe("Plan Creation preview", () => {
         draft: { mode: "flexible", weeks: expect.any(Array), ftp: null },
       },
     });
+    if (first.status !== "previewed" || first.planCreation.draft === null)
+      throw new Error("Expected Draft");
+    const draft = first.planCreation.draft;
+    expect(draft.answeredSummaries).toEqual(card.answeredSummaries);
+    expect(draft.answeredSummaries).toEqual(first.planCreation.answeredSummaries);
+    const { inputFingerprint, outputFingerprint, ...output } = draft;
+    expect(outputFingerprint).toBe(
+      createHash("sha256").update(canonicalJson(output)).digest("hex"),
+    );
     const snapshot = await test.repository.readUnfinished();
+    expect(snapshot?.currentDraft?.outputSnapshotJson).toBe(canonicalJson(draft));
+    expect(snapshot?.currentDraft?.activationFingerprint).toBe(outputFingerprint);
+    expect(inputFingerprint).toBe(
+      createHash("sha256")
+        .update(snapshot?.currentDraft?.inputSnapshotJson ?? "")
+        .digest("hex"),
+    );
     expect(snapshot?.currentDraft?.inputFingerprint).toMatch(/^[0-9a-f]{64}$/u);
     const before = await test.store.all("SELECT * FROM plan_creation_draft_revision");
     const edited = await answered(
@@ -923,6 +941,18 @@ describe("Plan Creation preview", () => {
       }),
     );
     expect(edited).toMatchObject({ status: "review", draftStale: true });
+    expect(
+      edited.answeredSummaries.find((summary) => summary.answerKey === "plan-length")?.answer,
+    ).toEqual({ kind: "plan-length", weeks: 8 });
+    expect(
+      edited.draft?.answeredSummaries.find((summary) => summary.answerKey === "plan-length")
+        ?.answer,
+    ).toEqual({ kind: "plan-length", weeks: 4 });
+    expect(edited.draft).toEqual(draft);
+    test.advanceDay();
+    const reloaded = await test.host.readCard();
+    expect(reloaded?.draft).toEqual(draft);
+    expect(reloaded?.draftStale).toBe(true);
     expect(await test.host["plan_creation.preview"](request)).toEqual(first);
     expect(await test.store.all("SELECT * FROM plan_creation_draft_revision")).toEqual(before);
     await expect(

@@ -489,6 +489,7 @@ const PlanCreationDraftWorkoutSchema = z
 export const PlanCreationDraftSchema = z
   .object({
     kind: z.literal("draft"),
+    answeredSummaries: z.array(PlanCreationAnswerSummarySchema).max(16),
     goal: z.discriminatedUnion("kind", [
       z
         .object({

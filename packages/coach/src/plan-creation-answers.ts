@@ -616,6 +616,19 @@ function questionForKey(
   }
 }
 
+export function projectPlanCreationAnswerSummaries(
+  snapshot: PlanCreationSnapshot,
+  flow: PlanCreationAnswerFlow,
+  context: PlanCreationProjectionContext,
+): PlanCreationAnswerSummary[] {
+  return flow.order.flatMap((key) => {
+    const stored = flow.valid.get(key);
+    return stored === undefined
+      ? []
+      : [answerSummary(snapshot, stored, questionForKey(snapshot, flow, context, key))];
+  });
+}
+
 export function projectPlanCreationCard(
   snapshot: PlanCreationSnapshot,
   context: PlanCreationProjectionContext = {
@@ -624,12 +637,6 @@ export function projectPlanCreationCard(
 ): PlanCreationCardModel {
   if (snapshot.status !== "in-progress" && snapshot.status !== "review") return corrupt();
   const flow = resolvePlanCreationAnswerFlow(snapshot);
-  const answeredSummaries = flow.order.flatMap((key) => {
-    const stored = flow.valid.get(key);
-    return stored === undefined
-      ? []
-      : [answerSummary(snapshot, stored, questionForKey(snapshot, flow, context, key))];
-  });
   const question = flow.next === null ? null : questionForKey(snapshot, flow, context, flow.next);
   return PlanCreationCardModelSchema.parse({
     creationId: snapshot.id,
@@ -642,7 +649,7 @@ export function projectPlanCreationCard(
     draftStale:
       snapshot.currentDraft !== null && snapshot.currentDraft.inputVersion + 1 !== snapshot.version,
     readiness: question === null ? "ready" : "incomplete",
-    answeredSummaries,
+    answeredSummaries: projectPlanCreationAnswerSummaries(snapshot, flow, context),
     openQuestion: question,
   });
 }

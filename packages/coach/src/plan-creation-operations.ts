@@ -23,6 +23,7 @@ import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import {
   encodePlanCreationAnswer,
   projectPlanCreationCard,
+  projectPlanCreationAnswerSummaries,
   resolvePlanCreationAnswerFlow,
   resolvePlanCreationDraftAnswers,
   validPlanCreationAnswer,
@@ -272,7 +273,20 @@ export function createPlanCreationOperations(input: {
             planCreation: projectPlanCreationCard(snapshot, { today: buildInput.today }),
           });
         }
-        const draft = PlanCreationDraftSchema.parse(built);
+        const { inputFingerprint, outputFingerprint: _builderOutputFingerprint, ...output } = built;
+        const draftOutput = {
+          ...output,
+          answeredSummaries: projectPlanCreationAnswerSummaries(
+            snapshot,
+            resolvePlanCreationAnswerFlow(snapshot),
+            { today: buildInput.today },
+          ),
+        };
+        const draft = PlanCreationDraftSchema.parse({
+          ...draftOutput,
+          inputFingerprint,
+          outputFingerprint: await requestDigest(input.crypto, draftOutput),
+        });
         const result = await input.repository.recordDraft({
           command,
           creationId: parsed.creationId,
