@@ -22,6 +22,7 @@ import {
   type DroppedActivities,
 } from "@enduragent/coach-contract";
 import { serializeError } from "../../logging/serialize-error.js";
+import { redactObject } from "../../logging/redact.js";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
   REFERENCE_CAPTURE_STREAM_TYPES,
@@ -179,11 +180,9 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 function renderEndpointError(error: unknown): string {
-  const serializable =
-    error !== null && typeof error === "object" && !(error instanceof Error)
-      ? Object.assign(new Error("Reference endpoint failed"), error)
-      : error;
-  return JSON.stringify(serializeError(serializable));
+  return JSON.stringify(
+    error !== null && typeof error === "object" ? redactObject(error) : serializeError(error),
+  );
 }
 
 function shiftedDate(value: string, days: number): string {
@@ -270,9 +269,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
         continue;
       }
       if (
-        !isPlanningEventCategory(parsed.data.category)
-        || (parsed.data.category === "WORKOUT"
-          && (parsed.data.type == null || !cyclingSportTypes.has(parsed.data.type)))
+        !isPlanningEventCategory(parsed.data.category) ||
+        (parsed.data.category === "WORKOUT" &&
+          (parsed.data.type == null || !cyclingSportTypes.has(parsed.data.type)))
       ) {
         continue;
       }
@@ -315,9 +314,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
       );
     }
   }
-  const restrictionsFor = (
-    rows: readonly Record<string, unknown>[],
-  ): ActivityRestriction[] => {
+  const restrictionsFor = (rows: readonly Record<string, unknown>[]): ActivityRestriction[] => {
     const counts = new Map<string, number>();
     for (const row of rows) {
       if (row.source !== SOURCE_RESTRICTED_PROVIDER) continue;
@@ -420,9 +417,10 @@ async function fetchStreams(
     try {
       normalized = normalizeStreams(result.value);
     } catch (error) {
-      const reason = error instanceof StreamNormalizationError
-        ? "duplicate descriptor types"
-        : "normalization rejected input";
+      const reason =
+        error instanceof StreamNormalizationError
+          ? "duplicate descriptor types"
+          : "normalization rejected input";
       log(`Reference: streams shape rejected for an activity: ${reason}`);
       continue;
     }

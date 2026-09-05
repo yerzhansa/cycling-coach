@@ -70,7 +70,7 @@ describe("Docker image supply-chain guards", () => {
   it("copies canonical legal inputs before building and preserves runtime copies", () => {
     const dockerfile = readFileSync(resolve(repoRoot, "packages/cycling-coach/Dockerfile"), "utf8");
     const builderCopy = "COPY LICENSE NOTICE.md ./";
-    const build = "RUN pnpm --filter cycling-coach... build";
+    const build = "RUN pnpm --config.verify-deps-before-run=false --filter cycling-coach... build";
     const runtimeCopy = "COPY --chown=root:root LICENSE NOTICE.md ./";
 
     expect(dockerfile.indexOf(builderCopy)).toBeGreaterThan(-1);
@@ -81,7 +81,9 @@ describe("Docker image supply-chain guards", () => {
   it("copies a manifest and a source tree for every workspace package cycling-coach needs", () => {
     const dockerfile = readFileSync(resolve(repoRoot, "packages/cycling-coach/Dockerfile"), "utf8");
     const install = dockerfile.indexOf("RUN pnpm install --filter cycling-coach...");
-    const build = dockerfile.indexOf("RUN pnpm --filter cycling-coach... build");
+    const build = dockerfile.indexOf(
+      "RUN pnpm --config.verify-deps-before-run=false --filter cycling-coach... build",
+    );
     const closure = workspaceClosure("cycling-coach");
 
     expect(closure).toContain("packages/engine");

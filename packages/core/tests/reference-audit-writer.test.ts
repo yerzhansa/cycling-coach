@@ -136,6 +136,8 @@ describe("writeAuditEntry — best-effort failure handling", () => {
 
     await expect(writeAuditEntry(BINARY, makeEntry())).resolves.toBeUndefined();
     expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(tempDir);
+    expect(JSON.stringify(warnSpy.mock.calls)).toContain("EEXIST");
   });
 
   it("fires console.error EXACTLY ONCE after 10 cumulative failures", async () => {

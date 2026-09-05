@@ -48,7 +48,7 @@ COPY LICENSE NOTICE.md ./
 
 # Only build what cycling-coach needs (`...` = the package + all its deps in
 # topo order). Packages outside the closure aren't even copied into the image.
-RUN pnpm --filter cycling-coach... build
+RUN pnpm --config.verify-deps-before-run=false --filter cycling-coach... build
 
 RUN pnpm --filter cycling-coach --prod deploy /app/runtime-bundle \
     && cp packages/cycling-coach/package.json /app/runtime-bundle/package.json

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { assertCliOAuthHome, DesktopOwnedOAuthHomeError } from "./auth/profile-store.js";
+import { serializeError } from "./logging/serialize-error.js";
 import { parseArgs } from "node:util";
 import { createInterface as createReadlineInterface } from "node:readline";
 import { writeSync } from "node:fs";
@@ -306,9 +307,7 @@ export function makeBotShutdown(deps: BotShutdownDeps): () => Promise<void> {
       await deps.closePrepared?.();
       deps.markCleanShutdown({ dataDir: deps.dataDir });
     } catch (err) {
-      console.error(
-        `Shutdown encountered an error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      console.error(`Shutdown encountered an error: ${JSON.stringify(serializeError(err))}`);
     } finally {
       deps.exit(0);
     }
@@ -324,7 +323,7 @@ export async function runStartupHook(
     await hook(memory);
   } catch (err) {
     console.warn(
-      `Startup hook failed: ${err instanceof Error ? err.message : String(err)}. Continuing with binary startup.`,
+      `Startup hook failed: ${JSON.stringify(serializeError(err))}. Continuing with binary startup.`,
     );
   }
 }

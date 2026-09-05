@@ -32,7 +32,8 @@ describe("runStartupHook", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const hook = vi.fn().mockRejectedValue(new Error("boom"));
     await expect(runStartupHook(stubMemory, hook)).resolves.toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("boom");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"name":"Error"'));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Continuing"));
     warnSpy.mockRestore();
   });
@@ -41,7 +42,8 @@ describe("runStartupHook", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const hook = vi.fn().mockRejectedValue("string error");
     await expect(runStartupHook(stubMemory, hook)).resolves.toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("string error"));
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("string error");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("NonError"));
     warnSpy.mockRestore();
   });
 });

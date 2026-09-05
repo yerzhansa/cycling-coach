@@ -39,10 +39,10 @@ describe("desktop startup failure", () => {
       event: "startup_failed",
       err: {
         name: "TypeError",
-        message: "synthetic startup failure",
-        stack: error.stack,
       },
     });
+    expect(JSON.stringify(lines)).not.toContain(error.message);
+    expect(lines[0]?.err).not.toHaveProperty("stack");
   });
 
   it("logs before the startup dialog gate without changing its flags", async () => {
