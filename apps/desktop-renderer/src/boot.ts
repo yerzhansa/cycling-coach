@@ -181,6 +181,22 @@ export function bootRenderer(): Disposer {
       await Promise.all([trainingContextController.refresh(), planController.refresh()]);
     },
     refreshSpend: () => spendController.refresh(),
+    refreshPlan: async () => {
+      await planController.refresh();
+      try {
+        const hydration = await window.enduragentAuth.getPlanState();
+        store.getState().setPlanHydration(hydration);
+      } catch {
+        store.getState().setPlanHydration({
+          status: "failed",
+          error: {
+            code: "unavailable",
+            message: "Plan could not connect. Try again.",
+            retryable: true,
+          },
+        });
+      }
+    },
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
     canChat: () => setupReady(store.getState()),
     nativeAttachments: {
@@ -367,6 +383,9 @@ export function bootRenderer(): Disposer {
     openPlanCreationDiscard: () => chatController.openPlanCreationDiscard(),
     cancelPlanCreationDiscard: () => chatController.cancelPlanCreationDiscard(),
     confirmPlanCreationDiscard: () => void chatController.confirmPlanCreationDiscard(),
+    openPlanCreationActivate: () => chatController.openPlanCreationActivate(),
+    cancelPlanCreationActivate: () => chatController.cancelPlanCreationActivate(),
+    confirmPlanCreationActivate: () => void chatController.confirmPlanCreationActivate(),
     stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
     runQueuedCommand: (id) => void chatController.runQueuedCommand(id),

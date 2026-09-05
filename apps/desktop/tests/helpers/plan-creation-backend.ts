@@ -1,5 +1,8 @@
 import {
+  PlanCreationActivateRpcParamsSchema,
   PlanCreationPreviewRpcParamsSchema,
+  type CoachEngine,
+  type PlanningOperations,
   type PlanCreationCardModel,
 } from "@enduragent/coach-contract";
 import {
@@ -8,6 +11,8 @@ import {
 } from "@enduragent/kernel/planning";
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
+import { createPlanningOperations } from "../../../../packages/coach/src/planning-operations.js";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   createPlanCreationOperations,
@@ -84,6 +89,20 @@ export interface StoredPlanCreationAnswerRow {
   readonly value_json: string;
 }
 
+const unavailableEngineOperation = async (): Promise<never> => {
+  throw new TypeError("Plan inspection does not run Coach operations");
+};
+const inspectionEngine: CoachEngine = {
+  chat: unavailableEngineOperation,
+  getCoachDecision: unavailableEngineOperation,
+  answerCoachDecision: unavailableEngineOperation,
+  skipCoachDecision: unavailableEngineOperation,
+  resumeCoachDecision: unavailableEngineOperation,
+  resetSession: unavailableEngineOperation,
+  hasSession: unavailableEngineOperation,
+  getAthleteState: unavailableEngineOperation,
+};
+
 const response = (value: unknown): readonly string[] => [JSON.stringify(value)];
 
 export class PlanCreationBackend {
@@ -92,6 +111,8 @@ export class PlanCreationBackend {
   private store: (SqlStore & MigratorStore) | undefined;
   private repository: PlanCreationRepository | undefined;
   private host: PlanCreationHost | undefined;
+  private planning: PlanningOperations | undefined;
+  planStateReadFails = false;
   private sequence = 0;
   private instant = 883_612_800_000;
   private queueRevision = 0;
@@ -101,6 +122,7 @@ export class PlanCreationBackend {
   constructor(
     private readonly databasePath: string,
     coexistence = false,
+    readStoredPlans = false,
   ) {
     const base = coexistence ? createPlanInspectionFixtureScript() : createPlanQaFixtureScript();
     this.script = {
@@ -167,6 +189,29 @@ export class PlanCreationBackend {
         if (request.method === "listPlanningRequests") {
           return response({ deliveries: [], planCreation: await this.requireHost().readCard() });
         }
+        if (
+          this.planStateReadFails &&
+          (request.method === "getPlanState" || request.method === "getPlanningReadModel")
+        ) {
+          return response({
+            status: "failed",
+            error: {
+              code: "unavailable",
+              message: "Activation could not be saved locally. Your previous Plan is unchanged.",
+              retryable: true,
+            },
+          });
+        }
+        if (readStoredPlans && request.method === "getPlanState") {
+          return response(await this.planState());
+        }
+        if (request.method === "plan_creation.activate") {
+          return response(
+            await this.requireHost()["plan_creation.activate"](
+              PlanCreationActivateRpcParamsSchema.parse(request.params),
+            ),
+          );
+        }
         if (request.method === "plan_creation.start") {
           return response(
             await this.requireHost()["plan_creation.start"](
@@ -204,13 +249,31 @@ export class PlanCreationBackend {
     this.store = openSqliteStorage(this.databasePath);
     await runMigrations(this.store, MIGRATIONS);
     this.repository = createPlanCreationRepository(this.store);
+    const identity = {
+      deviceId: async () => "fixture-device",
+      newUlid: () => `${++this.sequence}`.padStart(26, "0"),
+      hlcStamp: () => ({ physicalMs: this.instant++, counter: 0 }),
+    };
+    this.planning = createPlanningOperations(
+      {
+        context: {
+          store: this.store,
+          home: {
+            root: "/synthetic/athlete",
+            storeDir: "/synthetic/athlete/store",
+            archiveDir: "/synthetic/athlete/archive",
+            configDir: "/synthetic/athlete/config",
+          },
+          listener: inertWriterProtocolListener,
+        },
+        identity,
+        engine: inspectionEngine,
+      },
+      { todayDateKey: () => 19980101 },
+    );
     this.host = createPlanCreationOperations({
       repository: this.repository,
-      identity: {
-        deviceId: async () => "fixture-device",
-        newUlid: () => `${++this.sequence}`.padStart(26, "0"),
-        hlcStamp: () => ({ physicalMs: this.instant++, counter: 0 }),
-      },
+      identity,
       crypto: globalThis.crypto,
       eventCandidates: { read: async () => [] },
       today: () => "1998-01-01",
@@ -227,10 +290,42 @@ export class PlanCreationBackend {
     this.store = undefined;
     this.repository = undefined;
     this.host = undefined;
+    this.planning = undefined;
   }
 
   async card(): Promise<PlanCreationCardModel | null> {
     return this.requireHost().readCard();
+  }
+
+  async planState() {
+    if (this.planning?.getPlanState === undefined)
+      throw new TypeError("Plan inspection is unavailable");
+    return this.planning.getPlanState({});
+  }
+
+  async inspectActivation() {
+    const store = this.requireStore();
+    return {
+      plans: await store.all("SELECT * FROM plan ORDER BY id"),
+      planningPlans: await store.all("SELECT * FROM planning_plan ORDER BY plan_id"),
+      revisions: await store.all("SELECT * FROM plan_revision ORDER BY plan_id,revision_number"),
+      creations: await store.all("SELECT * FROM plan_creation ORDER BY id"),
+      workouts: await store.all("SELECT * FROM plan_workout ORDER BY id"),
+      commands: await store.all(
+        "SELECT * FROM planning_command WHERE command_name='plan_creation.activate' ORDER BY created_at_ms,command_id",
+      ),
+    };
+  }
+
+  async setActivationFailure(enabled: boolean): Promise<void> {
+    const store = this.requireStore();
+    if (enabled) {
+      await store.run(`CREATE TRIGGER reject_activation BEFORE INSERT ON planning_command
+WHEN NEW.command_name='plan_creation.activate'
+BEGIN SELECT RAISE(ABORT, 'Activation could not be saved locally. Your previous Plan is unchanged.'); END`);
+    } else {
+      await store.run("drop trigger if exists reject_activation");
+    }
   }
 
   async answers(): Promise<readonly StoredPlanCreationAnswerRow[]> {

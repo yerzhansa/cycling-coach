@@ -224,7 +224,7 @@ async function build(scenario: Scenario, rebuild = false): Promise<PlanCreationC
   ).toBeVisible();
   await expect(
     scenario.page.getByRole("button", { name: "Activate Plan", exact: true }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   return current;
 }
 
@@ -319,7 +319,7 @@ for (const appearance of [
       expect(await scenario.backend.inspectUnrelated()).toEqual(unrelated);
       await expect(
         scenario.page.getByRole("button", { name: "Activate Plan", exact: true }),
-      ).toBeDisabled();
+      ).toBeEnabled();
       await capture(scenario, "restored");
     } finally {
       await close(scenario);

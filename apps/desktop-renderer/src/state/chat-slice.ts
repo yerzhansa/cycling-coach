@@ -10,6 +10,7 @@ import type {
   PlanCreationCardModel,
   PlanHandoffSuggestion,
 } from "@enduragent/coach-contract";
+import type { ActivePlanKnowledge } from "../chat/controller";
 import type { StateCreator } from "zustand";
 import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration";
 import type { FirstSyncState } from "../first-sync";
@@ -80,8 +81,10 @@ export interface ChatSurfaceState {
   readonly planCreationEditingKey: PlanCreationAnswerSummary["answerKey"] | null;
   readonly planCreationFocusRevision: number;
   readonly planCreationDiscardConfirmationOpen: boolean;
+  readonly planCreationActivateConfirmationOpen: boolean;
+  readonly planCreationActivePlanKnowledge: ActivePlanKnowledge;
   readonly planCreationFocusRequest: {
-    readonly target: "discard" | "start";
+    readonly target: "discard" | "activate" | "start";
     readonly revision: number;
   } | null;
   readonly timeline: readonly ChatTranscriptItemView[];
@@ -129,6 +132,9 @@ export interface ChatActions {
   openPlanCreationDiscard(): void;
   cancelPlanCreationDiscard(): void;
   confirmPlanCreationDiscard(): void;
+  openPlanCreationActivate(): void;
+  cancelPlanCreationActivate(): void;
+  confirmPlanCreationActivate(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): void;
@@ -172,6 +178,8 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   planCreationEditingKey: null,
   planCreationFocusRevision: 0,
   planCreationDiscardConfirmationOpen: false,
+  planCreationActivateConfirmationOpen: false,
+  planCreationActivePlanKnowledge: { kind: "unknown" } satisfies ActivePlanKnowledge,
   planCreationFocusRequest: null,
   timeline: Object.freeze([]),
   status: "idle",
@@ -328,6 +336,8 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.planCreationEditingKey === right.planCreationEditingKey &&
     left.planCreationFocusRevision === right.planCreationFocusRevision &&
     left.planCreationDiscardConfirmationOpen === right.planCreationDiscardConfirmationOpen &&
+    left.planCreationActivateConfirmationOpen === right.planCreationActivateConfirmationOpen &&
+    left.planCreationActivePlanKnowledge === right.planCreationActivePlanKnowledge &&
     left.planCreationFocusRequest?.target === right.planCreationFocusRequest?.target &&
     left.planCreationFocusRequest?.revision === right.planCreationFocusRequest?.revision &&
     left.workBlocked === right.workBlocked &&
