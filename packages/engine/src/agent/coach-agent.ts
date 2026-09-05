@@ -271,15 +271,18 @@ function transcriptWriteFailureReason(
 // resolves. All scheduling (jitter, retry-after floor, onRetry) stays in opts.
 function backoffWithSentinelError(
   err: unknown,
-  opts: Parameters<typeof retryWithBackoff>[1],
+  opts: Omit<Parameters<typeof retryWithBackoff>[1], "attempts" | "shouldRetry">,
 ): Promise<void> {
   let retried = false;
-  return retryWithBackoff(async () => {
-    if (!retried) {
-      retried = true;
-      throw err;
-    }
-  }, opts);
+  return retryWithBackoff(
+    async () => {
+      if (!retried) {
+        retried = true;
+        throw err;
+      }
+    },
+    { ...opts, attempts: 2, shouldRetry: () => true },
+  );
 }
 
 function committedWriteSummary(name: string, result: unknown): string | undefined {
@@ -1438,10 +1441,8 @@ export class CoachAgent {
                     ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
                     : "";
                 await backoffWithSentinelError(err, {
-                  attempts: 2,
                   baseMs: requestedMs,
                   capMs: RATE_LIMIT_MAX_WAIT_MS,
-                  shouldRetry: () => true,
                   retryAfterMs: () => requestedMs,
                   signal: abortController.signal,
                   random: () => 0,
@@ -1478,10 +1479,8 @@ export class CoachAgent {
                 serverErrorAttempts++;
                 const retryAfterFloor = retryAfterFloorMs(err, this.ports.extractRetryAfterMs);
                 await backoffWithSentinelError(err, {
-                  attempts: 2,
                   baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
                   capMs: SERVER_ERROR_BACKOFF_MAX_MS,
-                  shouldRetry: () => true,
                   retryAfterMs: () => retryAfterFloor,
                   signal: abortController.signal,
                 });
