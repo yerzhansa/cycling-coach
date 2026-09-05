@@ -80,7 +80,8 @@ function validateGpxNamespaces(root: Element, core: string, order: ReturnType<ty
       }
     }
   };
-  const visitCore = (element: Element): void => {
+  const pending: Element[] = [root];
+  for (let element = pending.pop(); element; element = pending.pop()) {
     const allowed = element === root ? ["version", "creator"] : ["trkpt", "wpt", "rtept"].includes(element.localName ?? "") ? ["lat", "lon"] : [];
     attrIssues(element, allowed, order, issues);
     for (const child of childElements(element)) {
@@ -89,10 +90,9 @@ function validateGpxNamespaces(root: Element, core: string, order: ReturnType<ty
         continue;
       }
       if (child.namespaceURI !== core) issues.push({ order: elementOrder(order, child), path: elementPath(child) });
-      else visitCore(child);
+      else pending.push(child);
     }
-  };
-  visitCore(root);
+  }
   throwFirstIssue("xml.namespace", issues);
 }
 

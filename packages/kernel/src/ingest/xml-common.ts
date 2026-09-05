@@ -87,15 +87,22 @@ export function runXmlValidationStages(stages: XmlValidationStages): void {
   stages.overlap();
 }
 
+function* descendants(root: Node): Generator<Node> {
+  let node: Node | null = root;
+  while (node) {
+    yield node;
+    if (node.firstChild) {
+      node = node.firstChild;
+      continue;
+    }
+    while (node !== root && !node.nextSibling) node = node.parentNode!;
+    node = node === root ? null : node.nextSibling;
+  }
+}
+
 export function documentOrder(root: Element): ReadonlyMap<Node, number> {
   const result = new Map<Node, number>();
-  let next = 0;
-  const visit = (node: Node): void => {
-    result.set(node, next);
-    next += 1;
-    for (let child = node.firstChild; child; child = child.nextSibling) visit(child);
-  };
-  visit(root);
+  for (const node of descendants(root)) result.set(node, result.size);
   return result;
 }
 
@@ -129,15 +136,12 @@ export function parseXmlDocument(xmlWithoutDeclaration: string): Document {
   }
 }
 
-function walk(node: Node): void {
-  if (node.nodeType === 5 || node.nodeType === 6 || node.nodeType === 7 || node.nodeType === 10) {
-    throw quarantine("xml.parse", "$");
-  }
-  for (let child = node.firstChild; child; child = child.nextSibling) walk(child);
-}
-
 export function validateDocumentShell(document: Document): Element {
-  walk(document);
+  for (const node of descendants(document)) {
+    if (node.nodeType === 5 || node.nodeType === 6 || node.nodeType === 7 || node.nodeType === 10) {
+      throw quarantine("xml.parse", "$");
+    }
+  }
   let element: Element | null = null;
   for (let child = document.firstChild; child; child = child.nextSibling) {
     if (child.nodeType === 1) {
@@ -172,13 +176,18 @@ export function childElements(parent: Element): Element[] {
 }
 
 export function elementPath(element: Element): string {
-  const parent = element.parentNode;
-  if (!parent || parent.nodeType === 9) return "$";
-  let index = 0;
-  for (let sibling = parent.firstChild; sibling && sibling !== element; sibling = sibling.nextSibling) {
-    if (sibling.nodeType === 1 && sibling.localName === element.localName) index += 1;
+  const parts: string[] = [];
+  let node: Node = element;
+  while (node.parentNode && node.parentNode.nodeType !== 9) {
+    const parent = node.parentNode;
+    let index = 0;
+    for (let sibling = parent.firstChild; sibling && sibling !== node; sibling = sibling.nextSibling) {
+      if (sibling.nodeType === 1 && sibling.localName === node.localName) index += 1;
+    }
+    parts.push(`${node.localName}[${index}]`);
+    node = parent;
   }
-  return `${elementPath(parent as Element)}/${element.localName}[${index}]`;
+  return ["$", ...parts.reverse()].join("/");
 }
 
 export function attributePath(element: Element, localName: string): string {
@@ -209,7 +218,11 @@ export function requiredUnqualifiedAttribute(element: Element, localName: string
 }
 
 export function textValue(element: Element): string {
-  return (element.textContent ?? "").trim();
+  const parts: string[] = [];
+  for (const node of descendants(element)) {
+    if (node.nodeType === 3 || node.nodeType === 4) parts.push(node.nodeValue ?? "");
+  }
+  return parts.join("").trim();
 }
 
 function normalizeZero(value: number): number {

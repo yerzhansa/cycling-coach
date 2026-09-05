@@ -1409,7 +1409,7 @@ describe("coach-dev import --report", () => {
               expect(archived).toBe(3);
               readsAtImport = readCalls;
               for (const file of batch.files) {
-                expect(file.bytes).toEqual(expected.get(file.input_path));
+                expect(file).toMatchObject({ bytes: expected.get(file.input_path) });
               }
               await Promise.all(paths.map((path) => rm(path)));
               return runtime.importBatchWithReport(batch);
