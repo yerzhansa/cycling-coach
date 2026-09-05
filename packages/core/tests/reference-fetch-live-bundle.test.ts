@@ -546,8 +546,9 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       throttleMs: 0,
       log: (message) => logs.push(message),
     });
-    expect(logs[0]).toContain('"message":"synthetic unauthorized"');
-    expect(logs[0]).toContain('"stack":');
+    expect(logs[0]).not.toContain("synthetic unauthorized");
+    expect(logs[0]).not.toContain('"stack":');
+    expect(logs[0]).toContain('"status":401');
     expect(logs[0]).toContain('"kind":"Http"');
     expect(logs[0]).not.toContain("[object Object]");
     expect(result.fetchErrors?.[0]?.detail).toBe(
