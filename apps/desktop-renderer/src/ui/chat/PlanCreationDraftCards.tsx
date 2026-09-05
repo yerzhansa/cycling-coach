@@ -117,11 +117,19 @@ export function PlanCreationDraftCards(props: {
 }): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
+  const error = useEnduragentStore((state) => state.chat.planCreationError);
+  const confirmationOpen = useEnduragentStore(
+    (state) =>
+      state.chat.planCreationActivateConfirmationOpen ||
+      state.chat.planCreationDiscardConfirmationOpen,
+  );
   const editingKey = useEnduragentStore((state) => state.chat.planCreationEditingKey);
   const focusRequest = useEnduragentStore((state) => state.chat.planCreationFocusRequest);
   const discardButton = useRef<HTMLButtonElement>(null);
+  const activateButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (focusRequest?.target === "discard") queueMicrotask(() => discardButton.current?.focus());
+    if (focusRequest?.target === "activate") queueMicrotask(() => activateButton.current?.focus());
   }, [focusRequest?.revision, focusRequest?.target]);
   const draft = props.draft;
   const stale = props.model.draftStale;
@@ -220,6 +228,11 @@ export function PlanCreationDraftCards(props: {
             ))}
           </div>
         ))}
+        {error === null || confirmationOpen ? null : (
+          <p className="m-0 text-xs text-danger" role="alert">
+            {error}
+          </p>
+        )}
         <div className="mt-inset flex flex-wrap gap-inset">
           <Button
             ref={discardButton}
@@ -248,7 +261,14 @@ export function PlanCreationDraftCards(props: {
               Rebuild Draft
             </Button>
           ) : (
-            <Button disabled>Activate Plan</Button>
+            <Button
+              ref={activateButton}
+              aria-haspopup="dialog"
+              disabled={busy || actions === null || workouts.length === 0}
+              onClick={() => actions?.openPlanCreationActivate()}
+            >
+              Activate Plan
+            </Button>
           )}
         </div>
       </ReviewCard>

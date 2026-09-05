@@ -113,6 +113,8 @@ describe("chat view adapter", () => {
       planCreationEditingKey: null,
       planCreationFocusRevision: 0,
       planCreationDiscardConfirmationOpen: false,
+      planCreationActivateConfirmationOpen: false,
+      planCreationActivePlanKnowledge: { kind: "unknown" },
       planCreationFocusRequest: null,
       timeline: [
         {
@@ -276,6 +278,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 1,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: null,
           focusRequest: null,
@@ -302,6 +306,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 1,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: null,
           focusRequest: null,
@@ -325,6 +331,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 2,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: null,
           focusRequest: null,
@@ -348,6 +356,8 @@ describe("chat view adapter", () => {
           editingKey: "goal",
           focusRevision: 3,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: null,
           focusRequest: null,
@@ -358,6 +368,51 @@ describe("chat view adapter", () => {
       sendDisabled: true,
       inputDisabled: true,
       composerPlaceholder: "Finish the Plan question above",
+    });
+  });
+
+  it("blocks work during activation and retains its completed transcript notice once", () => {
+    const published: ChatSurfaceState[] = [];
+    const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
+    const planCreation: NonNullable<ChatViewControls["planCreation"]> = {
+      value: null,
+      loaded: true,
+      busy: false,
+      error: null,
+      paused: false,
+      editingKey: null,
+      focusRevision: 0,
+      discardConfirmationOpen: false,
+      activateConfirmationOpen: true,
+      activePlanKnowledge: { kind: "none" },
+      discardEvents: [],
+      notice: null,
+      focusRequest: null,
+    };
+    adapter.view.render(EMPTY_CHAT_STATE, controls({ planCreation }));
+    expect(published.at(-1)).toMatchObject({
+      planCreationActivateConfirmationOpen: true,
+      sendDisabled: true,
+      inputDisabled: true,
+    });
+    adapter.view.render(
+      EMPTY_CHAT_STATE,
+      controls({
+        planCreation: {
+          ...planCreation,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
+          notice: "Plan activated locally.",
+        },
+      }),
+    );
+    expect(published.at(-1)).toMatchObject({
+      planCreationActivateConfirmationOpen: false,
+      planCreationActivePlanKnowledge: { kind: "unknown" },
+      sendDisabled: false,
+      inputDisabled: false,
+      notice: null,
+      timeline: [{ kind: "plan-creation", model: null }],
     });
   });
 
@@ -386,6 +441,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 0,
           discardConfirmationOpen: true,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: null,
           focusRequest: null,
@@ -411,6 +468,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 0,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: "Plan Creation changed before it could be discarded.",
           focusRequest: { target: "discard", revision: 2 },
@@ -419,6 +478,8 @@ describe("chat view adapter", () => {
     );
     expect(published.at(-1)).toMatchObject({
       planCreationDiscardConfirmationOpen: false,
+      planCreationActivateConfirmationOpen: false,
+      planCreationActivePlanKnowledge: { kind: "unknown" },
       planCreationFocusRequest: { target: "discard", revision: 2 },
       notice: "Plan Creation changed before it could be discarded.",
       sendDisabled: false,
@@ -430,9 +491,7 @@ describe("chat view adapter", () => {
   it("keeps keyed discard consequences before later messages and Plan Creations", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
-    const discardEvents = [
-      { eventId: "01J00000000000000000000000", afterMessageId: null },
-    ];
+    const discardEvents = [{ eventId: "01J00000000000000000000000", afterMessageId: null }];
 
     adapter.view.render(
       EMPTY_CHAT_STATE,
@@ -446,6 +505,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 0,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents,
           notice: null,
           focusRequest: { target: "start", revision: 1 },
@@ -480,6 +541,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 0,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents,
           notice: null,
           focusRequest: null,
@@ -553,6 +616,8 @@ describe("chat view adapter", () => {
           editingKey: null,
           focusRevision: 1,
           discardConfirmationOpen: false,
+          activateConfirmationOpen: false,
+          activePlanKnowledge: { kind: "unknown" },
           discardEvents: [],
           notice: null,
           focusRequest: null,

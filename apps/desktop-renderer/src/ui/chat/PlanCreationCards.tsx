@@ -84,6 +84,77 @@ export function PlanCreationDiscardDialog(): ReactElement {
   );
 }
 
+export function PlanCreationActivateDialog(): ReactElement | null {
+  const open = useEnduragentStore((state) => state.chat.planCreationActivateConfirmationOpen);
+  const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
+  const error = useEnduragentStore((state) => state.chat.planCreationError);
+  const actions = useEnduragentStore((state) => state.chatActions);
+  const knowledge = useEnduragentStore((state) => state.chat.planCreationActivePlanKnowledge);
+  const activePlanName = knowledge.kind === "active" ? knowledge.name : null;
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  const cancelActivation = useCallback((): void => {
+    actions?.cancelPlanCreationActivate();
+  }, [actions]);
+  const confirmActivation = useCallback((): void => {
+    actions?.confirmPlanCreationActivate();
+  }, [actions]);
+
+  if (knowledge.kind === "unknown") return null;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && !busy) cancelActivation();
+      }}
+    >
+      <DialogContent
+        className="w-[min(520px,calc(100vw-32px))] max-w-none gap-0 border-line p-5 shadow-elev-4 sm:max-w-none"
+        showCloseButton={false}
+        initialFocus={cancelButton}
+        finalFocus={false}
+        aria-busy={busy ? "true" : undefined}
+      >
+        <DialogHeader className="gap-inset">
+          <DialogTitle className="m-0 text-lg font-semibold">
+            {activePlanName === null ? "Activate Plan?" : "Close and activate?"}
+          </DialogTitle>
+          <DialogDescription className="m-0 leading-5">
+            {`${activePlanName === null ? "" : `${activePlanName} closes. `}The new Plan activates now.`}
+          </DialogDescription>
+        </DialogHeader>
+        {error === null ? null : (
+          <p className="mt-inset mb-0 text-xs text-danger" role="alert">
+            {error}
+          </p>
+        )}
+        <DialogFooter className="mx-0 mt-row mb-0 flex-row justify-end rounded-none border-0 bg-transparent p-0">
+          <DialogClose
+            render={
+              <Button
+                ref={cancelButton}
+                variant="outline"
+                size="lg"
+                disabled={busy || actions === null}
+              />
+            }
+          >
+            Cancel
+          </DialogClose>
+          <Button
+            variant="default"
+            size="lg"
+            disabled={busy || actions === null}
+            onClick={confirmActivation}
+          >
+            {activePlanName === null ? "Activate Plan" : "Activate new Plan"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function PlanCreationDock(props: {
   readonly onEditorOpenChange: (open: boolean) => void;
 }): ReactElement | null {
@@ -150,7 +221,12 @@ export function PlanCreationConversation(props: {
   const [editVersion, setEditVersion] = useState<number | null>(null);
   const editingKey = useEnduragentStore((state) => state.chat.planCreationEditingKey);
   const actions = useEnduragentStore((state) => state.chatActions);
-  if (props.model === null) return null;
+  if (props.model === null)
+    return (
+      <p role="status" className="m-0 text-sm text-ink-2">
+        Plan activated locally.
+      </p>
+    );
   const model = props.model;
   if (model.draft === null) return <PlanCreationSummary model={model} />;
   if (editVersion === model.version)

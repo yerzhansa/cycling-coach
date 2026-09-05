@@ -11,6 +11,7 @@ import {
 } from "@enduragent/coach-client";
 import {
   PLAN_CREATION_ANSWER_KEYS,
+  PlanActiveProjectionDataSchema,
   type AttachmentAdmissionReadModel,
   type ChatAttachmentComposerReadModel,
   type CoachDecisionAnswer,
@@ -47,6 +48,11 @@ import {
   type TranscriptPage,
 } from "./hydration";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "./limits";
+
+export type ActivePlanKnowledge =
+  | { readonly kind: "unknown" }
+  | { readonly kind: "none" }
+  | { readonly kind: "active"; readonly name: string };
 
 export const CHAT_CONNECTION_INTERRUPTED_COPY =
   "Connection interrupted. Your partial response is preserved.";
@@ -177,10 +183,12 @@ export interface ChatViewControls {
     readonly editingKey: PlanCreationAnswerSummary["answerKey"] | null;
     readonly focusRevision: number;
     readonly discardConfirmationOpen: boolean;
+    readonly activateConfirmationOpen: boolean;
+    readonly activePlanKnowledge: ActivePlanKnowledge;
     readonly discardEvents: readonly PlanCreationDiscardEvent[];
     readonly notice: string | null;
     readonly focusRequest: {
-      readonly target: "discard" | "start";
+      readonly target: "discard" | "activate" | "start";
       readonly revision: number;
     } | null;
   };
@@ -239,6 +247,9 @@ export interface ChatController {
   openPlanCreationDiscard(): void;
   cancelPlanCreationDiscard(): void;
   confirmPlanCreationDiscard(): Promise<void>;
+  openPlanCreationActivate(): Promise<void>;
+  cancelPlanCreationActivate(): void;
+  confirmPlanCreationActivate(): Promise<void>;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): Promise<void>;
@@ -304,6 +315,7 @@ export function createChatController(input: {
   readonly view: ChatView;
   readonly refreshTrainingContext: () => Promise<void>;
   readonly refreshSpend: () => Promise<void>;
+  readonly refreshPlan?: () => Promise<void>;
   readonly readTranscriptPage?: (request: {
     readonly cursor: string | null;
     readonly limit: number;
@@ -379,10 +391,12 @@ export function createChatController(input: {
   let planCreationEditReturnPaused = false;
   let planCreationFocusRevision = 0;
   let planCreationDiscardConfirmationOpen = false;
+  let planCreationActivateConfirmationOpen = false;
+  let activePlanKnowledge: ActivePlanKnowledge = { kind: "unknown" };
   let planCreationDiscardEvents: readonly PlanCreationDiscardEvent[] = [];
   let planCreationNotice: string | null = null;
   let planCreationFocusRequest: {
-    readonly target: "discard" | "start";
+    readonly target: "discard" | "activate" | "start";
     readonly revision: number;
   } | null = null;
   let planCreationActionFocusRevision = 0;
@@ -400,6 +414,7 @@ export function createChatController(input: {
     (decision?.status === "answered" && decision.continuation.status === "pending");
   const planCreationBlocksWork = (): boolean =>
     planCreationDiscardConfirmationOpen ||
+    planCreationActivateConfirmationOpen ||
     (!planCreationPaused &&
       planCreation !== null &&
       (planCreationEditingKey !== null || planCreation.openQuestion !== null));
@@ -463,6 +478,8 @@ export function createChatController(input: {
             editingKey: planCreationEditingKey,
             focusRevision: planCreationFocusRevision,
             discardConfirmationOpen: planCreationDiscardConfirmationOpen,
+            activateConfirmationOpen: planCreationActivateConfirmationOpen,
+            activePlanKnowledge,
             discardEvents: planCreationDiscardEvents,
             notice: planCreationNotice,
             focusRequest: planCreationFocusRequest,
@@ -1057,11 +1074,11 @@ export function createChatController(input: {
 
   const installPlanCreation = (
     next: PlanCreationCardModel | null,
-    focusTarget?: "discard" | "start",
+    focusTarget?: "discard" | "activate" | "start",
   ): void => {
     const previous = planCreation;
     let actionFocusRequested = false;
-    const requestActionFocus = (target: "discard" | "start"): void => {
+    const requestActionFocus = (target: "discard" | "activate" | "start"): void => {
       requestPlanCreationFocus(target);
       actionFocusRequested = true;
     };
@@ -1069,6 +1086,7 @@ export function createChatController(input: {
     let installed = false;
     if (next === null) {
       planCreation = null;
+      planCreationActivateConfirmationOpen = false;
       installed = true;
       if (planCreationDiscardConfirmationOpen) {
         planCreationDiscardConfirmationOpen = false;
@@ -1118,7 +1136,7 @@ export function createChatController(input: {
     mergeHydratedMessages(hydration.turns, state.messages, hydration.entries)
       .filter((message) => message.role === "athlete" || message.text.length > 0)
       .at(-1)?.id ?? null;
-  const requestPlanCreationFocus = (target: "discard" | "start"): void => {
+  const requestPlanCreationFocus = (target: "discard" | "activate" | "start"): void => {
     planCreationFocusRequest = { target, revision: ++planCreationActionFocusRevision };
   };
   const planCreationDiscardNotice = (
@@ -2037,6 +2055,7 @@ export function createChatController(input: {
         disposed ||
         planCreationBusy ||
         planCreationDiscardConfirmationOpen ||
+        planCreationActivateConfirmationOpen ||
         planCreation === null ||
         planCreation.readiness !== "ready" ||
         planCreationEditingKey !== null
@@ -2081,6 +2100,7 @@ export function createChatController(input: {
         disposed ||
         planCreationBusy ||
         planCreationDiscardConfirmationOpen ||
+        planCreationActivateConfirmationOpen ||
         !planCreationBlocksWork() ||
         planCreation === null
       )
@@ -2190,7 +2210,8 @@ export function createChatController(input: {
         planCreationBusy ||
         !planCreationLoaded ||
         planCreation === null ||
-        planCreationDiscardConfirmationOpen
+        planCreationDiscardConfirmationOpen ||
+        planCreationActivateConfirmationOpen
       ) {
         return;
       }
@@ -2257,6 +2278,89 @@ export function createChatController(input: {
         render();
         if (!planCreationBlocksWork() && !decisionBlocksWork()) void drain();
       }
+    },
+    async openPlanCreationActivate() {
+      if (
+        disposed ||
+        planCreationBusy ||
+        !planCreationLoaded ||
+        planCreationDiscardConfirmationOpen ||
+        planCreationActivateConfirmationOpen ||
+        planCreation === null ||
+        planCreation.draft === null ||
+        planCreation.draftStale ||
+        !planCreation.draft.weeks.some((week) => week.workouts.length > 0)
+      )
+        return;
+      const knowledge: ActivePlanKnowledge = { kind: "unknown" };
+      activePlanKnowledge = knowledge;
+      planCreationBusy = true;
+      planCreationError = null;
+      planCreationNotice = null;
+      render();
+      try {
+        const result = await (await input.clients.getClient()).call("getPlanState", {});
+        if (disposed || activePlanKnowledge !== knowledge) return;
+        if (result.status !== "ready") throw new Error("plan-state-unavailable");
+        activePlanKnowledge =
+          result.state.lifecycle === "active"
+            ? {
+                kind: "active",
+                name: PlanActiveProjectionDataSchema.parse(result.state.data).plan.name,
+              }
+            : { kind: "none" };
+        planCreationActivateConfirmationOpen = true;
+      } catch {
+        if (disposed || activePlanKnowledge !== knowledge) return;
+        planCreationError =
+          "Activation could not be saved locally. Your previous Plan is unchanged.";
+      }
+      planCreationBusy = false;
+      render();
+    },
+    cancelPlanCreationActivate() {
+      if (disposed || planCreationBusy || !planCreationActivateConfirmationOpen) return;
+      planCreationActivateConfirmationOpen = false;
+      planCreationError = null;
+      requestPlanCreationFocus("activate");
+      render();
+      if (!planCreationBlocksWork() && !decisionBlocksWork()) void drain();
+    },
+    async confirmPlanCreationActivate() {
+      if (
+        disposed ||
+        planCreationBusy ||
+        !planCreationActivateConfirmationOpen ||
+        activePlanKnowledge.kind === "unknown" ||
+        planCreation === null
+      )
+        return;
+      const target = planCreation;
+      planCreationBusy = true;
+      planCreationError = null;
+      render();
+      try {
+        await (
+          await input.clients.getClient()
+        ).call("plan_creation.activate", {
+          commandId: globalThis.crypto.randomUUID(),
+          creationId: target.creationId,
+          expectedVersion: target.version,
+        });
+      } catch {
+        planCreationError =
+          "Activation could not be saved locally. Your previous Plan is unchanged.";
+        planCreationBusy = false;
+        render();
+        return;
+      }
+      planCreationActivateConfirmationOpen = false;
+      installPlanCreation(null, "start");
+      planCreationNotice = "Plan activated locally.";
+      planCreationBusy = false;
+      render();
+      await input.refreshPlan?.();
+      if (!planCreationBlocksWork() && !decisionBlocksWork()) void drain();
     },
     stop() {
       if (disposed || state.status !== "streaming" || state.activeTurn === null) return;

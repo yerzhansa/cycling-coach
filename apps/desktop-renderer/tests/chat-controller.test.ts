@@ -1,3 +1,4 @@
+import { planReadModel } from "./plan-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   CoachClientCallAbortedError,
@@ -8,12 +9,15 @@ import {
   type CoachClientCallOptions,
 } from "@enduragent/coach-client";
 import type {
+  GetPlanStateRpcResult,
   ChatAttachmentComposerReadModel,
   ChatQueueSnapshot,
   CoachDecisionReadModel,
   CoachTurnEventNotificationEnvelope,
   CreatePlanningRequestRpcParams,
   CreateWorkoutPlanningRequestRpcParams,
+  PlanCreationActivateRpcParams,
+  PlanCreationActivateRpcResult,
   PlanCreationAnswerRpcParams,
   PlanCreationAnswerRpcResult,
   PlanCreationAnswerSummary,
@@ -378,6 +382,10 @@ function client(
     readonly answerPlanCreation?: (
       request: PlanCreationAnswerRpcParams,
     ) => Promise<PlanCreationAnswerRpcResult>;
+    readonly getPlanState?: () => Promise<GetPlanStateRpcResult>;
+    readonly activatePlanCreation?: (
+      request: PlanCreationActivateRpcParams,
+    ) => Promise<PlanCreationActivateRpcResult>;
     readonly discardPlanCreation?: (
       request: PlanCreationDiscardRpcParams,
     ) => Promise<PlanCreationDiscardRpcResult>;
@@ -478,6 +486,14 @@ function client(
           reason: "no-unfinished-creation",
           planCreation: null,
         })) as never;
+    }
+    if (method === "getPlanState") {
+      return (sessions.getPlanState?.() ??
+        Promise.resolve({ status: "ready", state: planReadModel() })) as never;
+    }
+    if (method === "plan_creation.activate") {
+      return (sessions.activatePlanCreation?.(request as PlanCreationActivateRpcParams) ??
+        Promise.reject(new Error("No activation configured"))) as never;
     }
     if (method === "plan_creation.discard") {
       return (sessions.discardPlanCreation?.(request as PlanCreationDiscardRpcParams) ??
@@ -671,6 +687,7 @@ function subject(
   const settlements = new Set<{ remaining: number; resolve: () => void }>();
   const refresh = vi.fn(refreshImplementation);
   const refreshSpend = vi.fn(spendRefreshImplementation);
+  const refreshPlan = vi.fn(async () => {});
   const provider: DesktopCoachClientProvider = {
     getClient: vi.fn(async () => first),
     reconnect: vi.fn(async () => reconnected),
@@ -694,6 +711,7 @@ function subject(
       },
     },
     refreshTrainingContext: refresh,
+    refreshPlan,
     refreshSpend,
     canChat,
     initialQueueSnapshot,
@@ -723,6 +741,7 @@ function subject(
     controls,
     refresh,
     refreshSpend,
+    refreshPlan,
     openPlanningRequest,
   };
 }
@@ -1861,6 +1880,234 @@ describe("chat controller", () => {
       "ready",
       "ready after Later",
     ]);
+  });
+
+  it.each(["missing", "stale", "empty"] as const)(
+    "does not open activation for a %s Draft",
+    async (kind) => {
+      const draft = planCreationDraft();
+      const card: PlanCreationCardModel = {
+        creationId: "01J00000000000000000000000",
+        version: 3,
+        status: "review",
+        readiness: "ready",
+        answeredSummaries: [],
+        openQuestion: null,
+        draft:
+          kind === "missing"
+            ? null
+            : kind === "empty"
+              ? { ...draft, weeks: draft.weeks.map((week) => ({ ...week, workouts: [] })) }
+              : draft,
+        draftStale: kind === "stale",
+      };
+      const activatePlanCreation =
+        vi.fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>();
+      const { controller, controls } = subject(
+        client(replies(), {
+          listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+          activatePlanCreation,
+        }),
+      );
+      await controller.start();
+      await controller.openPlanCreationActivate();
+      await controller.confirmPlanCreationActivate();
+      expect(controls.at(-1)?.planCreation).toMatchObject({
+        value: card,
+        activateConfirmationOpen: false,
+      });
+      expect(activatePlanCreation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never sends activation while the fresh Plan read is pending or rejected", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    let rejectRead!: (error: Error) => void;
+    const read = new Promise<GetPlanStateRpcResult>((_, reject) => {
+      rejectRead = reject;
+    });
+    const getPlanState = vi.fn(() => read);
+    const activatePlanCreation =
+      vi.fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>();
+    const { controller, controls } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+        getPlanState,
+        activatePlanCreation,
+      }),
+    );
+    await controller.start();
+    const opening = controller.openPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      activateConfirmationOpen: false,
+      activePlanKnowledge: { kind: "unknown" },
+      busy: true,
+    });
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+    rejectRead(
+      new Error("Activation could not be saved locally. Your previous Plan is unchanged."),
+    );
+    await opening;
+    expect(getPlanState).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      activePlanKnowledge: { kind: "unknown" },
+      error: "Activation could not be saved locally. Your previous Plan is unchanged.",
+      activateConfirmationOpen: false,
+      busy: false,
+    });
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+    controller.cancelPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation?.activateConfirmationOpen).toBe(false);
+  });
+
+  it("activates only after confirmation, blocks duplicate submission, and refreshes the Plan", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    let finishActivation!: (result: PlanCreationActivateRpcResult) => void;
+    const pending = new Promise<PlanCreationActivateRpcResult>((resolve) => {
+      finishActivation = resolve;
+    });
+    const activatePlanCreation = vi.fn(async (_request: PlanCreationActivateRpcParams) => pending);
+    const { controller, controls, refreshPlan } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+        activatePlanCreation,
+      }),
+    );
+    await controller.start();
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+    await controller.openPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation?.activateConfirmationOpen).toBe(true);
+    await expect(controller.submit("blocked by confirmation")).resolves.toBe(false);
+    const first = controller.confirmPlanCreationActivate();
+    const second = controller.confirmPlanCreationActivate();
+    await vi.waitFor(() => expect(activatePlanCreation).toHaveBeenCalledOnce());
+    expect(activatePlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      busy: true,
+      activateConfirmationOpen: true,
+    });
+    finishActivation({
+      creationId: card.creationId,
+      planId: "01J00000000000000000000001",
+      closedPlanId: null,
+      activatedAt: "1998-09-07",
+    });
+    await Promise.all([first, second]);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      busy: false,
+      activateConfirmationOpen: false,
+      notice: "Plan activated locally.",
+    });
+    expect(refreshPlan).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed activation open and retries with a fresh command id", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    const activatePlanCreation = vi
+      .fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>()
+      .mockRejectedValueOnce(
+        new Error("Activation could not be saved locally. Your previous Plan is unchanged."),
+      )
+      .mockResolvedValueOnce({
+        creationId: card.creationId,
+        planId: "01J00000000000000000000001",
+        closedPlanId: null,
+        activatedAt: "1998-09-07",
+      });
+    const { controller, controls, refreshPlan } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+        activatePlanCreation,
+      }),
+    );
+    await controller.start();
+    await controller.openPlanCreationActivate();
+    await controller.confirmPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      busy: false,
+      activateConfirmationOpen: true,
+      error: "Activation could not be saved locally. Your previous Plan is unchanged.",
+    });
+    expect(refreshPlan).not.toHaveBeenCalled();
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).toHaveBeenCalledTimes(2);
+    expect(activatePlanCreation.mock.calls[1]?.[0].commandId).not.toEqual(
+      activatePlanCreation.mock.calls[0]?.[0].commandId,
+    );
+    expect(controls.at(-1)?.planCreation?.value).toBeNull();
+    expect(refreshPlan).toHaveBeenCalledOnce();
+  });
+
+  it("cancels activation without changing the Draft and does not restore a dialog after relaunch", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    const activatePlanCreation =
+      vi.fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>();
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+      activatePlanCreation,
+    });
+    const first = subject(fake);
+    await first.controller.start();
+    await first.controller.openPlanCreationActivate();
+    first.controller.cancelPlanCreationActivate();
+    expect(first.controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      activateConfirmationOpen: false,
+      focusRequest: { target: "activate" },
+    });
+    await first.controller.openPlanCreationActivate();
+    const relaunched = subject(fake);
+    await relaunched.controller.start();
+    expect(relaunched.controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      activateConfirmationOpen: false,
+    });
+    expect(activatePlanCreation).not.toHaveBeenCalled();
   });
 
   it("guards an in-flight discard, sends the displayed revision, and clears the Card", async () => {

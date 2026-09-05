@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   AttachmentCapabilitiesReadModel,
@@ -27,6 +27,8 @@ import { useEnduragentStore } from "../src/state/store";
 import { SLASH_COMMANDS } from "../src/chat/commands";
 import { ChatView } from "../src/ui/chat/ChatView";
 import { planCreationDraft } from "./plan-creation-draft-fixtures";
+import { planReadModel } from "./plan-fixtures";
+import { EMPTY_PLAN_SURFACE } from "../src/state/plan-slice";
 
 function stubActions(): ChatActions {
   return {
@@ -54,6 +56,9 @@ function stubActions(): ChatActions {
     openPlanCreationDiscard: vi.fn(),
     cancelPlanCreationDiscard: vi.fn(),
     confirmPlanCreationDiscard: vi.fn(),
+    openPlanCreationActivate: vi.fn(),
+    cancelPlanCreationActivate: vi.fn(),
+    confirmPlanCreationActivate: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -498,6 +503,7 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       training: EMPTY_TRAINING_SURFACE,
+      plan: EMPTY_PLAN_SURFACE,
       planSurface: { status: "loading", value: null },
       planFocus: null,
       planReturnToChat: false,
@@ -512,6 +518,7 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       training: EMPTY_TRAINING_SURFACE,
+      plan: EMPTY_PLAN_SURFACE,
       planSurface: { status: "loading", value: null },
       planFocus: null,
       planReturnToChat: false,
@@ -520,6 +527,18 @@ describe("chat surface", () => {
       onboarding: CLOSED_ONBOARDING,
     });
     resetChatStream();
+  });
+
+  it("renders completed Plan activation once as a transcript status", () => {
+    render(<Harness />);
+    setChat({
+      planCreation: null,
+      planCreationLoaded: true,
+      timeline: [{ kind: "plan-creation", model: null }],
+    });
+    expect(screen.getAllByText("Plan activated locally.")).toHaveLength(1);
+    expect(screen.getByText("Plan activated locally.")).toHaveAttribute("role", "status");
+    expect(document.querySelector(".chat-notice")).not.toBeVisible();
   });
 
   it("preserves and focuses the draft after enqueue failure and clears only after acknowledgment", async () => {
@@ -2867,7 +2886,9 @@ describe("chat surface", () => {
       const discard = screen.getByRole("button", { name: "Discard" });
       const edit = screen.getByRole("button", { name: "Edit answers" });
       const activate = screen.getByRole("button", { name: "Activate Plan" });
-      expect(activate).toBeDisabled();
+      expect(activate).toBeEnabled();
+      await userEvent.click(activate);
+      expect(actions.openPlanCreationActivate).toHaveBeenCalledOnce();
       expect(discard.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(
         edit.compareDocumentPosition(activate) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -3037,6 +3058,170 @@ describe("chat surface", () => {
         screen.getByRole("heading", { name: "How long should this Fitness Plan be?" }),
       ).toBeVisible();
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    });
+
+    it.each([false, true])(
+      "confirms activation with the active Plan copy and restores focus on Escape (active: %s)",
+      async (hasActivePlan) => {
+        const model: PlanCreationCardModel = {
+          ...planCreationModel(null),
+          status: "review",
+          draft: planCreationDraft(),
+        };
+        if (hasActivePlan) {
+          useEnduragentStore.getState().setPlanHydration({
+            status: "ready",
+            state: planReadModel({
+              lifecycle: "active",
+              title: "Plan active locally",
+              scenarioId: "PL-S004",
+              projection: "active",
+              planId: "00000000000000000000000003",
+              data: {
+                plan: {
+                  id: "00000000000000000000000003",
+                  name: "Steady autumn",
+                  primaryGoal: "Build steady power",
+                  startDate: "1998-07-06",
+                  targetDate: "1998-10-04",
+                  kind: "full-plan",
+                  totalWeeks: 12,
+                  weekStartDay: 1,
+                  workoutCount: 0,
+                  plannedDurationS: 0,
+                },
+                today: "1998-07-13",
+                weekIndex: 2,
+                todayWorkout: null,
+                workouts: [],
+              },
+            }),
+          });
+        }
+        actions.openPlanCreationActivate = vi.fn(() =>
+          setChat({
+            planCreationActivateConfirmationOpen: true,
+            planCreationActivePlanKnowledge: hasActivePlan
+              ? { kind: "active", name: "Steady autumn" }
+              : { kind: "none" },
+          }),
+        );
+        actions.cancelPlanCreationActivate = vi.fn(() =>
+          setChat({
+            planCreationActivateConfirmationOpen: false,
+            planCreationFocusRequest: { target: "activate", revision: 1 },
+          }),
+        );
+        setChat({
+          planCreationLoaded: true,
+          planCreation: model,
+          timeline: [{ kind: "plan-creation", model }],
+        });
+        render(<Harness />);
+        const trigger = screen.getByRole("button", { name: "Activate Plan" });
+        await userEvent.click(trigger);
+        const dialog = screen.getByRole("dialog");
+        expect(dialog).toHaveAccessibleName(
+          hasActivePlan ? "Close and activate?" : "Activate Plan?",
+        );
+        expect(
+          screen.getByText(
+            hasActivePlan
+              ? "Steady autumn closes. The new Plan activates now."
+              : "The new Plan activates now.",
+          ),
+        ).toBeVisible();
+        const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+        const confirm = within(dialog).getByRole("button", {
+          name: hasActivePlan ? "Activate new Plan" : "Activate Plan",
+        });
+        expect(
+          cancel.compareDocumentPosition(confirm) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        await waitFor(() => expect(cancel).toHaveFocus());
+        await userEvent.keyboard("{Escape}");
+        expect(actions.cancelPlanCreationActivate).toHaveBeenCalledOnce();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        await waitFor(() => expect(trigger).toHaveFocus());
+        expect(useEnduragentStore.getState().chat.planCreation).toEqual(model);
+        expect(actions.confirmPlanCreationActivate).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([null, "Activation could not be saved locally. Your previous Plan is unchanged."])(
+      "keeps the dialog closed while the current Plan is unknown (error: %s)",
+      async (error) => {
+        const model: PlanCreationCardModel = {
+          ...planCreationModel(null),
+          status: "review",
+          draft: planCreationDraft(),
+        };
+        setChat({
+          planCreationLoaded: true,
+          planCreation: model,
+          timeline: [{ kind: "plan-creation", model }],
+          planCreationActivateConfirmationOpen: false,
+          planCreationActivePlanKnowledge: { kind: "unknown" },
+          planCreationBusy: error === null,
+          planCreationError: error,
+        });
+        render(<Harness />);
+        expect(screen.queryByRole("dialog")).toBeNull();
+        const trigger = screen.getByRole("button", { name: "Activate Plan" });
+        if (error === null) {
+          expect(trigger).toBeDisabled();
+        } else {
+          expect(trigger).toBeEnabled();
+          expect(screen.getByRole("alert")).toHaveTextContent(error);
+          await userEvent.click(trigger);
+          expect(actions.openPlanCreationActivate).toHaveBeenCalledOnce();
+        }
+        expect(actions.confirmPlanCreationActivate).not.toHaveBeenCalled();
+      },
+    );
+
+    it("shows activation failure inside the open dialog without losing review cards", async () => {
+      const model: PlanCreationCardModel = {
+        ...planCreationModel(null),
+        status: "review",
+        draft: planCreationDraft(),
+      };
+      actions.confirmPlanCreationActivate = vi.fn(() =>
+        setChat({
+          planCreationError:
+            "Activation could not be saved locally. Your previous Plan is unchanged.",
+        }),
+      );
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        planCreationActivateConfirmationOpen: true,
+        planCreationActivePlanKnowledge: { kind: "none" },
+        timeline: [{ kind: "plan-creation", model }],
+      });
+      render(<Harness />);
+      const dialog = screen.getByRole("dialog");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Activate Plan" }));
+      expect(
+        within(dialog).getByText(
+          "Activation could not be saved locally. Your previous Plan is unchanged.",
+        ),
+      ).toBeVisible();
+      expect(useEnduragentStore.getState().chat.planCreation).toEqual(model);
+      expect(screen.getByRole("dialog")).toBeVisible();
+    });
+
+    it("disables activation for a Draft without Workouts", () => {
+      const draft = planCreationDraft();
+      draft.weeks = draft.weeks.map((week) => ({ ...week, workouts: [] }));
+      const model: PlanCreationCardModel = { ...planCreationModel(null), status: "review", draft };
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+      render(<Harness />);
+      expect(screen.getByRole("button", { name: "Activate Plan" })).toBeDisabled();
     });
 
     it("confirms discarding in a modal and restores the initiating control on Escape", async () => {

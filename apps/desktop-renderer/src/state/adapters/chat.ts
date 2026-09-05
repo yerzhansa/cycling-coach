@@ -1,9 +1,5 @@
 import type { CoachDecisionReadModel, TranscriptPageEntry } from "@enduragent/coach-contract";
-import type {
-  ChatView,
-  ChatViewControls,
-  PlanCreationDiscardEvent,
-} from "../../chat/controller";
+import type { ChatView, ChatViewControls, PlanCreationDiscardEvent } from "../../chat/controller";
 import type { ChatState } from "../../turn-state";
 import {
   EMPTY_CHAT_SURFACE,
@@ -306,10 +302,11 @@ export function createChatViewAdapter(input: {
       liveItems,
       planCreation?.discardEvents ?? [],
     );
+    const planActivated = planCreation?.notice === "Plan activated locally.";
     const timeline = [
       ...conversationItems,
       ...planningItems,
-      ...(planCreation?.loaded === true && planCreation.value !== null
+      ...(planCreation?.loaded === true && (planCreation.value !== null || planActivated)
         ? ([{ kind: "plan-creation", model: planCreation.value }] as const)
         : []),
     ];
@@ -320,6 +317,7 @@ export function createChatViewAdapter(input: {
     const planCreationEditingKey = planCreation?.editingKey ?? null;
     const planCreationBlocksWork =
       planCreation?.discardConfirmationOpen === true ||
+      planCreation?.activateConfirmationOpen === true ||
       (!planCreationPaused &&
         planCreation?.value !== null &&
         planCreation?.value !== undefined &&
@@ -367,13 +365,16 @@ export function createChatViewAdapter(input: {
       planCreationEditingKey,
       planCreationFocusRevision: planCreation?.focusRevision ?? 0,
       planCreationDiscardConfirmationOpen: planCreation?.discardConfirmationOpen ?? false,
+      planCreationActivateConfirmationOpen: planCreation?.activateConfirmationOpen ?? false,
+      planCreationActivePlanKnowledge:
+        planCreation?.activePlanKnowledge ?? EMPTY_CHAT_SURFACE.planCreationActivePlanKnowledge,
       planCreationFocusRequest: planCreation?.focusRequest ?? null,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
       notice: decisionBlocksWork
         ? null
         : (state.activeTurn?.error?.athleteMessage ??
-          planCreation?.notice ??
+          (planActivated ? null : planCreation?.notice) ??
           (state.status === "streaming" ? null : state.progress)),
       coachProgress:
         state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,
