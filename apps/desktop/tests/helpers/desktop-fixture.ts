@@ -23,6 +23,7 @@ import type { DesktopTelegramController } from "../../../../packages/coach/src/d
 import { connectCdp, reservePort, waitForPage } from "../../scripts/support/desktop-cdp.js";
 import { BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME } from "../../src/main/login-item.js";
 import { SESSION_TIMEZONE_PIN_FILE_NAME } from "../../src/main/session-timezone-contract.js";
+import { desktopFixtureLaunchArgs } from "./desktop-fixture-launch-args.js";
 
 export interface DesktopFixtureScript {
   readonly onRequest: (request: unknown) => readonly string[] | Promise<readonly string[]>;
@@ -685,6 +686,7 @@ export async function launchDesktopFixture(input: {
       [
         ...(mainDebuggerPort === undefined ? [] : [`--inspect=${mainDebuggerPort}`]),
         ...applicationArgs,
+        ...desktopFixtureLaunchArgs(process.platform, process.env.CI),
         `--remote-debugging-port=${debuggerPort}`,
         `--user-data-dir=${userData}`,
       ],
@@ -713,6 +715,12 @@ export async function launchDesktopFixture(input: {
     });
     const debuggerUrl = await waitForPage(debuggerPort, {
       timeoutMs: DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS,
+      readLaunchDiagnostics: () => ({
+        stdout,
+        stderr,
+        exitCode: nextChild.exitCode,
+        signalCode: nextChild.signalCode,
+      }),
     });
     if (mainDebuggerPort !== undefined) {
       const deadline = Date.now() + DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS;

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test as base, type ElectronApplication, type Page } from "@playwright/test";
+import { desktopFixtureLaunchArgs } from "../../helpers/desktop-fixture-launch-args.js";
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(import.meta.dirname, "../../..");
@@ -66,7 +67,7 @@ export const test = base.extend<DesktopFixtures>({
     try {
       application = await playwright._electron.launch({
         executablePath: require("electron") as string,
-        args: [desktopRoot],
+        args: [desktopRoot, ...desktopFixtureLaunchArgs(process.platform, process.env.CI)],
         cwd: desktopRoot,
         env: isolatedEnvironment(paths),
         colorScheme: "light",
