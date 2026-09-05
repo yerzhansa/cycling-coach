@@ -1,13 +1,18 @@
+import { z } from "zod";
 import {
   PlanCreationAnswerRpcParamsSchema,
   PlanCreationAnswerRpcResultSchema,
   PlanCreationDiscardRpcParamsSchema,
   PlanCreationDiscardRpcResultSchema,
+  PlanCreationDraftSchema,
+  PlanCreationPreviewRpcParamsSchema,
+  PlanCreationPreviewRpcResultSchema,
   PlanCreationStartRpcParamsSchema,
   PlanCreationStartRpcResultSchema,
   type PlanCreationCardModel,
   type PlanCreationOperations,
 } from "@enduragent/coach-contract";
+import { buildCreationDraft } from "@enduragent/sport-cycling";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
   PlanCreationStoreError,
@@ -19,6 +24,7 @@ import {
   encodePlanCreationAnswer,
   projectPlanCreationCard,
   resolvePlanCreationAnswerFlow,
+  resolvePlanCreationDraftAnswers,
   validPlanCreationAnswer,
   type PlanCreationAnswerKey,
   type PlanCreationBaselineEvidence,
@@ -51,6 +57,8 @@ async function requestDigest(crypto: Crypto, request: unknown): Promise<string> 
   );
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+const PreviewInputDateSchema = z.object({ today: z.iso.date() });
 
 const defaultBaselineEvidence: BaselineEvidenceSource = { read: async () => undefined };
 
@@ -207,6 +215,91 @@ export function createPlanCreationOperations(input: {
           ["stale-version", "command-conflict", "missing-creation"].includes(error.code)
         ) {
           return PlanCreationAnswerRpcResultSchema.parse({
+            status: "rejected",
+            reason: error.code === "missing-creation" ? "no-unfinished-creation" : error.code,
+            planCreation: await readCard(),
+          });
+        }
+        throw error;
+      }
+    },
+    async "plan_creation.preview"(request) {
+      const parsed = PlanCreationPreviewRpcParamsSchema.parse(request);
+      const command = await stamp(parsed.commandId, await requestDigest(input.crypto, parsed));
+      try {
+        const replayed = await input.repository.replayDraft(command);
+        if (replayed !== undefined) {
+          if (replayed.currentDraft === null) throw new PlanCreationStoreError("corrupt-record");
+          const context = PreviewInputDateSchema.parse(
+            JSON.parse(replayed.currentDraft.inputSnapshotJson),
+          );
+          return PlanCreationPreviewRpcResultSchema.parse({
+            status: "previewed",
+            planCreation: projectPlanCreationCard(replayed, context),
+          });
+        }
+        const snapshot = await input.repository.readUnfinished();
+        if (snapshot === undefined || snapshot.id !== parsed.creationId) {
+          return PlanCreationPreviewRpcResultSchema.parse({
+            status: "rejected",
+            reason: "no-unfinished-creation",
+            planCreation:
+              snapshot === undefined ? null : projectPlanCreationCard(snapshot, { today: today() }),
+          });
+        }
+        if (snapshot.version !== parsed.expectedVersion) {
+          return PlanCreationPreviewRpcResultSchema.parse({
+            status: "rejected",
+            reason: "stale-version",
+            planCreation: projectPlanCreationCard(snapshot, { today: today() }),
+          });
+        }
+        const answers = resolvePlanCreationDraftAnswers(snapshot);
+        if (answers === null) {
+          return PlanCreationPreviewRpcResultSchema.parse({
+            status: "rejected",
+            reason: "not-ready",
+            planCreation: projectPlanCreationCard(snapshot, { today: today() }),
+          });
+        }
+        const buildInput = { answers, today: today(), ftp: null } as const;
+        const built = buildCreationDraft(buildInput);
+        if (built.kind === "no-workouts") {
+          return PlanCreationPreviewRpcResultSchema.parse({
+            status: "rejected",
+            reason: "no-workouts",
+            explanation: built.explanation,
+            planCreation: projectPlanCreationCard(snapshot, { today: buildInput.today }),
+          });
+        }
+        const draft = PlanCreationDraftSchema.parse(built);
+        const result = await input.repository.recordDraft({
+          command,
+          creationId: parsed.creationId,
+          expectedVersion: parsed.expectedVersion,
+          draftId: input.identity.newUlid(),
+          inputSnapshotJson: canonicalJson(buildInput),
+          inputFingerprint: draft.inputFingerprint,
+          outputSnapshotJson: canonicalJson(draft),
+          builderId: draft.builderId,
+          builderVersion: draft.builderVersion,
+          activationFingerprint: draft.outputFingerprint,
+        });
+        return PlanCreationPreviewRpcResultSchema.parse({
+          status: "previewed",
+          planCreation: projectPlanCreationCard(result.snapshot, { today: buildInput.today }),
+        });
+      } catch (error) {
+        if (
+          error instanceof PlanCreationStoreError &&
+          [
+            "stale-version",
+            "command-conflict",
+            "missing-creation",
+            "no-unfinished-creation",
+          ].includes(error.code)
+        ) {
+          return PlanCreationPreviewRpcResultSchema.parse({
             status: "rejected",
             reason: error.code === "missing-creation" ? "no-unfinished-creation" : error.code,
             planCreation: await readCard(),

@@ -2308,10 +2308,25 @@ describe("local coach composition", () => {
             source: { kind: "athlete" },
           });
         }
+        const previewed = await lifecycle.operations["plan_creation.preview"]({
+          commandId: "creation-preview",
+          creationId: card.creationId,
+          expectedVersion: card.version,
+        });
+        if (previewed.status !== "previewed") throw new TypeError("Plan Draft did not build.");
+        card = previewed.planCreation;
+        expect(card).toMatchObject({
+          status: "review",
+          readiness: "ready",
+          version: answers.length + 2,
+          draftStale: false,
+        });
+        expect(card.draft).not.toBeNull();
+        expect(await store.all("SELECT * FROM plan_creation_draft_revision")).toHaveLength(1);
         const commands = await store.all(
           "SELECT * FROM planning_command ORDER BY command_name,command_id",
         );
-        expect(commands).toHaveLength(answers.length + 1);
+        expect(commands).toHaveLength(answers.length + 2);
         for (const command of commands) expect(command.status).toBe("succeeded");
         for (const [index] of answers.entries()) {
           const command = commands.find((row) => row.command_id === `creation-answer-${index}`);

@@ -1780,6 +1780,8 @@ describe("chat controller", () => {
 
   it("gates coaching work only while a Plan Creation Card is visible", async () => {
     const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",
@@ -1849,6 +1851,8 @@ describe("chat controller", () => {
 
   it("guards an in-flight discard, sends the displayed revision, and clears the Card", async () => {
     const completeCard: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
@@ -1921,6 +1925,8 @@ describe("chat controller", () => {
 
   it("retries a failed discard with the identical command and no premature consequence", async () => {
     const card: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
@@ -1964,6 +1970,8 @@ describe("chat controller", () => {
 
   it("cancels discard with focus restoration and keeps Chat gated only while open", async () => {
     const completeCard: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
@@ -1992,6 +2000,8 @@ describe("chat controller", () => {
 
   it("installs the returned Card and publishes an inline notice after discard rejection", async () => {
     const card: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
@@ -2046,6 +2056,8 @@ describe("chat controller", () => {
 
   it("returns focus to Start when refresh removes a Card behind its discard dialog", async () => {
     const card: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
@@ -2081,6 +2093,8 @@ describe("chat controller", () => {
       removeItem: (key: string) => stored.delete(key),
     });
     const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 4,
       status: "in-progress",
@@ -2157,6 +2171,8 @@ describe("chat controller", () => {
       items: [restoredMessage],
     };
     const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",
@@ -2228,6 +2244,8 @@ describe("chat controller", () => {
 
   it("retries Card commands with stable ids, installs monotonically, and unblocks Chat", async () => {
     const goalCard: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",
@@ -2285,6 +2303,8 @@ describe("chat controller", () => {
 
   it("submits an edited answer at the current version and closes the editor", async () => {
     const ready: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 10,
       status: "in-progress",
@@ -2326,6 +2346,8 @@ describe("chat controller", () => {
 
   it("preserves Edit and focus state when an identical Plan Creation model is restored", async () => {
     const ready: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 10,
       status: "in-progress",
@@ -2353,6 +2375,8 @@ describe("chat controller", () => {
 
   it("keeps a rejected Edit open with its error and current answer", async () => {
     const ready: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 10,
       status: "in-progress",
@@ -2389,6 +2413,8 @@ describe("chat controller", () => {
 
   it("clears and replaces server-authoritative Plan Creation cards", async () => {
     const first: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 4,
       status: "in-progress",
@@ -2397,6 +2423,8 @@ describe("chat controller", () => {
       openQuestion: goalQuestion("First goal?"),
     };
     const replacement: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000001",
       version: 1,
       status: "in-progress",
@@ -2430,6 +2458,8 @@ describe("chat controller", () => {
 
   it("keeps interrupted recovery inert while a Plan Creation question is open", async () => {
     const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",

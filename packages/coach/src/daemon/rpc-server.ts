@@ -549,6 +549,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "listPlanningRequests",
   "plan_creation.start",
   "plan_creation.answer",
+  "plan_creation.preview",
   "plan_creation.discard",
 ]);
 
@@ -1840,6 +1841,17 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             try {
               result = await input.operations["plan_creation.answer"](
                 COACH_RPC_METHOD_REGISTRY["plan_creation.answer"].requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan_creation.preview":
+            try {
+              result = await input.operations["plan_creation.preview"](
+                COACH_RPC_METHOD_REGISTRY["plan_creation.preview"].requestSchema.parse(
                   generic.data.params,
                 ),
               );

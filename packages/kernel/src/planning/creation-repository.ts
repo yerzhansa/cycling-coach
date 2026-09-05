@@ -40,24 +40,46 @@ export const PlanCreationSeedV1Schema = z
   .readonly();
 export type PlanCreationSeedV1 = z.infer<typeof PlanCreationSeedV1Schema>;
 
-export interface PlanCreationAnswerRecord {
-  readonly id: string;
-  readonly sequence: number;
-  readonly creationVersion: number;
-  readonly answerKey: string;
-  readonly valueJson: string;
-  readonly confirmedAtMs: number;
-}
+const PlanCreationAnswerRecordSchema = z
+  .object({
+    id: z.string(),
+    sequence: z.number().int().positive(),
+    creationVersion: z.number().int().positive(),
+    answerKey: z.string(),
+    valueJson: z.string(),
+    confirmedAtMs: z.number().int().nonnegative(),
+  })
+  .readonly();
+export type PlanCreationAnswerRecord = z.infer<typeof PlanCreationAnswerRecordSchema>;
 
-export interface PlanCreationSnapshot {
-  readonly id: string;
-  readonly status: "in-progress" | "review" | "activated" | "discarded";
-  readonly version: number;
-  readonly seed: PlanCreationSeedV1 | null;
-  readonly createdAtMs: number;
-  readonly updatedAtMs: number;
-  readonly answers: readonly PlanCreationAnswerRecord[];
-}
+const PlanCreationDraftRevisionSchema = z
+  .object({
+    revisionNumber: z.number().int().positive(),
+    parentRevisionNumber: z.number().int().positive().nullable(),
+    inputVersion: z.number().int().positive(),
+    inputSnapshotJson: z.string(),
+    inputFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
+    outputSnapshotJson: z.string(),
+    builderId: z.string().min(1),
+    builderVersion: z.string().min(1),
+    activationFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .readonly();
+export type PlanCreationDraftRevision = z.infer<typeof PlanCreationDraftRevisionSchema>;
+
+const PlanCreationSnapshotSchema = z
+  .object({
+    id: z.string(),
+    status: z.enum(["in-progress", "review", "activated", "discarded"]),
+    version: z.number().int().positive(),
+    seed: PlanCreationSeedV1Schema.nullable(),
+    createdAtMs: z.number().int().nonnegative(),
+    updatedAtMs: z.number().int().nonnegative(),
+    answers: z.array(PlanCreationAnswerRecordSchema).readonly(),
+    currentDraft: PlanCreationDraftRevisionSchema.nullable(),
+  })
+  .readonly();
+export type PlanCreationSnapshot = z.infer<typeof PlanCreationSnapshotSchema>;
 
 export interface PlanCreationCommandStamp {
   readonly commandId: string;
@@ -83,6 +105,19 @@ export interface RecordPlanCreationAnswerInput {
   readonly valueJson: string;
 }
 
+export interface RecordPlanCreationDraftInput {
+  readonly command: PlanCreationCommandStamp;
+  readonly creationId: string;
+  readonly expectedVersion: number;
+  readonly draftId: string;
+  readonly inputSnapshotJson: string;
+  readonly inputFingerprint: string;
+  readonly outputSnapshotJson: string;
+  readonly builderId: string;
+  readonly builderVersion: string;
+  readonly activationFingerprint: string;
+}
+
 export interface DiscardPlanCreationInput {
   readonly command: PlanCreationCommandStamp;
   readonly creationId: string;
@@ -96,6 +131,11 @@ export interface PlanCreationRepository {
     snapshot: PlanCreationSnapshot;
   }>;
   recordAnswer(input: RecordPlanCreationAnswerInput): Promise<{
+    outcome: "recorded" | "replayed";
+    snapshot: PlanCreationSnapshot;
+  }>;
+  replayDraft(command: PlanCreationCommandStamp): Promise<PlanCreationSnapshot | undefined>;
+  recordDraft(input: RecordPlanCreationDraftInput): Promise<{
     outcome: "recorded" | "replayed";
     snapshot: PlanCreationSnapshot;
   }>;
@@ -145,11 +185,36 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
       "SELECT * FROM plan_creation_answer WHERE creation_id=? ORDER BY sequence,id",
       [id],
     );
+    const revisionNumber = row.current_draft_revision_number;
+    let currentDraft: PlanCreationDraftRevision | null = null;
+    if (revisionNumber !== null) {
+      const draft = await store.get(
+        "SELECT * FROM plan_creation_draft_revision WHERE creation_id=? AND revision_number=?",
+        [id, integer(row, "current_draft_revision_number")],
+      );
+      if (draft === undefined) return fail();
+      const parsed = PlanCreationDraftRevisionSchema.safeParse({
+        revisionNumber: draft.revision_number,
+        parentRevisionNumber: draft.parent_revision_number,
+        inputVersion: draft.input_version,
+        inputSnapshotJson: draft.input_snapshot_json,
+        inputFingerprint: draft.input_fingerprint,
+        outputSnapshotJson: draft.output_snapshot_json,
+        builderId: draft.builder_id,
+        builderVersion: draft.builder_version,
+        activationFingerprint: draft.activation_fingerprint,
+      });
+      if (!parsed.success) return fail();
+      currentDraft = parsed.data;
+      json(currentDraft.inputSnapshotJson);
+      json(currentDraft.outputSnapshotJson);
+    }
     return {
       id,
       status: status === "review" ? "review" : "in-progress",
       version: integer(row, "version"),
       seed,
+      currentDraft,
       createdAtMs: integer(row, "created_at_ms"),
       updatedAtMs: integer(row, "updated_at_ms"),
       answers: answers.map((answer) => {
@@ -172,25 +237,39 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
     return snapshot;
   };
   const hasReplay = async (
-    name: "plan_creation.start" | "plan_creation.answer" | "plan_creation.discard",
+    name:
+      | "plan_creation.start"
+      | "plan_creation.answer"
+      | "plan_creation.discard"
+      | "plan_creation.preview",
     command: PlanCreationCommandStamp,
   ) => {
     const row = await store.get(
-      "SELECT request_digest,status FROM planning_command WHERE command_name=? AND command_id=?",
+      "SELECT request_digest,status,result_json FROM planning_command WHERE command_name=? AND command_id=?",
       [name, command.commandId],
     );
     if (row === undefined) return undefined;
     if (text(row, "request_digest") !== command.requestDigest)
       throw new PlanCreationStoreError("command-conflict");
     if (text(row, "status") !== "succeeded") fail();
-    return true;
+    return row;
   };
   const replay = async (
     name: "plan_creation.start" | "plan_creation.answer",
     command: PlanCreationCommandStamp,
   ) => ((await hasReplay(name, command)) ? requireUnfinished() : undefined);
+  const replayDraft = async (command: PlanCreationCommandStamp) => {
+    const row = await hasReplay("plan_creation.preview", command);
+    if (row === undefined) return undefined;
+    const parsed = PlanCreationSnapshotSchema.safeParse(json(text(row, "result_json")));
+    return parsed.success ? parsed.data : fail();
+  };
   const recordCommand = (
-    name: "plan_creation.start" | "plan_creation.answer" | "plan_creation.discard",
+    name:
+      | "plan_creation.start"
+      | "plan_creation.answer"
+      | "plan_creation.discard"
+      | "plan_creation.preview",
     command: PlanCreationCommandStamp,
     creationId: string,
     result: unknown,
@@ -215,6 +294,7 @@ version,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter
     );
   return {
     readUnfinished,
+    replayDraft,
     async start({ command, creationId, seed }) {
       return store.transaction(async () => {
         const prior = await replay("plan_creation.start", command);
@@ -274,7 +354,7 @@ device_id,hlc_physical_ms,hlc_counter
         );
         await store.run(
           `UPDATE plan_creation SET version=?,updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=?
-WHERE id=? AND status='in-progress' AND version=?`,
+WHERE id=? AND status IN ('in-progress','review') AND version=?`,
           [
             version,
             command.nowMs,
@@ -293,6 +373,67 @@ WHERE id=? AND status='in-progress' AND version=?`,
           answerId,
           version,
         });
+        return { outcome: "recorded", snapshot };
+      });
+    },
+    async recordDraft(input) {
+      const { command, creationId, expectedVersion } = input;
+      return store.transaction(async () => {
+        const prior = await replayDraft(command);
+        if (prior) return { outcome: "replayed", snapshot: prior };
+        const current = await readUnfinished();
+        if (current === undefined || current.id !== creationId)
+          throw new PlanCreationStoreError("no-unfinished-creation");
+        if (current.version !== expectedVersion) throw new PlanCreationStoreError("stale-version");
+        const parentRevisionNumber = current.currentDraft?.revisionNumber ?? null;
+        const revisionNumber = (parentRevisionNumber ?? 0) + 1;
+        await store.run(
+          `INSERT INTO plan_creation_draft_revision (
+id,creation_id,revision_number,parent_revision_number,input_version,input_snapshot_json,
+input_fingerprint,builder_id,builder_version,output_snapshot_json,activation_fingerprint,
+created_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            input.draftId,
+            creationId,
+            revisionNumber,
+            parentRevisionNumber,
+            expectedVersion,
+            input.inputSnapshotJson,
+            input.inputFingerprint,
+            input.builderId,
+            input.builderVersion,
+            input.outputSnapshotJson,
+            input.activationFingerprint,
+            command.nowMs,
+            command.deviceId,
+            command.hlcPhysicalMs,
+            command.hlcCounter,
+          ],
+        );
+        await store.run(
+          `UPDATE plan_creation SET status='review',current_draft_revision_number=?,version=version+1,
+updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=?
+WHERE id=? AND status IN ('in-progress','review') AND version=?`,
+          [
+            revisionNumber,
+            command.nowMs,
+            command.deviceId,
+            command.hlcPhysicalMs,
+            command.hlcCounter,
+            creationId,
+            expectedVersion,
+          ],
+        );
+        const snapshot = await requireUnfinished();
+        if (
+          snapshot.id !== creationId ||
+          snapshot.version !== expectedVersion + 1 ||
+          snapshot.currentDraft?.revisionNumber !== revisionNumber ||
+          snapshot.status !== "review"
+        )
+          throw new PlanCreationStoreError("stale-version");
+        await recordCommand("plan_creation.preview", command, creationId, snapshot);
         return { outcome: "recorded", snapshot };
       });
     },

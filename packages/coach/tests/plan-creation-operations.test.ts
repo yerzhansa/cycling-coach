@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, onTestFinished } from "vitest";
 import {
   PlanCreationCardModelSchema,
   type PlanCreationAnswerInput,
@@ -6,6 +6,7 @@ import {
   type PlanCreationCardModel,
 } from "@enduragent/coach-contract";
 import {
+  createPlanCreationRepository,
   PlanCreationStoreError,
   type PlanCreationAnswerRecord,
   type PlanCreationRepository,
@@ -17,6 +18,9 @@ import {
   projectPlanCreationCard,
   type BaselineEvidenceSource,
 } from "../src/plan-creation-operations.js";
+import { runMigrations } from "@enduragent/kernel/store";
+import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { readPlanCreationAnswers } from "../src/plan-creation-answers.js";
 
 const id = (value: string) => `${"0".repeat(26 - value.length)}${value}`;
@@ -91,6 +95,7 @@ const stored = (
 const snapshot = (answers: readonly PlanCreationAnswerRecord[] = []): PlanCreationSnapshot => ({
   id: id("1"),
   status: "in-progress",
+  currentDraft: null,
   version: answers.length + 1,
   seed: { schemaVersion: 1, eventCandidates: [eventCandidate] },
   createdAtMs: 883_612_800_000,
@@ -148,6 +153,10 @@ function harness(
     return { outcome: "recorded", snapshot: current };
   });
   const repository: PlanCreationRepository = {
+    replayDraft: async () => undefined,
+    recordDraft: async () => {
+      throw new Error("unused");
+    },
     readUnfinished: async () => current,
     start: async () => ({ outcome: "resumed", snapshot: current }),
     recordAnswer,
@@ -258,10 +267,7 @@ describe("Plan Creation operations", () => {
     ];
     const cases: readonly [PlanCreationAnswerInput, string][] = [
       [noRestriction, "No training restrictions"],
-      [
-        { kind: "restriction", restriction: { kind: "no-training" } },
-        "No training",
-      ],
+      [{ kind: "restriction", restriction: { kind: "no-training" } }, "No training"],
       [
         {
           kind: "restriction",
@@ -269,10 +275,7 @@ describe("Plan Creation operations", () => {
         },
         "No training until 1998-09-14",
       ],
-      [
-        { kind: "restriction", restriction: { kind: "no-hard-training" } },
-        "No hard training",
-      ],
+      [{ kind: "restriction", restriction: { kind: "no-hard-training" } }, "No hard training"],
       [
         {
           kind: "restriction",
@@ -651,6 +654,10 @@ describe("Plan Creation operations", () => {
     let sequence = 8;
     const host = createPlanCreationOperations({
       repository: {
+        replayDraft: async () => undefined,
+        recordDraft: async () => {
+          throw new Error("unused");
+        },
         readUnfinished: async () => current,
         start,
         recordAnswer: async () => {
@@ -742,6 +749,10 @@ describe("Plan Creation operations", () => {
     });
     const host = createPlanCreationOperations({
       repository: {
+        replayDraft: async () => undefined,
+        recordDraft: async () => {
+          throw new Error("unused");
+        },
         readUnfinished,
         start: async () => {
           throw new Error("unused");
@@ -818,5 +829,195 @@ describe("Plan Creation operations", () => {
 
     discardError = new Error("unexpected");
     await expect(host["plan_creation.discard"](request)).rejects.toThrow("unexpected");
+  });
+});
+
+async function previewHarness() {
+  let currentToday = today;
+  const store = openSqliteStorage(":memory:");
+  onTestFinished(() => store.close());
+  await runMigrations(store, MIGRATIONS);
+  const repository = createPlanCreationRepository(store);
+  let sequence = 100;
+  const host = createPlanCreationOperations({
+    repository,
+    identity: {
+      deviceId: async () => "preview-test-device",
+      newUlid: () => id(`${++sequence}`),
+      hlcStamp: () => ({ physicalMs: 883_612_800_000, counter: 0 }),
+    },
+    crypto: globalThis.crypto,
+    eventCandidates: { read: async () => [candidateSource] },
+    today: () => currentToday,
+  });
+  const started = await host["plan_creation.start"]({ commandId: "start" });
+  if (started.status !== "started") throw new Error("Expected creation");
+  let card = started.planCreation;
+  const answer = async (value: PlanCreationAnswerInput) => {
+    card = await answered(
+      host["plan_creation.answer"]({
+        commandId: `answer-${++sequence}`,
+        creationId: card.creationId,
+        expectedVersion: card.version,
+        answer: value,
+      }),
+    );
+    return card;
+  };
+  const ready = async () => {
+    for (const value of [
+      fitnessGoal,
+      { kind: "plan-length", weeks: 4 } as const,
+      flexibleMode,
+      flexibleAvailability,
+      startTiming,
+      noCommitments,
+      regularBaseline,
+      fitnessSuccess,
+      noRestriction,
+    ])
+      await answer(value);
+    return card;
+  };
+  return {
+    store,
+    repository,
+    host,
+    ready,
+    answer,
+    card: () => card,
+    advanceDay: () => {
+      currentToday = "1998-09-03";
+    },
+  };
+}
+
+describe("Plan Creation preview", () => {
+  it("stores a complete Draft, replays its result, and rebuilds stale review answers", async () => {
+    const test = await previewHarness();
+    const card = await test.ready();
+    const request = {
+      commandId: "preview",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    };
+    const first = await test.host["plan_creation.preview"](request);
+    expect(first).toMatchObject({
+      status: "previewed",
+      planCreation: {
+        status: "review",
+        version: card.version + 1,
+        draftStale: false,
+        draft: { mode: "flexible", weeks: expect.any(Array), ftp: null },
+      },
+    });
+    const snapshot = await test.repository.readUnfinished();
+    expect(snapshot?.currentDraft?.inputFingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    const before = await test.store.all("SELECT * FROM plan_creation_draft_revision");
+    const edited = await answered(
+      test.host["plan_creation.answer"]({
+        commandId: "edit",
+        creationId: card.creationId,
+        expectedVersion: card.version + 1,
+        answer: { kind: "plan-length", weeks: 8 },
+      }),
+    );
+    expect(edited).toMatchObject({ status: "review", draftStale: true });
+    expect(await test.host["plan_creation.preview"](request)).toEqual(first);
+    expect(await test.store.all("SELECT * FROM plan_creation_draft_revision")).toEqual(before);
+    await expect(
+      test.host["plan_creation.preview"]({ ...request, expectedVersion: edited.version }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "command-conflict" });
+    const rebuilt = await test.host["plan_creation.preview"]({
+      ...request,
+      commandId: "rebuild",
+      expectedVersion: edited.version,
+    });
+    expect(rebuilt).toMatchObject({ status: "previewed", planCreation: { draftStale: false } });
+    const stored = await test.repository.readUnfinished();
+    expect(stored?.currentDraft).toMatchObject({ revisionNumber: 2, parentRevisionNumber: 1 });
+    expect(await test.host.readCard()).toEqual(
+      rebuilt.status === "previewed" ? rebuilt.planCreation : null,
+    );
+    expect(await test.store.all("SELECT * FROM plan")).toEqual([]);
+    expect(await test.store.all("SELECT * FROM plan_conversation")).toEqual([]);
+  });
+
+  it("rejects incomplete, stale, and missing creations without storing a revision", async () => {
+    const test = await previewHarness();
+    const card = test.card();
+    const request = {
+      commandId: "preview",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    };
+    await expect(test.host["plan_creation.preview"](request)).resolves.toMatchObject({
+      reason: "not-ready",
+    });
+    await expect(
+      test.host["plan_creation.preview"]({ ...request, expectedVersion: 10 }),
+    ).resolves.toMatchObject({ reason: "stale-version" });
+    await expect(
+      test.host["plan_creation.preview"]({ ...request, creationId: id("999") }),
+    ).resolves.toMatchObject({ reason: "no-unfinished-creation" });
+    await test.host["plan_creation.discard"]({ ...request, commandId: "discard" });
+    await expect(test.host["plan_creation.preview"](request)).resolves.toMatchObject({
+      reason: "no-unfinished-creation",
+      planCreation: null,
+    });
+    expect(await test.store.all("SELECT * FROM plan_creation_draft_revision")).toEqual([]);
+  });
+
+  it("preserves the prior complete Draft when no Workouts fit", async () => {
+    const test = await previewHarness();
+    const card = await test.ready();
+    const request = {
+      commandId: "preview",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    };
+    await test.host["plan_creation.preview"](request);
+    const before = await test.store.all("SELECT * FROM plan_creation_draft_revision");
+    const edited = await answered(
+      test.host["plan_creation.answer"]({
+        commandId: "restrict",
+        creationId: card.creationId,
+        expectedVersion: card.version + 1,
+        answer: { kind: "restriction", restriction: { kind: "no-training" } },
+      }),
+    );
+    await expect(
+      test.host["plan_creation.preview"]({
+        ...request,
+        commandId: "empty",
+        expectedVersion: edited.version,
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      reason: "no-workouts",
+      explanation: expect.stringContaining("No Workouts"),
+      planCreation: { draftStale: true },
+    });
+    expect(await test.store.all("SELECT * FROM plan_creation_draft_revision")).toEqual(before);
+    expect((await test.repository.readUnfinished())?.version).toBe(edited.version);
+  });
+
+  it("replays a successful preview after discard without reviving the creation", async () => {
+    const test = await previewHarness();
+    const card = await test.ready();
+    const request = {
+      commandId: "preview",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    };
+    const first = await test.host["plan_creation.preview"](request);
+    await test.host["plan_creation.discard"]({
+      ...request,
+      commandId: "discard",
+      expectedVersion: card.version + 1,
+    });
+    test.advanceDay();
+    await expect(test.host["plan_creation.preview"](request)).resolves.toEqual(first);
+    await expect(test.host.readCard()).resolves.toBeNull();
   });
 });

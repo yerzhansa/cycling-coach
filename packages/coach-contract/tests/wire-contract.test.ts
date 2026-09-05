@@ -1458,6 +1458,11 @@ describe("coach request and event projection", () => {
         reason: "no-unfinished-creation",
         planCreation: null,
       }),
+      "plan_creation.preview": async () => ({
+        status: "rejected",
+        reason: "no-unfinished-creation",
+        planCreation: null,
+      }),
       "plan_creation.discard": async () => ({ status: "discarded" }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));

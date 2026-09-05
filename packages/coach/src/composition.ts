@@ -2250,6 +2250,7 @@ export async function createLocalCoachComposition(
       ...planningRequestOperations,
       "plan_creation.start": planCreationOperations["plan_creation.start"],
       "plan_creation.answer": planCreationOperations["plan_creation.answer"],
+      "plan_creation.preview": planCreationOperations["plan_creation.preview"],
       "plan_creation.discard": planCreationOperations["plan_creation.discard"],
       ...planningOperations,
     } satisfies CoachOperations &

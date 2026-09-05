@@ -233,6 +233,15 @@ const rpcDeadlineCases = [
     30_000,
   ],
   [
+    "plan_creation.preview",
+    {
+      commandId: "plan-preview",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+    },
+    30_000,
+  ],
+  [
     "plan_creation.discard",
     {
       commandId: "plan-discard",
@@ -1197,6 +1206,11 @@ describe("RPC receive and observers", () => {
         "plan_creation.answer": {
           status: "rejected",
           reason: "no-unfinished-creation",
+          planCreation: null,
+        },
+        "plan_creation.preview": {
+          status: "rejected",
+          reason: "not-ready",
           planCreation: null,
         },
         "plan_creation.discard": { status: "discarded" },

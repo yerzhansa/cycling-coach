@@ -10,6 +10,11 @@ export const planCreationOperationStubs = {
     reason: "no-unfinished-creation",
     planCreation: null,
   }),
+  "plan_creation.preview": async () => ({
+    status: "rejected",
+    reason: "no-unfinished-creation",
+    planCreation: null,
+  }),
   "plan_creation.discard": async () => ({
     status: "rejected",
     reason: "no-unfinished-creation",
