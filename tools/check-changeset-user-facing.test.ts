@@ -58,6 +58,55 @@ function writeRealisticPackages(): string {
   return join(tempDir, "packages");
 }
 
+describe("User-facing content", () => {
+  it.each([
+    "",
+    " \t\r",
+    "\n\n",
+    "\n# Internal notes",
+    "\n---",
+    "\n```text\nInternal notes\n```",
+    "\n- Internal work",
+    "\n<!-- Internal notes -->",
+    "\n| Package | Change |",
+    " ** ** ",
+  ])("rejects empty or structural content %j", (text) => {
+    const packages = writeRealisticPackages();
+    const file = write(
+      ".changeset/empty.md",
+      `---\n"@enduragent/desktop": patch\n---\n\nUser-facing:${text}\n`,
+    );
+    expect(findChangesetHits([file], packages)).toEqual([
+      expect.objectContaining({ file, line: 5, reason: "empty-user-facing" }),
+    ]);
+  });
+
+  it.each([
+    " Your rides now sync.",
+    "\nYour rides now sync.\nYou can see them in Training.",
+    "\r\n  Your rides now sync.",
+    " **Your rides now sync.**",
+  ])("accepts substantive content %j", (text) => {
+    const packages = writeRealisticPackages();
+    const file = write(
+      ".changeset/valid.md",
+      `---\n"@enduragent/desktop": patch\n---\n\nUser-facing:${text}\n`,
+    );
+    expect(findChangesetHits([file], packages)).toEqual([]);
+  });
+
+  it("checks an empty marker after a valid marker", () => {
+    const packages = writeRealisticPackages();
+    const file = write(
+      ".changeset/multiple.md",
+      `---\n"@enduragent/desktop": patch\n---\n\nUser-facing: Your rides now sync.\nUser-facing:\n`,
+    );
+    expect(findChangesetHits([file], packages)).toEqual([
+      expect.objectContaining({ file, line: 6, reason: "empty-user-facing" }),
+    ]);
+  });
+});
+
 describe("discoverPublishedBinaries", () => {
   it("returns only bin+public packages, keyed by npm name", () => {
     const pkgsDir = writeRealisticPackages();
