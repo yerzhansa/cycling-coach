@@ -248,7 +248,6 @@ export function createDesktopOAuthCredentialOwner(options: Options): DesktopOAut
       ],
       async (legacy, owned) => {
         if (owned) return;
-        assertEncryption();
         const existing = await read();
         if (existing !== undefined) {
           for (const [name, entry] of Object.entries(legacy)) {

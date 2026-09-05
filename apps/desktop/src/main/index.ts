@@ -579,7 +579,8 @@ async function runDesktop(): Promise<void> {
         return {
           state: "ready",
           unverifiedEnvelopes:
-            snapshot.unverifiedEnvelopes + Number(await oauthOwner.recoveryRequired()),
+            snapshot.unverifiedEnvelopes +
+            Number((await oauthOwner.recoveryRequired()) && !snapshot.oauthEnvelopeUnverified),
         };
       }
       if (selected.status === "safe-storage") {
@@ -1036,6 +1037,7 @@ async function runDesktop(): Promise<void> {
     };
     const chatGptAuth = createChatGptAuth({
       profileStore: oauthOwner,
+      activeProfileName: () => readDesktopOAuthProfileName(configDir),
       async applyRuntimeConfig(request, signal) {
         const binding = activeRuntimeBinding!;
         const lifecycleState = daemonLifecycle?.snapshot();

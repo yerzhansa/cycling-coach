@@ -1,3 +1,5 @@
+import { prepareDesktopCredentialEncryption } from "../src/main/desktop-credential-encryption.js";
+import { createAcceptanceKeychainTransport } from "../src/main/acceptance-credential-backend.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -72,6 +74,50 @@ afterEach(async () => {
 });
 
 describe("desktop OAuth credential ownership", () => {
+  it.each(["fresh-login", "legacy-migration"] as const)(
+    "prepares a lazily created key before %s",
+    async (scenario) => {
+      const f = await fixture();
+      const backend = await prepareDesktopCredentialEncryption({
+        credentialRoot: f.root,
+        telegramRoot: join(f.directory, "telegram-channel-v1"),
+        location: {
+          platform: "darwin",
+          packaged: false,
+          resourcesPath: f.directory,
+          applicationPath: f.directory,
+        },
+        safeStorage: f.options.encryption,
+        serializeEnvelopeMutation: f.options.serializeEnvelopeMutation,
+        createTransport: () =>
+          createAcceptanceKeychainTransport({ kind: "memory", key: randomBytes(32) }),
+      });
+      expect(backend.selection.status).toBe("keychain");
+      expect(backend.encryption.isEncryptionAvailable()).toBe(false);
+      const owner = syntheticOAuthOwner(f.configDir, {
+        ...f.options,
+        encryption: backend.encryption,
+        prepareEnvelopeWrite: (proof) => backend.prepareEnvelopeWrite(proof),
+        revalidateEnvelopeRemoval: (proof) => backend.revalidateEnvelopeRemoval(proof),
+      });
+      if (scenario === "legacy-migration") {
+        await f.seed();
+        await owner.initialize();
+      } else {
+        await owner.initialize();
+        await owner.writeProfile(synthetic());
+      }
+      await expect(owner.getAccessToken("openai-codex")).resolves.toBe(synthetic().access);
+      expect(backend.encryption.isEncryptionAvailable()).toBe(true);
+      await writeFile(join(f.root, "oauth.bin"), "synthetic-corrupt-envelope");
+      await expect(owner.recoveryRequired()).resolves.toBe(true);
+      await expect(backend.credentialRecoverySnapshot()).resolves.toMatchObject({
+        unverifiedEnvelopes: 1,
+        oauthEnvelopeUnverified: true,
+      });
+    },
+  );
+
   it("verifies encrypted migration, retains unrelated profiles, and refuses shared CLI access", async () => {
     const f = await fixture({ selectedProfile: "selected-custom" });
     await f.seed({

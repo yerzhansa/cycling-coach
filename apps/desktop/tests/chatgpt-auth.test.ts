@@ -162,6 +162,43 @@ describe("desktop ChatGPT auth", () => {
     await expect(hasChatGptProfile(directory)).resolves.toBe(false);
   });
 
+  it.each([false, true])(
+    "disconnects an active custom profile and preserves other profiles (default: %s)",
+    async (includeDefault) => {
+      const directory = await configDir();
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, "auth-profiles.json"),
+        JSON.stringify({
+          custom: { type: "oauth", ...credentials() },
+          unrelated: { type: "oauth", ...credentials(), access: "obviously-fake-unrelated" },
+          ...(includeDefault ? { "openai-codex": { type: "oauth", ...credentials() } } : {}),
+        }),
+      );
+      const owner = syntheticOAuthOwner(directory, { selectedProfile: "custom" });
+      owners.set(directory, owner);
+      await owner.initialize();
+      const auth = createChatGptAuth({
+        configDir: directory,
+        activeProfileName: async () => "custom",
+        applyRuntimeConfig: async () => {},
+        openExternal: async () => {},
+        clearRuntimeCredential: async () => {
+          await owner.deleteProfile("custom");
+          return "cleared";
+        },
+      });
+      await expect(auth.deleteCredential()).resolves.toEqual({
+        status: "deleted",
+        cleanupPending: false,
+      });
+      await expect(owner.hasProfile("custom")).resolves.toBe(false);
+      await expect(owner.hasProfile("openai-codex")).resolves.toBe(includeDefault);
+      const remaining = JSON.parse(await readFile(join(directory, "auth-profiles.json"), "utf8"));
+      expect(Object.keys(remaining)).toEqual(["unrelated"]);
+    },
+  );
+
   it("fails closed and surfaces profile/runtime divergence during deletion", async () => {
     const directory = await configDir();
     await writeChatGptProfile(directory, credentials());

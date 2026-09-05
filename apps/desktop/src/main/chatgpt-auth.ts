@@ -80,6 +80,7 @@ interface ChatGptAuthDependencies {
 
 interface CreateChatGptAuthOptions {
   readonly profileStore: DesktopOAuthCredentialOwner;
+  readonly activeProfileName?: () => Promise<string>;
   readonly applyRuntimeConfig: (
     request: ConfigureRuntimeRpcParams,
     signal?: AbortSignal,
@@ -305,8 +306,15 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
       serializeCredentialMutation(() => applySelection(selection, signal)),
     deleteCredential() {
       return serializeCredentialMutation(async () => {
-        const stored = await hasProfile();
         const runtimeReady = await configuredRuntime(options.getRuntimeConfig);
+        let profileName: string = CHATGPT_PROFILE_NAME;
+        try {
+          if (runtimeReady === true && options.activeProfileName !== undefined)
+            profileName = await options.activeProfileName();
+        } catch {
+          return { status: "refused", reason: "runtime-unavailable" };
+        }
+        const stored = await options.profileStore.hasProfile(profileName);
         if (!stored) {
           return runtimeReady === true
             ? { status: "refused", reason: "runtime-state-diverged" }
@@ -322,7 +330,7 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
           try {
             const cleared = await options.clearRuntimeCredential();
             if (cleared === "not-active") {
-              await removeProfile();
+              await options.profileStore.deleteProfile(profileName);
             } else if (cleared !== "cleared") {
               throw new TypeError();
             }
@@ -336,7 +344,7 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
             return { status: "refused", reason: "storage-failed" };
           }
         }
-        if (await hasProfile()) {
+        if (await options.profileStore.hasProfile(profileName)) {
           return { status: "refused", reason: "runtime-state-diverged" };
         }
         return { status: "deleted", cleanupPending: false };
