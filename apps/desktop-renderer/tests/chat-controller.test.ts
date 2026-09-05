@@ -16,6 +16,7 @@ import type {
   CreateWorkoutPlanningRequestRpcParams,
   PlanCreationAnswerRpcParams,
   PlanCreationAnswerRpcResult,
+  PlanCreationAnswerSummary,
   PlanningRequestDelivery,
   PlanCreationCardModel,
   PlanCreationStartRpcParams,
@@ -26,6 +27,7 @@ import type {
 import {
   CHAT_CONNECTION_INTERRUPTED_COPY,
   CHAT_EMPTY_RESPONSE_COPY,
+  CHAT_PLAN_CREATION_FAILURE_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
   CHAT_RESPONSE_STOPPED_COPY,
   NEW_CONVERSATION_MEMORY_WARNING_COPY,
@@ -37,6 +39,90 @@ import {
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits";
 import type { DesktopCoachClientProvider } from "../src/coach-client";
 import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state";
+
+const questionStep = { current: 1, total: 9 } as const;
+
+function goalQuestion(
+  prompt: string,
+): Extract<NonNullable<PlanCreationCardModel["openQuestion"]>, { readonly kind: "goal-question" }> {
+  return {
+    kind: "goal-question",
+    step: questionStep,
+    prompt,
+    candidates: [],
+    eventNotListedOption: {
+      label: "Event not listed",
+      detail: "Tell me the event name and its exact date.",
+      editorLabel: "Name the event.",
+      placeholder: "Event name",
+      nameLabel: "Event name",
+      dateLabel: "Event date",
+    },
+    fitnessOption: {
+      label: "Improve without an event",
+      detail: "Build fitness.",
+    },
+    authoredOption: {
+      label: "Something else",
+      detail: "Name an event.",
+      editorLabel: "Name the event.",
+      placeholder: "Event name",
+    },
+  };
+}
+
+function startTimingQuestion(): Extract<
+  NonNullable<PlanCreationCardModel["openQuestion"]>,
+  { readonly kind: "start-timing-question" }
+> {
+  return {
+    kind: "start-timing-question",
+    step: { current: 5, total: 9 },
+    prompt: "When could this Plan start?",
+    earliestAllowed: "1998-10-01",
+    options: [
+      {
+        timing: "as-soon-as-possible",
+        label: "As soon as possible",
+        detail: "Start at the earliest suitable week.",
+      },
+      { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
+    ],
+    dateLabel: "Earliest start date",
+  };
+}
+
+function planLengthSummary(weeks: 4 | 8 | 12 | 16): PlanCreationAnswerSummary {
+  return {
+    answerKey: "plan-length",
+    title: "Plan length",
+    detail: `${weeks} weeks`,
+    source: { kind: "athlete" },
+    question: {
+      kind: "plan-length-question",
+      step: { current: 2, total: 9 },
+      prompt: "How long should this Fitness Plan be?",
+      options: [
+        { weeks: 4, label: "4 weeks", detail: "A short block." },
+        { weeks: 8, label: "8 weeks", detail: "One training cycle." },
+        { weeks: 12, label: "12 weeks", detail: "Steady progression." },
+        { weeks: 16, label: "16 weeks", detail: "The longest build." },
+      ],
+    },
+    answer: { kind: "plan-length", weeks },
+  };
+}
+
+function fitnessGoalSummary(outcome: string): PlanCreationAnswerSummary {
+  return {
+    answerKey: "goal",
+    title: "Goal",
+    detail: outcome,
+    source: { kind: "athlete" },
+    question: goalQuestion("Goal?"),
+    answer: { kind: "goal", goal: { kind: "fitness", outcome } },
+  };
+}
 
 function envelope(
   event: TurnEvent,
@@ -1679,28 +1765,120 @@ describe("chat controller", () => {
     });
   });
 
-  it("restores an open Card and blocks coaching work", async () => {
-    const planCreation = {
+  it("gates coaching work only while a Plan Creation Card is visible", async () => {
+    const planCreation: PlanCreationCardModel = {
       creationId: "01J00000000000000000000000",
       version: 1,
-      status: "in-progress" as const,
-      answeredSummaries: [],
-      openQuestion: { kind: "goal-question" as const, prompt: "Goal?", candidates: [] },
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: goalQuestion("Goal?"),
     };
+    const ready: PlanCreationCardModel = {
+      ...planCreation,
+      version: 2,
+      readiness: "ready",
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: ready });
     const fake = client(replies(), {
-      listPlanningRequests: async () => ({ deliveries: [], planCreation }),
+      listPlanningRequests,
     });
     const { controller, controls } = subject(fake);
     await controller.start();
     expect(controls.at(-1)?.planCreation).toMatchObject({ loaded: true, value: planCreation });
     await expect(controller.submit("blocked")).resolves.toBe(false);
-    expect(chatMessages(fake)).toEqual([]);
+
+    controller.pausePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: true, editingKey: null });
+    await expect(controller.submit("paused")).resolves.toBe(true);
+
+    controller.continuePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+    await expect(controller.submit("blocked again")).resolves.toBe(false);
+
+    controller.editPlanCreation("plan-length");
+    controller.pausePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: true, editingKey: null });
+    await expect(controller.submit("paused after edit")).resolves.toBe(true);
+    controller.continuePlanCreation();
+
+    controller.pausePlanCreation();
+    controller.editPlanCreation("plan-length");
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      paused: false,
+      editingKey: "plan-length",
+    });
+    await expect(controller.submit("blocked by edit")).resolves.toBe(false);
+    controller.cancelPlanCreationEdit();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: true, editingKey: null });
+
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(controls.at(-1)?.planCreation?.value).toEqual(ready));
+    await expect(controller.submit("ready")).resolves.toBe(true);
+
+    controller.editPlanCreation("plan-length");
+    await expect(controller.submit("ready edit blocks")).resolves.toBe(false);
+    controller.pausePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+    controller.continuePlanCreation();
+    await expect(controller.submit("ready after Later")).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual([
+      "paused",
+      "paused after edit",
+      "ready",
+      "ready after Later",
+    ]);
+  });
+
+  it("restores a paused question by creation and answer identity after relaunch", async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const planCreation: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 4,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: startTimingQuestion(),
+    };
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [], planCreation }));
+    const fake = client(replies(), { listPlanningRequests });
+    const first = subject(fake);
+    await first.controller.start();
+    first.controller.pausePlanCreation();
+    first.controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+    expect(first.controls.at(-1)?.planCreation).toMatchObject({
+      paused: true,
+      editingKey: null,
+    });
+    first.controller.dispose();
+
+    const relaunched = subject(fake);
+    await relaunched.controller.start();
+    expect(relaunched.controls.at(-1)?.planCreation).toMatchObject({
+      value: planCreation,
+      paused: true,
+      editingKey: null,
+    });
+    await expect(relaunched.controller.submit("Composer remains available")).resolves.toBe(true);
+    relaunched.controller.continuePlanCreation();
+    expect(relaunched.controls.at(-1)?.planCreation).toMatchObject({ paused: false });
+    await expect(relaunched.controller.submit("Question blocks again")).resolves.toBe(false);
+    vi.unstubAllGlobals();
   });
 
   it("does not start Plan Creation while a Coach decision blocks work", async () => {
-    const startPlanCreation = vi.fn<
-      (request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>
-    >();
+    const startPlanCreation =
+      vi.fn<(request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>>();
     const fake = client(replies(), {
       getCoachDecision: async () => ({
         decision: {
@@ -1743,8 +1921,9 @@ describe("chat controller", () => {
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",
-      answeredSummaries: [],
-      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: goalQuestion("Goal?"),
     };
     let finishPlanningLoad!: (result: {
       deliveries: readonly PlanningRequestDelivery[];
@@ -1813,13 +1992,15 @@ describe("chat controller", () => {
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",
+      readiness: "incomplete",
       answeredSummaries: [],
-      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+      openQuestion: goalQuestion("Goal?"),
     };
     const completeCard: PlanCreationCardModel = {
       ...goalCard,
       version: 2,
-      answeredSummaries: [{ answerKey: "goal", title: "Goal", detail: "Build power" }],
+      readiness: "ready",
+      answeredSummaries: [fitnessGoalSummary("Build power")],
       openQuestion: null,
     };
     const listPlanningRequests = vi
@@ -1863,20 +2044,126 @@ describe("chat controller", () => {
     expect(chatMessages(fake)).toEqual(["Chat continues"]);
   });
 
+  it("submits an edited answer at the current version and closes the editor", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const changed: PlanCreationCardModel = {
+      ...ready,
+      version: 11,
+      answeredSummaries: [planLengthSummary(16)],
+    };
+    const answerPlanCreation = vi.fn(async () => ({
+      status: "answered" as const,
+      planCreation: changed,
+    }));
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 16 });
+
+    expect(answerPlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: ready.creationId,
+      expectedVersion: 10,
+      answer: { kind: "plan-length", weeks: 16 },
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: changed,
+      paused: false,
+      editingKey: null,
+    });
+  });
+
+  it("preserves Edit and focus state when an identical Plan Creation model is restored", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [], planCreation: ready }));
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    const focusRevision = controls.at(-1)?.planCreation?.focusRevision;
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: ready,
+      paused: false,
+      editingKey: "plan-length",
+      focusRevision,
+    });
+  });
+
+  it("keeps a rejected Edit open with its error and current answer", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const answerPlanCreation = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "stale-version" as const,
+      planCreation: ready,
+    }));
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 16 });
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: ready,
+      paused: false,
+      editingKey: "plan-length",
+      error: CHAT_PLAN_CREATION_FAILURE_COPY,
+    });
+    expect(controls.at(-1)?.planCreation?.value?.answeredSummaries[0]?.answer).toEqual({
+      kind: "plan-length",
+      weeks: 12,
+    });
+  });
+
   it("clears and replaces server-authoritative Plan Creation cards", async () => {
     const first: PlanCreationCardModel = {
       creationId: "01J00000000000000000000000",
       version: 4,
       status: "in-progress",
-      answeredSummaries: [],
-      openQuestion: { kind: "goal-question", prompt: "First goal?", candidates: [] },
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: goalQuestion("First goal?"),
     };
     const replacement: PlanCreationCardModel = {
       creationId: "01J00000000000000000000001",
       version: 1,
       status: "in-progress",
+      readiness: "incomplete",
       answeredSummaries: [],
-      openQuestion: { kind: "goal-question", prompt: "Replacement goal?", candidates: [] },
+      openQuestion: goalQuestion("Replacement goal?"),
     };
     const listPlanningRequests = vi
       .fn()
@@ -1888,12 +2175,18 @@ describe("chat controller", () => {
 
     await controller.start();
     expect(controls.at(-1)?.planCreation?.value).toEqual(first);
+    controller.pausePlanCreation();
+    controller.editPlanCreation("plan-length");
+    expect(controls.at(-1)?.planCreation).toMatchObject({ editingKey: "plan-length" });
     controller.refreshPlanningRequests();
     await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
     expect(controls.at(-1)?.planCreation?.value).toEqual(replacement);
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+    controller.pausePlanCreation();
     controller.refreshPlanningRequests();
     await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(3));
     expect(controls.at(-1)?.planCreation?.value).toBeNull();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
   });
 
   it("keeps interrupted recovery inert while a Plan Creation question is open", async () => {
@@ -1901,8 +2194,9 @@ describe("chat controller", () => {
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress",
+      readiness: "incomplete",
       answeredSummaries: [],
-      openQuestion: { kind: "goal-question", prompt: "Goal?", candidates: [] },
+      openQuestion: goalQuestion("Goal?"),
     };
     const listPlanningRequests = vi
       .fn()

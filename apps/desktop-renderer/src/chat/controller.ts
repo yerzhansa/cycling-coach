@@ -9,21 +9,24 @@ import {
   CoachClientDisconnectedError,
   CoachClientProtocolError,
 } from "@enduragent/coach-client";
-import type {
-  AttachmentAdmissionReadModel,
-  ChatAttachmentComposerReadModel,
-  CoachDecisionAnswer,
-  CoachDecisionReadModel,
-  ChatQueueSnapshot,
-  CoachTurnEventNotificationEnvelope,
-  CreatePlanningRequestRpcParams,
-  CreateWorkoutPlanningRequestRpcParams,
-  PlanHandoffSuggestion,
-  PlanCreationAnswerInput,
-  PlanCreationCardModel,
-  PlanningRequestDelivery,
-  TranscriptPageEntry,
-  TurnEvent,
+import {
+  PLAN_CREATION_ANSWER_KEYS,
+  type AttachmentAdmissionReadModel,
+  type ChatAttachmentComposerReadModel,
+  type CoachDecisionAnswer,
+  type CoachDecisionReadModel,
+  type ChatQueueSnapshot,
+  type CoachTurnEventNotificationEnvelope,
+  type CreatePlanningRequestRpcParams,
+  type CreateWorkoutPlanningRequestRpcParams,
+  type PlanHandoffSuggestion,
+  type PlanCreationAnswerInput,
+  type PlanCreationAnswerSummary,
+  type PlanCreationCardModel,
+  type PlanCreationOpenQuestion,
+  type PlanningRequestDelivery,
+  type TranscriptPageEntry,
+  type TurnEvent,
 } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../coach-client";
 import {
@@ -73,6 +76,60 @@ export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
 export const NEW_CONVERSATION_UNCERTAIN_COPY =
   "We couldn’t confirm whether the new conversation started. Your visible conversation is preserved.";
 
+const PLAN_CREATION_PAUSE_STORAGE_KEY = "enduragent.plan-creation.pause";
+
+interface PlanCreationPauseIdentity {
+  readonly creationId: string;
+  readonly answerKey: PlanCreationAnswerSummary["answerKey"];
+}
+
+function pauseStorage(): Storage | undefined {
+  try {
+    return globalThis.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function readPlanCreationPause(): PlanCreationPauseIdentity | null {
+  try {
+    const value = pauseStorage()?.getItem(PLAN_CREATION_PAUSE_STORAGE_KEY);
+    if (value === undefined || value === null) return null;
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (
+      typeof parsed.creationId !== "string" ||
+      typeof parsed.answerKey !== "string" ||
+      !(PLAN_CREATION_ANSWER_KEYS as readonly string[]).includes(parsed.answerKey)
+    ) {
+      return null;
+    }
+    return {
+      creationId: parsed.creationId,
+      answerKey: parsed.answerKey as PlanCreationAnswerSummary["answerKey"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePlanCreationPause(identity: PlanCreationPauseIdentity): void {
+  try {
+    pauseStorage()?.setItem(PLAN_CREATION_PAUSE_STORAGE_KEY, JSON.stringify(identity));
+  } catch {}
+}
+
+function clearPlanCreationPause(): void {
+  try {
+    pauseStorage()?.removeItem(PLAN_CREATION_PAUSE_STORAGE_KEY);
+  } catch {}
+}
+
+function planCreationQuestionKey(
+  question: PlanCreationOpenQuestion,
+): PlanCreationAnswerSummary["answerKey"] {
+  return question.kind.replace(/-question$/u, "") as PlanCreationAnswerSummary["answerKey"];
+}
+
 export interface ChatAppendDelta {
   readonly messageId: string;
   readonly previousTextLength: number;
@@ -105,6 +162,9 @@ export interface ChatViewControls {
     readonly loaded: boolean;
     readonly busy: boolean;
     readonly error: string | null;
+    readonly paused: boolean;
+    readonly editingKey: PlanCreationAnswerSummary["answerKey"] | null;
+    readonly focusRevision: number;
   };
   readonly appendDelta?: ChatAppendDelta;
   readonly hydration?: {
@@ -153,6 +213,10 @@ export interface ChatController {
   clearPlanningRequestFocus(): void;
   startPlanCreation(): Promise<void>;
   answerPlanCreation(answer: PlanCreationAnswerInput): Promise<void>;
+  pausePlanCreation(): void;
+  continuePlanCreation(): void;
+  editPlanCreation(answerKey: PlanCreationAnswerSummary["answerKey"]): void;
+  cancelPlanCreationEdit(): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): Promise<void>;
@@ -288,6 +352,10 @@ export function createChatController(input: {
   let planCreationLoaded = false;
   let planCreationBusy = false;
   let planCreationError: string | null = null;
+  let planCreationPaused = false;
+  let planCreationEditingKey: PlanCreationAnswerSummary["answerKey"] | null = null;
+  let planCreationEditReturnPaused = false;
+  let planCreationFocusRevision = 0;
   let pendingPlanCreationCommand: { readonly key: string; readonly id: string } | null = null;
   let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
@@ -300,7 +368,10 @@ export function createChatController(input: {
     !decisionLoaded ||
     decision?.status === "unanswered" ||
     (decision?.status === "answered" && decision.continuation.status === "pending");
-  const planCreationBlocksWork = (): boolean => planCreation?.openQuestion != null;
+  const planCreationBlocksWork = (): boolean =>
+    !planCreationPaused &&
+    planCreation !== null &&
+    (planCreationEditingKey !== null || planCreation.openQuestion !== null);
   const decisionBlocksReset = (): boolean =>
     !decisionLoaded ||
     (decision?.status === "answered" && decision.continuation.status === "pending");
@@ -357,6 +428,9 @@ export function createChatController(input: {
             loaded: planCreationLoaded,
             busy: planCreationBusy,
             error: planCreationError,
+            paused: planCreationPaused,
+            editingKey: planCreationEditingKey,
+            focusRevision: planCreationFocusRevision,
           },
           ...(appendDelta === undefined ? {} : { appendDelta }),
           hydration: {
@@ -947,14 +1021,48 @@ export function createChatController(input: {
   };
 
   const installPlanCreation = (next: PlanCreationCardModel | null): void => {
+    const previous = planCreation;
+    let installed = false;
     if (next === null) {
       planCreation = null;
+      installed = true;
     } else if (
       planCreation === null ||
       next.creationId !== planCreation.creationId ||
       next.version >= planCreation.version
     ) {
       planCreation = next;
+      installed = true;
+    }
+    if (installed) {
+      const modelIdentityChanged =
+        previous?.creationId !== planCreation?.creationId ||
+        previous?.version !== planCreation?.version;
+      const editedAnswerRemoved =
+        planCreationEditingKey !== null &&
+        planCreation?.answeredSummaries.some(
+          (summary) => summary.answerKey === planCreationEditingKey,
+        ) !== true;
+      const resetInteraction = modelIdentityChanged || editedAnswerRemoved;
+      if (!resetInteraction) return;
+      planCreationEditingKey = null;
+      planCreationEditReturnPaused = false;
+      const pausedIdentity = readPlanCreationPause();
+      if (planCreation === null) {
+        planCreationPaused = false;
+        clearPlanCreationPause();
+      } else if (
+        pausedIdentity?.creationId === planCreation.creationId &&
+        (planCreation.openQuestion === null
+          ? null
+          : planCreationQuestionKey(planCreation.openQuestion)) === pausedIdentity.answerKey
+      ) {
+        planCreationPaused = true;
+      } else {
+        planCreationPaused = false;
+        clearPlanCreationPause();
+      }
+      planCreationFocusRevision += 1;
     }
   };
   const trackPlanningRequestLoad = (task: Promise<void>): Promise<void> => {
@@ -1860,12 +1968,15 @@ export function createChatController(input: {
       }
     },
     async answerPlanCreation(answer) {
-      if (disposed || planCreationBusy || planCreation?.openQuestion == null) return;
+      if (disposed || planCreationBusy || !planCreationBlocksWork() || planCreation === null)
+        return;
       const key = JSON.stringify({
         creationId: planCreation.creationId,
         expectedVersion: planCreation.version,
         answer,
       });
+      const submittedEditingKey = planCreationEditingKey;
+      const submittedEditReturnPaused = planCreationEditReturnPaused;
       planCreationBusy = true;
       planCreationError = null;
       render();
@@ -1880,7 +1991,19 @@ export function createChatController(input: {
         });
         pendingPlanCreationCommand = null;
         installPlanCreation(result.planCreation);
-        if (result.status === "rejected") planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
+        if (result.status === "rejected") {
+          if (
+            submittedEditingKey !== null &&
+            planCreation?.answeredSummaries.some(
+              (summary) => summary.answerKey === submittedEditingKey,
+            ) === true
+          ) {
+            planCreationEditingKey = submittedEditingKey;
+            planCreationEditReturnPaused = submittedEditReturnPaused;
+            planCreationPaused = false;
+          }
+          planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
+        }
       } catch {
         planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
       } finally {
@@ -1888,6 +2011,62 @@ export function createChatController(input: {
         render();
         if (!planCreationBlocksWork() && !decisionBlocksWork()) void drain();
       }
+    },
+    pausePlanCreation() {
+      if (disposed || planCreationBusy || !planCreationBlocksWork()) return;
+      planCreationEditingKey = null;
+      planCreationEditReturnPaused = false;
+      if (planCreation?.openQuestion !== null && planCreation?.openQuestion !== undefined) {
+        writePlanCreationPause({
+          creationId: planCreation.creationId,
+          answerKey: planCreationQuestionKey(planCreation.openQuestion),
+        });
+        planCreationPaused = true;
+      } else {
+        clearPlanCreationPause();
+        planCreationPaused = false;
+      }
+      render();
+      if (!decisionBlocksWork()) void drain();
+    },
+    continuePlanCreation() {
+      if (
+        disposed ||
+        planCreationBusy ||
+        planCreation === null ||
+        !planCreationPaused ||
+        planCreation.openQuestion === null
+      ) {
+        return;
+      }
+      clearPlanCreationPause();
+      planCreationPaused = false;
+      planCreationFocusRevision += 1;
+      render();
+    },
+    editPlanCreation(answerKey) {
+      if (
+        disposed ||
+        planCreationBusy ||
+        planCreation === null ||
+        !planCreation.answeredSummaries.some((summary) => summary.answerKey === answerKey)
+      ) {
+        return;
+      }
+      planCreationEditReturnPaused = planCreationPaused;
+      planCreationEditingKey = answerKey;
+      planCreationPaused = false;
+      planCreationFocusRevision += 1;
+      render();
+    },
+    cancelPlanCreationEdit() {
+      if (disposed || planCreationBusy || planCreationEditingKey === null) return;
+      planCreationEditingKey = null;
+      planCreationPaused = planCreationEditReturnPaused;
+      planCreationEditReturnPaused = false;
+      planCreationFocusRevision += 1;
+      render();
+      if (!planCreationBlocksWork() && !decisionBlocksWork()) void drain();
     },
     stop() {
       if (disposed || state.status !== "streaming" || state.activeTurn === null) return;

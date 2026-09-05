@@ -277,8 +277,32 @@ describe("Planning request delivery", () => {
       creationId: "01J60HFQ7T0000000000000001",
       version: 1,
       status: "in-progress" as const,
+      readiness: "incomplete" as const,
       answeredSummaries: [],
-      openQuestion: { kind: "goal-question" as const, prompt: "Goal?", candidates: [] },
+      openQuestion: {
+        kind: "goal-question" as const,
+        step: { current: 1, total: 9 },
+        prompt: "Goal?",
+        candidates: [],
+        eventNotListedOption: {
+          label: "Event not listed" as const,
+          detail: "Tell me the event name and its exact date.",
+          editorLabel: "Name the event.",
+          placeholder: "Event name",
+          nameLabel: "Event name",
+          dateLabel: "Event date",
+        },
+        fitnessOption: {
+          label: "Improve without an event",
+          detail: "Build fitness for a fixed number of weeks.",
+        },
+        authoredOption: {
+          label: "Something else" as const,
+          detail: "Tell me the event name and its exact date.",
+          editorLabel: "Name the event.",
+          placeholder: "Event name",
+        },
+      },
     };
     const result = await service(undefined, undefined, async () => planCreation)
       .listPlanningRequests!({ chatId: "chat-1" });

@@ -3,12 +3,13 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
   EMPTY_DROPPED_ACTIVITIES,
   type AthleteState,
   type CoachEngine,
+  type PlanCreationAnswerInput,
 } from "@enduragent/coach-contract";
 import {
   RefreshTokenReusedError,
@@ -49,6 +50,35 @@ import type { CoachStoreWriterContext } from "../src/runtime.js";
 
 const roots: string[] = [];
 const stores: CoachStoreWriterContext["store"][] = [];
+const runtimeEnvironmentKeys = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "ALIBABA_API_KEY",
+  "MINIMAX_API_KEY",
+  "MOONSHOT_API_KEY",
+  "ZAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "LLM_API_KEY",
+  "LLM_PROVIDER",
+  "LLM_MODEL",
+  "LLM_FLUSH_MODEL",
+  "LLM_COMPACT_MODEL",
+  "LLM_BASE_URL",
+  "CONTEXT_WINDOW_TOKENS",
+  "INTERVALS_API_KEY",
+  "INTERVALS_ATHLETE_ID",
+  "TELEGRAM_BOT_TOKEN",
+  "HISTORY_TOKEN_BUDGET_RATIO",
+  "SESSION_IDLE_MINUTES",
+  "SESSION_DAILY_RESET_HOUR",
+  "SESSION_RESET_ARCHIVE_RETENTION_DAYS",
+  "COACH_TZ",
+  "ENDURAGENT_CLAUDE_CLI_DISABLED",
+  "CLAUDE_CLI_PATH",
+  "CODEX_CLI_PATH",
+] as const;
 
 const state: AthleteState = {
   schemaVersion: LATEST_SCHEMA_VERSION,
@@ -486,9 +516,14 @@ async function composeWithCapturedEngineInput(home: AthleteHome, now = 1_000) {
   return { engineInput, lifecycle };
 }
 
+beforeEach(() => {
+  for (const key of runtimeEnvironmentKeys) vi.stubEnv(key, undefined);
+});
+
 afterEach(async () => {
   await Promise.all(stores.splice(0).map((store) => store.close().catch(() => {})));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -2132,6 +2167,187 @@ describe("local coach composition", () => {
     ).resolves.toEqual({ value: 285, source: "athlete", confidence: "manual" });
     await lifecycle.close();
   });
+
+  it.each(["fitness", "event-manual"] as const)(
+    "composes Plan Creation %s answers without derived evidence and restores the persisted result",
+    async (goalKind) => {
+      const home = await freshHome();
+      await mkdir(home.storeDir, { recursive: true });
+      const databasePath = join(home.storeDir, "store.db");
+      let store = openSqliteStorage(databasePath);
+      stores.push(store);
+      await runMigrations(store, MIGRATIONS);
+      const existingPlan = {
+        id: "00000000000000000000000009",
+        originId: null,
+        name: "Existing autumn Plan",
+        primaryGoal: "Ride consistently",
+        startDateKey: 19980713,
+        targetDateKey: 19981004,
+        status: "active" as const,
+        kind: "full_plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        structureJson: "{}",
+        createdAtMs: Date.UTC(1998, 6, 13, 12),
+        updatedAtMs: Date.UTC(1998, 6, 13, 12),
+        deviceId: "fixture-device",
+        hlcPhysicalMs: Date.UTC(1998, 6, 13, 12),
+        hlcCounter: 0,
+      };
+      await createPlanRepository(store).replace(existingPlan, []);
+      const dependencies = {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        now: () => Date.UTC(1998, 6, 13, 12),
+      };
+      let lifecycle = await compose(home, dependencies, {
+        home,
+        store,
+        listener: inertWriterProtocolListener,
+      });
+      try {
+        expect(
+          await lifecycle.operations.listPlanningRequests?.({ chatId: "desktop" }),
+        ).toMatchObject({
+          planCreation: null,
+        });
+        const started = await lifecycle.operations["plan_creation.start"]({
+          commandId: "creation-start",
+        });
+        if (started.status !== "started") throw new TypeError("Plan Creation did not start.");
+        let card = started.planCreation;
+        expect(card).toMatchObject({
+          version: 1,
+          readiness: "incomplete",
+          openQuestion: { kind: "goal-question", candidates: [] },
+        });
+        const answers: readonly PlanCreationAnswerInput[] = [
+          {
+            kind: "goal",
+            goal:
+              goalKind === "fitness"
+                ? { kind: "fitness" }
+                : { kind: "event-manual", name: "Autumn ride", date: "1998-11-08" },
+          },
+          ...(goalKind === "fitness" ? [{ kind: "plan-length", weeks: 8 } as const] : []),
+          { kind: "schedule-mode", mode: "fixed" },
+          {
+            kind: "availability",
+            mode: "fixed",
+            weeklyHoursLimit: 8,
+            longestWorkoutHours: 3,
+            usableWeekdays: [2, 4, 6],
+          },
+          { kind: "start-timing", timing: { kind: "as-soon-as-possible" } },
+          { kind: "commitments", commitments: { kind: "none" } },
+          { kind: "baseline", baseline: "regular" },
+          {
+            kind: "success",
+            success:
+              goalKind === "fitness"
+                ? { kind: "fitness-choice", choice: "climb-stronger" }
+                : { kind: "event-finish", choice: "finish-comfortably" },
+          },
+          { kind: "restriction", restriction: { kind: "no-hard-training", endDate: "1998-11-01" } },
+        ];
+        for (const [index, answer] of answers.entries()) {
+          expect(card.openQuestion?.kind).toBe(`${answer.kind}-question`);
+          const request = {
+            commandId: `creation-answer-${index}`,
+            creationId: card.creationId,
+            expectedVersion: card.version,
+            answer,
+          };
+          const result = await lifecycle.operations["plan_creation.answer"](request);
+          if (result.status !== "answered")
+            throw new TypeError(`Plan Creation rejected ${answer.kind}.`);
+          card = result.planCreation;
+          expect(card.version).toBe(index + 2);
+          if (answer.kind === "commitments") {
+            expect(card.openQuestion?.kind).toBe("baseline-question");
+            const before = await store.all("SELECT * FROM plan_creation_answer ORDER BY sequence");
+            const commands = await store.all(
+              "SELECT * FROM planning_command ORDER BY command_name,command_id",
+            );
+            expect(before.some((row) => row.answer_key === "baseline")).toBe(false);
+            for (let read = 0; read < 2; read += 1) {
+              expect(
+                await lifecycle.operations.listPlanningRequests?.({ chatId: "desktop" }),
+              ).toMatchObject({ planCreation: card });
+            }
+            expect(await store.all("SELECT * FROM plan_creation_answer ORDER BY sequence")).toEqual(
+              before,
+            );
+            expect(
+              await store.all("SELECT * FROM planning_command ORDER BY command_name,command_id"),
+            ).toEqual(commands);
+          }
+        }
+        expect(card).toMatchObject({
+          readiness: "ready",
+          openQuestion: null,
+          version: answers.length + 1,
+        });
+        expect(card.answeredSummaries.map((summary) => summary.answerKey)).toEqual(
+          answers.map((answer) => answer.kind),
+        );
+        const rows = await store.all("SELECT * FROM plan_creation_answer ORDER BY sequence");
+        expect(rows).toHaveLength(answers.length);
+        for (const [index, row] of rows.entries()) {
+          expect(row).toMatchObject({
+            sequence: index + 1,
+            creation_version: index + 2,
+            answer_key: answers[index]?.kind,
+            scope: "plan-creation",
+            preference_id: null,
+          });
+          expect(JSON.parse(String(row.value_json))).toEqual({
+            answer: answers[index],
+            source: { kind: "athlete" },
+          });
+        }
+        const commands = await store.all(
+          "SELECT * FROM planning_command ORDER BY command_name,command_id",
+        );
+        expect(commands).toHaveLength(answers.length + 1);
+        for (const command of commands) expect(command.status).toBe("succeeded");
+        for (const [index] of answers.entries()) {
+          const command = commands.find((row) => row.command_id === `creation-answer-${index}`);
+          expect(JSON.parse(String(command?.result_json))).toMatchObject({
+            creationId: card.creationId,
+            version: index + 2,
+          });
+        }
+        const creation = await store.all("SELECT * FROM plan_creation");
+        expect(await createPlanRepository(store).read(existingPlan.id)).toEqual(existingPlan);
+        await lifecycle.close();
+        await store.close();
+        stores.splice(stores.indexOf(store), 1);
+        store = openSqliteStorage(databasePath);
+        stores.push(store);
+        lifecycle = await compose(home, dependencies, {
+          home,
+          store,
+          listener: inertWriterProtocolListener,
+        });
+        expect(
+          await lifecycle.operations.listPlanningRequests?.({ chatId: "desktop" }),
+        ).toMatchObject({ planCreation: card });
+        expect(await store.all("SELECT * FROM plan_creation")).toEqual(creation);
+        expect(await createPlanRepository(store).read(existingPlan.id)).toEqual(existingPlan);
+        expect(await store.all("SELECT * FROM plan_creation_answer ORDER BY sequence")).toEqual(
+          rows,
+        );
+        expect(
+          await store.all("SELECT * FROM planning_command ORDER BY command_name,command_id"),
+        ).toEqual(commands);
+      } finally {
+        await lifecycle.close();
+      }
+    },
+  );
 
   it("composes durable Plan intake through a structured Draft and activates locally before provider work", async () => {
     const home = await freshHome();

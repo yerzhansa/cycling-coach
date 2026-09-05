@@ -50,10 +50,12 @@ export function ChatView(): ReactElement {
   const surface = useRef<HTMLElement>(null);
   const conversation = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const composerDraft = useRef("");
   const [contextOpen, setContextOpen] = useState(true);
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [compact, setCompact] = useState(false);
   const [decisionCustomOpen, setDecisionCustomOpen] = useState(false);
+  const [planCreationEditorOpen, setPlanCreationEditorOpen] = useState(false);
   const activeView = useEnduragentStore((state) => state.activeView);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
@@ -136,6 +138,9 @@ export function ChatView(): ReactElement {
   const setCustomDecisionOpen = useCallback((open: boolean): void => {
     setDecisionCustomOpen(open);
   }, []);
+  const setPlanEditorOpen = useCallback((open: boolean): void => {
+    setPlanCreationEditorOpen(open);
+  }, []);
 
   return (
     <section
@@ -182,7 +187,7 @@ export function ChatView(): ReactElement {
       <div
         className={`chat-layout row-start-2 grid min-h-0 min-w-0 ${contextOpen && !compact ? "grid-cols-[minmax(0,1fr)_300px]" : "grid-cols-[minmax(0,1fr)]"}`}
       >
-        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]">
+        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] has-[[data-parity='question.card']]:grid-rows-[minmax(calc(var(--ctl-h-lg)*4),1fr)_minmax(0,auto)]">
           <main
             className="conversation overflow-auto pt-[calc(var(--inset)*4)] pb-[calc(var(--inset)*3)] [overflow-anchor:none] max-[760px]:pt-[calc(var(--inset)*3)]"
             aria-label="Coaching conversation"
@@ -211,12 +216,14 @@ export function ChatView(): ReactElement {
               </div>
               <div className="mb-2.5 grid gap-2.5 empty:hidden">
                 <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
-                <PlanCreationDock />
+                <PlanCreationDock onEditorOpenChange={setPlanEditorOpen} />
               </div>
               <AttachmentPanel />
               <QueuedMessages />
             </div>
-            <Composer handle={composer} hidden={decisionCustomOpen} />
+            {decisionCustomOpen || planCreationEditorOpen ? null : (
+              <Composer handle={composer} draftMemory={composerDraft} />
+            )}
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>
         </div>

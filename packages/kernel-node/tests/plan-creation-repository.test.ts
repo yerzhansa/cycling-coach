@@ -147,9 +147,85 @@ describe("Plan Creation repository", () => {
     ]);
   });
 
-  it("round-trips real rows through dump, export, and restore", async () => {
+  it("appends a re-answer for the same key and reads every row in sequence order", async () => {
     await start();
     await answer();
+    await repository.recordAnswer({
+      command: stamp("edit-goal", "c", 883_612_800_002),
+      creationId,
+      expectedVersion: 2,
+      answerId: id("4"),
+      answerKey: "goal",
+      valueJson: JSON.stringify({
+        answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build endurance" } },
+        source: { kind: "athlete" },
+      }),
+    });
+
+    const restored = await repository.readUnfinished();
+    expect(restored).toMatchObject({
+      version: 3,
+      answers: [
+        { id: id("3"), answerKey: "goal", sequence: 1, creationVersion: 2 },
+        { id: id("4"), answerKey: "goal", sequence: 2, creationVersion: 3 },
+      ],
+    });
+    const effectiveGoal = restored?.answers.filter((row) => row.answerKey === "goal").at(-1);
+    expect(JSON.parse(effectiveGoal?.valueJson ?? "null")).toMatchObject({
+      answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build endurance" } },
+    });
+  });
+
+  it("round-trips real rows through dump, export, and restore", async () => {
+    await start();
+    const goalAnswer = {
+      command: stamp("answer-goal", "b", 883_612_800_001),
+      creationId,
+      expectedVersion: 1,
+      answerId: id("3"),
+      answerKey: "goal",
+      valueJson: JSON.stringify({
+        answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build power" } },
+        source: { kind: "athlete" },
+      }),
+    } satisfies Parameters<PlanCreationRepository["recordAnswer"]>[0];
+    const lengthAnswer = {
+      ...goalAnswer,
+      command: stamp("answer-length", "c", 883_612_800_002),
+      expectedVersion: 2,
+      answerId: id("4"),
+      answerKey: "plan-length",
+      valueJson: JSON.stringify({
+        answer: { kind: "plan-length", weeks: 8 },
+        source: { kind: "athlete" },
+      }),
+    };
+    const editedGoalAnswer = {
+      ...goalAnswer,
+      command: stamp("edit-goal", "d", 883_612_800_003),
+      expectedVersion: 3,
+      answerId: id("5"),
+      valueJson: JSON.stringify({
+        answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build endurance" } },
+        source: { kind: "athlete" },
+      }),
+    };
+    const answers = [goalAnswer, lengthAnswer, editedGoalAnswer];
+    for (const input of answers) await repository.recordAnswer(input);
+    const sourceSnapshot = await repository.readUnfinished();
+    expect(sourceSnapshot).toMatchObject({
+      id: creationId,
+      version: 4,
+      answers: [
+        { id: id("3"), answerKey: "goal", sequence: 1, creationVersion: 2 },
+        { id: id("4"), answerKey: "plan-length", sequence: 2, creationVersion: 3 },
+        { id: id("5"), answerKey: "goal", sequence: 3, creationVersion: 4 },
+      ],
+    });
+    expect(sourceSnapshot?.answers.map(({ valueJson }) => valueJson)).toEqual(
+      answers.map(({ valueJson }) => valueJson),
+    );
+    const sourceDump = await dumpStore(store);
     const destination = openSqliteStorage(":memory:");
     try {
       await runMigrations(destination, MIGRATIONS);
@@ -168,15 +244,37 @@ describe("Plan Creation repository", () => {
         {
           sink: createSqliteImportSink(destination),
           presence: { hasArtifact: async () => true },
-          targetUserVersion: 29,
+          targetUserVersion: MIGRATIONS.at(-1)!.version,
           ...webCryptoExportEnv,
         },
         { container: built.container },
       );
-      expect(await dumpStore(destination)).toBe(await dumpStore(store));
+      expect(await dumpStore(destination)).toBe(sourceDump);
+      for (const query of [
+        "SELECT * FROM plan_creation ORDER BY id",
+        "SELECT * FROM plan_creation_answer ORDER BY creation_id,sequence,id",
+        "SELECT * FROM planning_command ORDER BY command_name,command_id",
+      ]) {
+        expect(await destination.all(query)).toEqual(await store.all(query));
+      }
+      const restoredRepository = createPlanCreationRepository(destination);
+      await expect(restoredRepository.readUnfinished()).resolves.toEqual(sourceSnapshot);
+      for (const input of answers) {
+        await expect(restoredRepository.recordAnswer(input)).resolves.toEqual({
+          outcome: "replayed",
+          snapshot: sourceSnapshot,
+        });
+        expect(await dumpStore(destination)).toBe(sourceDump);
+      }
       await expect(
-        createPlanCreationRepository(destination).readUnfinished(),
-      ).resolves.toMatchObject({ id: creationId, version: 2, answers: [{ id: id("3") }] });
+        restoredRepository.recordAnswer({
+          ...editedGoalAnswer,
+          command: stamp("edit-goal", "e", 883_612_800_004),
+          valueJson: goalAnswer.valueJson,
+        }),
+      ).rejects.toMatchObject({ code: "command-conflict" });
+      expect(await dumpStore(destination)).toBe(sourceDump);
+      await expect(restoredRepository.readUnfinished()).resolves.toEqual(sourceSnapshot);
     } finally {
       await destination.close();
     }
