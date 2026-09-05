@@ -693,6 +693,9 @@ export async function codexAgentGenerateText(
   opts: CodexAgentGenerateOpts,
   ports: CodexAgentBridgePorts,
 ): Promise<GenerateResult> {
+  if (opts.modelId === "gpt-6-astra") {
+    throw new Error("GPT-6 Astra is not enabled for this connection; use the public OpenAI API.");
+  }
   if ((ports.platform ?? process.platform) === "win32") throw unsupportedPlatformError();
   if (ports.runtime.enabled !== true) throw disabledLaneError();
 
