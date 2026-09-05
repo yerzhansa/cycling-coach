@@ -100,8 +100,8 @@ describe("installCrashHandlers", () => {
     expect(line.event).toBe("uncaught_exception");
     const err = line.err as Record<string, unknown>;
     expect(err.name).toBe("Error");
-    expect(err.message).toBe("boom");
-    expect(err.stack).toBeDefined();
+    expect(err).not.toHaveProperty("message");
+    expect(err).not.toHaveProperty("stack");
     expect("requestBodyValues" in err).toBe(false);
     expect("responseBody" in err).toBe(false);
     expect("payload" in err).toBe(false);

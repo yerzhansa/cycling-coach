@@ -144,21 +144,24 @@ describe("boundary error serialization", () => {
     expect(JsonValueSchema.parse(payload)).toEqual(payload);
   });
 
-  it("never throws for hostile error properties", () => {
+  it("never invokes hostile error properties and preserves safe diagnostics", () => {
+    let callbacks = 0;
     const throwingName = new Error("synthetic");
     Object.defineProperty(throwingName, "name", {
       get() {
+        callbacks++;
         throw new Error("synthetic-name-getter-secret");
       },
     });
     expect(serializeBoundaryError(throwingName)).toEqual({
-      name: "UnserializableError",
+      name: "Error",
     });
 
     const hostile = new Proxy(
       {},
       {
         ownKeys() {
+          callbacks++;
           throw new Error("synthetic-proxy-secret");
         },
       },
@@ -169,9 +172,10 @@ describe("boundary error serialization", () => {
     }
     expect(
       serializeBoundaryError(Object.assign(new Error("synthetic"), { statusCode: hostile })),
-    ).toEqual({ name: "UnserializableError" });
+    ).toEqual({ name: "Error", statusCode: SENTINEL });
     expect(
       serializeBoundaryError(Object.assign(new Error("synthetic"), { diagnostic: hostile })),
-    ).toEqual({ name: "UnserializableError" });
+    ).toEqual({ name: "Error", diagnostic: SENTINEL });
+    expect(callbacks).toBe(0);
   });
 });

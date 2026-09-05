@@ -8,6 +8,7 @@
  * session. Ports from the Reference layer's upstream protocol. See `NOTICE.md`
  * for license attribution.
  */
+import { serializeError } from "../../logging/serialize-error.js";
 import { open, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -20,10 +21,7 @@ import {
 let auditWriteFailureCount = 0;
 let escalated = false;
 
-export async function writeAuditEntry(
-  binaryName: string,
-  entry: AuditLogEntry,
-): Promise<void> {
+export async function writeAuditEntry(binaryName: string, entry: AuditLogEntry): Promise<void> {
   const path = join(referenceDataDir(binaryName), ".audit.jsonl");
   const line = JSON.stringify(entry) + "\n";
 
@@ -41,7 +39,7 @@ export async function writeAuditEntry(
 }
 
 function handleFailure(err: unknown): void {
-  console.warn(`Reference: audit log write failed: ${formatError(err)}`);
+  console.warn(`Reference: audit log write failed: ${JSON.stringify(serializeError(err))}`);
   auditWriteFailureCount++;
   if (auditWriteFailureCount >= 10 && !escalated) {
     escalated = true;
@@ -64,9 +62,4 @@ export function computeResponseHash(
 export function __resetAuditFailureState(): void {
   auditWriteFailureCount = 0;
   escalated = false;
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
 }

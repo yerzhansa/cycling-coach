@@ -89,14 +89,17 @@ describe("makeBotShutdown — graceful shutdown ordering", () => {
   it("a throw in stop() still reaches process.exit (shutdown never hangs)", async () => {
     const { shutdown, rec } = makeDeps({
       stop: async () => {
-        throw new Error("stop failed");
+        throw Object.assign(new Error("synthetic-stop-secret"), { code: "EIO" });
       },
     });
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await shutdown();
 
     expect(rec.exit).toHaveBeenCalledWith(0);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("synthetic-stop-secret");
+    expect(JSON.stringify(errorSpy.mock.calls)).toContain("EIO");
+    errorSpy.mockRestore();
   });
 
   it("stops the selected timer, closes Reference, then closes prepared composition exactly once", async () => {

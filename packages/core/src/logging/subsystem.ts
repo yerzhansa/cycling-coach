@@ -1,6 +1,5 @@
 import { type LogLevel } from "./levels.js";
 import { createRootLogger, type RootLogger, type RootLoggerOptions } from "./logger.js";
-import { serializeError } from "./serialize-error.js";
 
 type Fields = Record<string, unknown>;
 
@@ -23,8 +22,7 @@ function emitErrBearing(
   err?: unknown,
   fields?: Fields,
 ): void {
-  const errFields = err === undefined ? {} : { err: serializeError(err) };
-  root.emit(level, { component, event, ...errFields, ...fields });
+  root.emit(level, err === undefined ? { component, event } : { component, event, err }, fields);
 }
 
 export function createSubsystemLogger(
@@ -35,10 +33,10 @@ export function createSubsystemLogger(
   const root = createRootLogger(dataDir, options);
   return {
     debug(event, fields) {
-      root.emit("debug", { component, event, ...fields });
+      root.emit("debug", { component, event }, fields);
     },
     info(event, fields) {
-      root.emit("info", { component, event, ...fields });
+      root.emit("info", { component, event }, fields);
     },
     warn(event, err, fields) {
       emitErrBearing(root, "warn", component, event, err, fields);
