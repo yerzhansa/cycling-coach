@@ -303,8 +303,13 @@ function parseDriverArguments(args) {
   return result;
 }
 
+function temporaryDiagnostic(event, details) {
+  process.stderr.write(`${JSON.stringify({ kind: "temporary-windows-installed-diagnostic", event, ...details })}\n`);
+}
+
 function capture(file, args, timeoutMs, options = {}) {
   return new Promise((resolveRun, rejectRun) => {
+    temporaryDiagnostic("process-start", { file, args, timeoutMs });
     const child = spawn(file, args, {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -319,14 +324,17 @@ function capture(file, args, timeoutMs, options = {}) {
       stderr += String(chunk);
     });
     const timer = setTimeout(() => {
+      temporaryDiagnostic("process-timeout", { file, pid: child.pid });
       child.kill("SIGKILL");
       rejectRun(new Error(`${basename(file)} timed out`));
     }, timeoutMs);
     child.once("error", (error) => {
+      temporaryDiagnostic("process-error", { file, pid: child.pid, code: error.code });
       clearTimeout(timer);
       rejectRun(error);
     });
     child.once("close", (code, signal) => {
+      temporaryDiagnostic("process-close", { file, pid: child.pid, code, signal });
       clearTimeout(timer);
       resolveRun({ code, signal, stdout, stderr });
     });
@@ -388,6 +396,7 @@ export function parseNativeEvidenceResult(result, label) {
 
 async function runNativeEvidence(request, scratch, dependencies = {}) {
   const requestPath = join(scratch, `native-${randomUUID()}.json`);
+  temporaryDiagnostic("native-request", { requestPath, request });
   await (dependencies.writeFile ?? writeFile)(requestPath, JSON.stringify(request), { mode: 0o600 });
   const run = dependencies.capture ?? capture;
   const result = await run(
@@ -405,6 +414,8 @@ async function runNativeEvidence(request, scratch, dependencies = {}) {
     ],
     WINDOWS_INSTALLED_LIMITS.commandMs,
   );
+  const diagnostic = await readFile(`${requestPath}.diagnostic.json`, "utf8").catch(() => null);
+  temporaryDiagnostic("native-result", { requestPath, ...result, diagnostic });
   return parseNativeEvidenceResult(result, `native Windows evidence ${request.action}`);
 }
 
@@ -644,6 +655,7 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
     );
     const retainedManifest = await collectCanonicalTree(application, dependencies);
     installerDigest = await streamSha256(installer, dependencies);
+    temporaryDiagnostic("installer-identity", { installer, application, installerDigest, expected });
     checked(
       installerDigest === packageEvidence.artifact.sha256,
       "installer changed after package verification",
@@ -686,6 +698,7 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
           uninstallerRelativePath,
         );
         uninstallerDigest = comparison.uninstaller.sha256;
+        temporaryDiagnostic("uninstaller-identity", { installed, uninstallerDigest });
         const signatures = signatureInventory(installedManifest, installed.installRoot);
         signatures.push(installer);
         const signedEvidence = await runNative(
