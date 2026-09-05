@@ -873,6 +873,7 @@ export async function createLocalCoachComposition(
   const planningIdentity = createAuthoredIdentity(input.home.configDir, { now });
   const planningTimezone = resolveUserTimezone(input.config.session.timezone);
   const planCreationOperations = createPlanCreationOperations({
+    store: input.context.store,
     repository: createPlanCreationRepository(input.context.store),
     identity: planningIdentity,
     crypto: globalThis.crypto,
@@ -2248,6 +2249,7 @@ export async function createLocalCoachComposition(
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
       ...planningRequestOperations,
+      "plan.list": planCreationOperations["plan.list"],
       "plan_creation.start": planCreationOperations["plan_creation.start"],
       "plan_creation.answer": planCreationOperations["plan_creation.answer"],
       "plan_creation.preview": planCreationOperations["plan_creation.preview"],

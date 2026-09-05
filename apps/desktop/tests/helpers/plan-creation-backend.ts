@@ -1,4 +1,5 @@
 import {
+  ListPlansParamsSchema,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationPreviewRpcParamsSchema,
   type CoachEngine,
@@ -128,7 +129,8 @@ export class PlanCreationBackend {
     this.script = {
       onRequest: async (value) => {
         const request = value as ScriptRequest;
-        if (request.method.startsWith("plan_creation.")) this.creationRequests.push(request);
+        if (request.method.startsWith("plan_creation.") || request.method === "plan.list")
+          this.creationRequests.push(request);
         if (coexistence && request.method === "listArchivedConversations") {
           return response({
             schemaVersion: 1,
@@ -205,6 +207,11 @@ export class PlanCreationBackend {
         if (readStoredPlans && request.method === "getPlanState") {
           return response(await this.planState());
         }
+        if (request.method === "plan.list") {
+          return response(
+            await this.requireHost()["plan.list"](ListPlansParamsSchema.parse(request.params)),
+          );
+        }
         if (request.method === "plan_creation.activate") {
           return response(
             await this.requireHost()["plan_creation.activate"](
@@ -272,6 +279,7 @@ export class PlanCreationBackend {
       { todayDateKey: () => 19980101 },
     );
     this.host = createPlanCreationOperations({
+      store: this.store,
       repository: this.repository,
       identity,
       crypto: globalThis.crypto,

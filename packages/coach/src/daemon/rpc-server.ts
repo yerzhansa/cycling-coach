@@ -528,6 +528,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getPlanningReadModel",
+  "plan.list",
   "getActivityAnalysis",
   "importFiles",
   "sync",
@@ -1346,6 +1347,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 throw new TypeError("Planning read operation is unavailable.");
               }
               result = await input.operations.getPlanningReadModel(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan.list":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY["plan.list"].requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations["plan.list"] === undefined) {
+                throw new TypeError("Plan library operation is unavailable.");
+              }
+              result = await input.operations["plan.list"](request);
             } catch (error) {
               invocationFailure = { error };
             }

@@ -256,6 +256,7 @@ describe("Plan operations", () => {
       hlcStamp: () => ({ physicalMs: 904_780_800_000, counter: 0 }),
     };
     const creation = createPlanCreationOperations({
+      store,
       repository: createPlanCreationRepository(store),
       identity: authored,
       crypto: globalThis.crypto,

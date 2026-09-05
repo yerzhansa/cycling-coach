@@ -124,6 +124,7 @@ const rpcDeadlineCases = [
   ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
   ["getPlanningReadModel", {}, 30_000],
+  ["plan.list", {}, 30_000],
   [
     "getActivityAnalysis",
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
@@ -1029,6 +1030,7 @@ describe("RPC receive and observers", () => {
           plannedWorkouts: [],
           wellness: {},
         },
+        "plan.list": { creation: null, active: null, closed: [] },
         getPlanningReadModel: {
           schemaVersion: 1,
           status: "no-plan",

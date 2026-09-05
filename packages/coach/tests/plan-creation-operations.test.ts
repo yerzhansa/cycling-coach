@@ -27,6 +27,12 @@ import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { createPlanningReadService } from "../src/planning-read-service.js";
 import { readPlanCreationAnswers } from "../src/plan-creation-answers.js";
 
+const unusedStore = () => {
+  const store = openSqliteStorage(":memory:");
+  onTestFinished(() => store.close());
+  return store;
+};
+
 const id = (value: string) => `${"0".repeat(26 - value.length)}${value}`;
 const today = "1998-09-02";
 const eventCandidate = {
@@ -172,6 +178,7 @@ function harness(
     },
   };
   const host = createPlanCreationOperations({
+    store: unusedStore(),
     repository,
     identity: {
       deviceId: async () => "test-device",
@@ -660,6 +667,7 @@ describe("Plan Creation operations", () => {
     });
     let sequence = 8;
     const host = createPlanCreationOperations({
+      store: unusedStore(),
       repository: {
         activate: async () => {
           throw new Error("unused");
@@ -758,6 +766,7 @@ describe("Plan Creation operations", () => {
       return { outcome: "discarded" };
     });
     const host = createPlanCreationOperations({
+      store: unusedStore(),
       repository: {
         activate: async () => {
           throw new Error("unused");
@@ -853,6 +862,7 @@ async function previewHarness() {
   const repository = createPlanCreationRepository(store);
   let sequence = 100;
   const host = createPlanCreationOperations({
+    store,
     repository,
     identity: {
       deviceId: async () => "preview-test-device",
@@ -1084,6 +1094,94 @@ describe("Plan Creation activation", () => {
       },
     };
   };
+
+  it("reads one snapshot while replacing the active Plan", async () => {
+    const test = await review();
+    const incumbentId = id("800");
+    await createPlanRepository(test.store).replace({
+      id: incumbentId,
+      originId: null,
+      name: "Earlier Plan",
+      primaryGoal: "Build fitness",
+      startDateKey: 19971222,
+      targetDateKey: 19980118,
+      status: "active",
+      kind: "short_race_preparation",
+      totalWeeks: 4,
+      weekStartDay: 1,
+      structureJson: "{}",
+      createdAtMs: 882_748_800_000,
+      updatedAtMs: 882_748_800_000,
+      deviceId: "test-device",
+      hlcPhysicalMs: 882_748_800_000,
+      hlcCounter: 0,
+    }, []);
+    await test.store.run(
+      `INSERT INTO planning_plan
+(plan_id,status,version,current_revision_number,activated_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
+      [incumbentId],
+    );
+    const transaction = vi.spyOn(test.store, "transaction");
+    const readUnfinished = test.repository.readUnfinished.bind(test.repository);
+    let signalEntered = () => {};
+    let releaseRead = () => {};
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const reader = vi.spyOn(test.repository, "readUnfinished").mockImplementationOnce(async () => {
+      const creation = await readUnfinished();
+      signalEntered();
+      await released;
+      return creation;
+    });
+    const before = test.host["plan.list"]({});
+    await entered;
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const activation = test.host["plan_creation.activate"](test.request);
+    await vi.waitFor(() => expect(transaction).toHaveBeenCalledTimes(2));
+    releaseRead();
+    await expect(before).resolves.toMatchObject({
+      creation: { creationId: test.request.creationId, status: "review" },
+      active: { planId: incumbentId, start: "1997-12-22", end: "1998-01-18", creationId: null },
+      closed: [],
+    });
+    const activated = await activation;
+    reader.mockRestore();
+    transaction.mockClear();
+    const after = await test.host["plan.list"]({});
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(after).toEqual({
+      creation: null,
+      active: {
+        planId: activated.planId,
+        name: "Improve fitness",
+        start: test.draft.start,
+        end: test.draft.end,
+        weeks: 4,
+        status: "active",
+        closeReason: null,
+        closedAt: null,
+        activatedAt: "1998-01-01",
+        creationId: test.request.creationId,
+      },
+      closed: [{
+        planId: incumbentId,
+        name: "Earlier Plan",
+        start: "1997-12-22",
+        end: "1998-01-18",
+        weeks: 4,
+        status: "closed",
+        closeReason: "stopped",
+        closedAt: "1998-01-01",
+        activatedAt: "1997-12-22",
+        creationId: null,
+      }],
+    });
+  });
 
   it("activates dated Workouts, removes the Chat card, and exposes the Plan to readers", async () => {
     const test = await review();

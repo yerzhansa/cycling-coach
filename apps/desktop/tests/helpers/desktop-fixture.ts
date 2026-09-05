@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { ListPlansResultSchema } from "@enduragent/coach-contract";
 import type {
   CoachEngine,
   CoachOperations,
@@ -12,6 +13,7 @@ import type {
   OperationProgressEvent,
   PlanCreationOperations,
   PlanningOperations,
+  PlanningReadOperations,
   PlanningRequestOperations,
   PlanProgressEvent,
   TelegramControlSnapshot,
@@ -387,6 +389,7 @@ export async function launchDesktopFixture(input: {
   };
   const operations: CoachOperations &
     PlanningOperations &
+    PlanningReadOperations &
     PlanningRequestOperations &
     PlanCreationOperations = {
     async importFiles(request, onEvent) {
@@ -558,6 +561,9 @@ export async function launchDesktopFixture(input: {
       return finalFrame(await invoke("listPlanningRequests", request)) as Awaited<
         ReturnType<NonNullable<PlanningRequestOperations["listPlanningRequests"]>>
       >;
+    },
+    async "plan.list"(request) {
+      return ListPlansResultSchema.parse(finalFrame(await invoke("plan.list", request)));
     },
     async "plan_creation.start"(request) {
       return finalFrame(await invoke("plan_creation.start", request)) as Awaited<

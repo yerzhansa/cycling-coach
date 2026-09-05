@@ -1325,6 +1325,7 @@ describe("coach request and event projection", () => {
         asOfDateKey: 20260826,
         plan: null,
       }),
+      "plan.list": async () => ({ creation: null, active: null, closed: [] }),
       getActivityAnalysis: async () => {
         throw new Error("not exercised by registry exhaustiveness");
       },
