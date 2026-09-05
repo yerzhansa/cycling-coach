@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  ListPlansParamsSchema,
+  ListPlansResultSchema,
+  type ListPlansParams,
+  type ListPlansResult,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationActivateRpcResultSchema,
   PlanCreationAnswerRpcParamsSchema,
@@ -17,6 +21,8 @@ import {
 import { buildCreationDraft } from "@enduragent/sport-cycling";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
+  addCivilDays,
+  createPlanRepository,
   dateKeyFromText,
   inclusiveCivilDays,
   MIN_FULL_PLAN_DAYS,
@@ -25,6 +31,7 @@ import {
   type PlanCreationRepository,
   type PlanCreationSnapshot,
 } from "@enduragent/kernel/planning";
+import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import {
   encodePlanCreationAnswer,
@@ -54,6 +61,7 @@ export function expectedPlanCreationAnswerKind(
 }
 
 export interface PlanCreationHost extends PlanCreationOperations {
+  "plan.list"(request: ListPlansParams): Promise<ListPlansResult>;
   readCard(): Promise<PlanCreationCardModel | null>;
 }
 
@@ -70,6 +78,7 @@ const PreviewInputDateSchema = z.object({ today: z.iso.date() });
 const defaultBaselineEvidence: BaselineEvidenceSource = { read: async () => undefined };
 
 export function createPlanCreationOperations(input: {
+  store: SqlStore & Pick<MigratorStore, "transaction">;
   repository: PlanCreationRepository;
   identity: AuthoredIdentity;
   crypto: Crypto;
@@ -77,6 +86,7 @@ export function createPlanCreationOperations(input: {
   baselineEvidence?: BaselineEvidenceSource;
   today?: () => string;
 }): PlanCreationHost {
+  const plans = createPlanRepository(input.store);
   const baselineEvidence = input.baselineEvidence ?? defaultBaselineEvidence;
   const today = input.today ?? (() => new Date().toISOString().slice(0, 10));
   const stamp = async (commandId: string, digest: string) => {
@@ -140,6 +150,37 @@ export function createPlanCreationOperations(input: {
     return snapshot === undefined ? null : project(snapshot);
   };
   return {
+    async "plan.list"(request) {
+      ListPlansParamsSchema.parse(request);
+      return input.store.transaction(async () => {
+        const creation = await input.repository.readUnfinished();
+        const records = await plans.listPlans();
+        const dateText = (dateKey: number): string => {
+          const digits = String(dateKey).padStart(8, "0");
+          return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+        };
+        const timestampDate = (value: number | null): string | null =>
+          value === null ? null : new Date(value).toISOString().slice(0, 10);
+        const summaries = records.map((plan) => ({
+          planId: plan.planId,
+          name: plan.name,
+          start: dateText(plan.startDateKey),
+          end: dateText(addCivilDays(plan.startDateKey, plan.totalWeeks * 7 - 1)),
+          weeks: plan.totalWeeks,
+          status: plan.status,
+          closeReason: plan.closeReason,
+          closedAt: timestampDate(plan.closedAtMs),
+          activatedAt: timestampDate(plan.activatedAtMs),
+          creationId: plan.creationId,
+        }));
+        return ListPlansResultSchema.parse({
+          creation:
+            creation === undefined ? null : projectPlanCreationCard(creation, { today: today() }),
+          active: summaries.find((plan) => plan.status === "active") ?? null,
+          closed: summaries.filter((plan) => plan.status === "closed"),
+        });
+      });
+    },
     async "plan_creation.start"(request) {
       const parsed = PlanCreationStartRpcParamsSchema.parse(request);
       const current = await input.repository.readUnfinished();

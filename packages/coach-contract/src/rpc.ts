@@ -122,6 +122,8 @@ import {
 import {
   GetPlanningReadModelRpcParamsSchema,
   GetPlanningReadModelRpcResultSchema,
+  ListPlansParamsSchema,
+  ListPlansResultSchema,
   type PlanningReadOperations,
 } from "./planning-read.js";
 import {
@@ -272,6 +274,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getPlanningReadModel",
+  "plan.list",
   "getActivityAnalysis",
   "exportTrainingFile",
   "importFiles",
@@ -1571,6 +1574,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
     .object({
       jsonrpc: z.literal("2.0"),
       id: JsonRpcIdSchema,
+      method: z.literal("plan.list"),
+      params: ListPlansParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
       method: z.literal("getActivityAnalysis"),
       params: ActivityAnalysisRequestSchema,
     })
@@ -2205,6 +2216,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "getPlanningReadModel",
     requestSchema: GetPlanningReadModelRpcParamsSchema,
     responseSchema: GetPlanningReadModelRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan.list": {
+    wireName: "plan.list",
+    requestSchema: ListPlansParamsSchema,
+    responseSchema: ListPlansResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getActivityAnalysis: {
