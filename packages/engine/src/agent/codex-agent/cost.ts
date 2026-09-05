@@ -17,6 +17,7 @@ export const CODEX_AGENT_PRICE_TABLE: Record<string, CodexAgentModelCost> = {
 };
 
 export function resolveCodexAgentPriceId(modelId: string): string {
+  if (modelId === "gpt-6-astra") return modelId;
   if (CODEX_AGENT_PRICE_TABLE[modelId] !== undefined) return modelId;
   const family = modelId.toLowerCase();
   if (family.includes("terra")) return "gpt-5.6-terra";
@@ -24,7 +25,8 @@ export function resolveCodexAgentPriceId(modelId: string): string {
   return CODEX_AGENT_FALLBACK_PRICE_ID;
 }
 
-export function codexAgentRates(modelId: string): CodexAgentModelCost {
+export function codexAgentRates(modelId: string): CodexAgentModelCost | undefined {
+  if (modelId === "gpt-6-astra") return undefined;
   return (
     CODEX_AGENT_PRICE_TABLE[resolveCodexAgentPriceId(modelId)] ??
     CODEX_AGENT_PRICE_TABLE[CODEX_AGENT_FALLBACK_PRICE_ID]
@@ -41,6 +43,7 @@ export function codexAgentCacheReadSavingsUsd(
 ): number | null {
   if (!validTokenCount(cacheReadTokens)) return null;
   const rates = codexAgentRates(modelId);
+  if (rates === undefined) return null;
   const savings = (Math.max(0, rates.input - rates.cacheRead) * cacheReadTokens) / 1_000_000;
   return Number.isFinite(savings) && savings >= 0 ? savings : null;
 }
@@ -58,6 +61,7 @@ export function priceCodexAgentInclusiveUsage(
     return undefined;
   }
   const rates = codexAgentRates(modelId);
+  if (rates === undefined) return undefined;
   const uncachedInputTokens = Math.max(
     0,
     usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens,

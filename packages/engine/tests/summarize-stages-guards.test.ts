@@ -38,7 +38,7 @@ const EMPTY_SNAPSHOT: MemorySnapshot = {
   read: () => null,
   has: () => false,
   listSections: () => [],
-    provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: true }),
+  provenanceOf: () => ({ garmin: false, nonGarmin: false, unknown: true }),
 };
 
 const hangingLLM = { generate: () => new Promise<never>(() => {}) } as unknown as LLM;
@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe("summarizeInStages guards", () => {
-  it("times out a hung summarization call after 120 s and degrades to the previous summary", async () => {
+  it("times out a hung summarization call after 120 s and retains the previous summary and history", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -67,16 +67,17 @@ describe("summarizeInStages guards", () => {
     expect(result.messages[0].role).toBe("system");
     expect(String(result.messages[0].content)).toContain("FTP 247W");
     expect(String(result.messages[0].content)).toContain("## Coach Stance");
-    expect(result.messages.length).toBe(5);
+    expect(result.messages.slice(1)).toEqual(REPRESENTATIVE_CONVERSATION);
 
     const chunkWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
     );
     expect(chunkWarn).toBeDefined();
     expect(isTimeoutError(chunkWarn?.[1])).toBe(true);
   }, 10_000);
 
-  it("falls back to the previous summary when the summarization call rejects", async () => {
+  it("retains the previous summary and history when the summarization call rejects", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const spy = createFakeLLM([{ error: new Error("boom") }]);
 
@@ -91,14 +92,16 @@ describe("summarizeInStages guards", () => {
     expect(result.messages[0].role).toBe("system");
     expect(String(result.messages[0].content)).toContain("FTP 247W");
     expect(spy.capturedOpts.length).toBe(1);
+    expect(result.messages.slice(1)).toEqual(REPRESENTATIVE_CONVERSATION);
 
     const chunkWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
     );
     expect(chunkWarn).toBeDefined();
   });
 
-  it("head-drops when every call fails and there is no previous summary", async () => {
+  it("retains every message when summarization fails without a previous summary", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const spy = createFakeLLM([{ error: new Error("boom") }], { repeatLast: true });
 
@@ -109,16 +112,16 @@ describe("summarizeInStages guards", () => {
       memory: EMPTY_SNAPSHOT,
     });
 
-    expect(result.messages).toEqual(REPRESENTATIVE_CONVERSATION.slice(-4));
+    expect(result.messages).toEqual(REPRESENTATIVE_CONVERSATION);
     expect(result.summary).toBeUndefined();
     for (const msg of result.messages) {
       expect(String(msg.content).startsWith(SUMMARY_PREFIX)).toBe(false);
     }
 
-    const dropWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("produced no summary"),
+    const retainedWarn = warnSpy.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("retaining original messages"),
     );
-    expect(dropWarn).toBeDefined();
+    expect(retainedWarn).toBeDefined();
   });
 
   it("returns the input unchanged with no summary when there is nothing to summarize", async () => {
@@ -152,12 +155,14 @@ describe("summarizeInStages guards", () => {
     });
 
     expect(spy.capturedOpts.length).toBe(2);
+    expect(result.messages.slice(1)).toEqual(messages.slice(1));
     expect(result.messages[0].role).toBe("system");
     expect(String(result.messages[0].content)).toContain("## Coach Stance");
     expect(String(result.messages[0].content)).toContain("FTP 247W");
 
     const chunkWarns = warnSpy.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
+      (call) =>
+        typeof call[0] === "string" && call[0].includes("Staged summarization chunk failed"),
     );
     expect(chunkWarns.length).toBe(1);
   });
@@ -181,7 +186,8 @@ describe("summarizeInStages guards", () => {
     const guardWarn = warnSpy.mock.calls.find(
       (call) =>
         typeof call[0] === "string" &&
-        (call[0].includes("Staged summarization chunk failed") || call[0].includes("produced no summary")),
+        (call[0].includes("Staged summarization chunk failed") ||
+          call[0].includes("retaining original messages")),
     );
     expect(guardWarn).toBeUndefined();
   });
@@ -207,11 +213,13 @@ describe("summarizeInStages guards", () => {
     await vi.advanceTimersByTimeAsync(120_000);
     const err = await rejection;
 
-    expect(err.message).toContain("failed for every chunk");
+    expect(err.message).toContain("failed before any chunk was summarized");
     expect(isTimeoutError((err as Error & { cause?: unknown }).cause)).toBe(true);
 
     const chunkWarn = warnSpy.mock.calls.find(
-      (call) => typeof call[0] === "string" && call[0].includes("Dropped message summarization LLM call failed"),
+      (call) =>
+        typeof call[0] === "string" &&
+        call[0].includes("Dropped message summarization LLM call failed"),
     );
     expect(chunkWarn).toBeDefined();
   }, 10_000);

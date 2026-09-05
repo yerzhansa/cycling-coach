@@ -79,6 +79,20 @@ describe("mustPreserveDiff", () => {
 });
 
 describe("factScore", () => {
+  it("counts a repeated remembered fact once", () => {
+    const verdict = { factsPreserved: Array(10).fill("F01"), factsMissing: [], fabrications: [] };
+    expect(factScore(verdict, INVENTORY)).toBe(0.1);
+    expect(tierJTranscriptVerdict([verdict, verdict, verdict], INVENTORY).pass).toBe(false);
+  });
+
+  it("counts distinct inventory facts and keeps scores bounded", () => {
+    expect(factScore(run(10, 0), [...INVENTORY, "F01"])).toBe(1);
+    expect(factScore(run(10, 0), [])).toBe(0);
+  });
+
+  it("does not credit facts also declared missing", () => {
+    expect(factScore({ ...run(10, 0), factsMissing: ["F01"] }, INVENTORY)).toBe(0.9);
+  });
   it("scores 9 of 10 preserved inventory ids as 0.9", () => {
     expect(factScore(run(9, 0), INVENTORY)).toBeCloseTo(0.9, 10);
   });
@@ -129,21 +143,60 @@ describe("cacheEvidence", () => {
 });
 
 describe("parseJudgeVerdict", () => {
+  it.each([null, 1, {}, ["F01", 2], [""], ["   "]])(
+    "rejects malformed field values: %j",
+    (value) => {
+      for (const field of ["factsPreserved", "factsMissing", "fabrications"]) {
+        expect(() =>
+          parseJudgeVerdict(JSON.stringify({ ...run(1, 0), [field]: value }), INVENTORY),
+        ).toThrow();
+      }
+    },
+  );
+
+  it("rejects contradictory preserved and missing facts", () => {
+    expect(() =>
+      parseJudgeVerdict(JSON.stringify({ ...run(1, 0), factsMissing: ["F01"] }), INVENTORY),
+    ).toThrow(/both preserved and missing/);
+  });
+
+  it.each(["factsPreserved", "factsMissing"])("rejects unknown IDs in %s", (field) => {
+    expect(() =>
+      parseJudgeVerdict(JSON.stringify({ ...run(1, 0), [field]: ["UNKNOWN"] }), INVENTORY),
+    ).toThrow(/unknown fact ID/);
+  });
+
+  it("deduplicates valid declarations", () => {
+    expect(
+      parseJudgeVerdict(
+        JSON.stringify({
+          factsPreserved: ["F01", "F01"],
+          factsMissing: ["F02", "F02"],
+          fabrications: [],
+        }),
+        INVENTORY,
+      ),
+    ).toEqual({ factsPreserved: ["F01"], factsMissing: ["F02"], fabrications: [] });
+  });
   it("parses a clean JSON reply", () => {
-    const v = parseJudgeVerdict('{"factsPreserved":["F01"],"factsMissing":[],"fabrications":[]}');
+    const v = parseJudgeVerdict(
+      '{"factsPreserved":["F01"],"factsMissing":[],"fabrications":[]}',
+      INVENTORY,
+    );
     expect(v.factsPreserved).toEqual(["F01"]);
   });
 
   it("extracts JSON wrapped in prose", () => {
     const v = parseJudgeVerdict(
       'Here is my verdict:\n{"factsPreserved":[],"factsMissing":["F01"],"fabrications":["made up a number"]}\nDone.',
+      INVENTORY,
     );
     expect(v.factsMissing).toEqual(["F01"]);
     expect(v.fabrications).toEqual(["made up a number"]);
   });
 
   it("throws on garbage", () => {
-    expect(() => parseJudgeVerdict("no json here")).toThrow();
+    expect(() => parseJudgeVerdict("no json here", INVENTORY)).toThrow();
   });
 });
 
