@@ -266,37 +266,44 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live", () => {
-  it("finishes file-only onboarding into working Chat and Training pages", async () => {
-    const fixture = await launchDesktopFixture({
-      script: makeScript(),
-      token,
-      width: 1440,
-      height: 900,
-      colorScheme: "light",
-      reducedMotion: false,
-    });
-    fixtures.push(fixture);
-    const observed = await fixture.evaluate<{
-      readonly present: boolean;
-      readonly chatSetup: boolean;
-      readonly scrimAbsent: boolean;
-      readonly modalAbsent: boolean;
-      readonly title: string;
-      readonly escapeStayed: boolean;
-      readonly shellReplaced: boolean;
-      readonly finished: boolean;
-      readonly shellRestored: boolean;
-      readonly chatWorking: boolean;
-      readonly trainingReady: boolean;
-      readonly recentRideVisible: boolean;
-      readonly syncNeedsAttention: boolean;
-    }>(`
+  it.each([
+    { width: 1440, height: 900, colorScheme: "light", reducedMotion: false },
+    { width: 800, height: 700, colorScheme: "dark", reducedMotion: true },
+  ] as const)(
+    "finishes file-only onboarding into working Chat and Training pages at $width in $colorScheme",
+    async (appearance) => {
+      const fixture = await launchDesktopFixture({
+        script: makeScript(),
+        token,
+        ...appearance,
+      });
+      fixtures.push(fixture);
+      const observed = await fixture.evaluate<{
+        readonly trainingSubtitle: string;
+        readonly readiness: string;
+        readonly startEnabled: boolean;
+        readonly completionStored: boolean;
+        readonly present: boolean;
+        readonly chatSetup: boolean;
+        readonly scrimAbsent: boolean;
+        readonly modalAbsent: boolean;
+        readonly title: string;
+        readonly escapeStayed: boolean;
+        readonly shellReplaced: boolean;
+        readonly finished: boolean;
+        readonly shellRestored: boolean;
+        readonly chatWorking: boolean;
+        readonly trainingReady: boolean;
+        readonly recentRideVisible: boolean;
+        readonly syncNeedsAttention: boolean;
+      }>(`
       const deadline = Date.now() + 10000;
       const setupSelector =
         '[data-shell="gate"][data-onboarding="settled"] [data-setup-host="gate"]';
       while (!document.querySelector(setupSelector) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
+      const trainingSubtitle = document.querySelector('[data-setup-row="training"] [data-setup-row-subtitle]')?.textContent ?? "";
       const page = document.querySelector(setupSelector);
       const present = page !== null;
       const chatSetup = document.querySelector(setupSelector) !== null;
@@ -387,6 +394,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       await waitFor('[data-setup-readiness="2"]');
       await pick("onboarding-injury-status", "No current injury");
       await new Promise((resolve) => setTimeout(resolve, 60));
+      const readiness = document.querySelector("[data-setup-readiness]")?.textContent ?? "";
+      const startEnabled = button("Start coaching")?.disabled === false;
       button("Start coaching")?.click();
       const chatDeadline = Date.now() + 10000;
       const chatReady = () => {
@@ -420,6 +429,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       const recentRides = training?.querySelector('[data-panel="recent-rides"]');
       const syncChip = document.querySelector(".sync-chip");
       return {
+        trainingSubtitle,
+        readiness,
+        startEnabled,
+        completionStored: localStorage.getItem("enduragent.desktop.onboarding") === '{"version":1,"completed":true}',
         present,
         chatSetup,
         scrimAbsent,
@@ -439,20 +452,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         syncNeedsAttention: syncChip?.getAttribute("data-status") === "attention",
       };
     `);
-    expect(observed).toEqual({
-      present: true,
-      chatSetup: true,
-      scrimAbsent: true,
-      modalAbsent: true,
-      title: "Get your coach running before you can chat",
-      escapeStayed: true,
-      shellReplaced: true,
-      finished: true,
-      shellRestored: true,
-      chatWorking: true,
-      trainingReady: true,
-      recentRideVisible: true,
-      syncNeedsAttention: false,
-    });
-  }, 90_000);
+      expect(observed).toEqual({
+        trainingSubtitle: "Connect or import ride files.",
+        readiness: "3 of 3 required ready",
+        startEnabled: true,
+        completionStored: true,
+        present: true,
+        chatSetup: true,
+        scrimAbsent: true,
+        modalAbsent: true,
+        title: "Get your coach running before you can chat",
+        escapeStayed: true,
+        shellReplaced: true,
+        finished: true,
+        shellRestored: true,
+        chatWorking: true,
+        trainingReady: true,
+        recentRideVisible: true,
+        syncNeedsAttention: false,
+      });
+    },
+    90_000,
+  );
 });

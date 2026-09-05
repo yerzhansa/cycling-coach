@@ -1248,7 +1248,7 @@ describe("setup card", () => {
     }));
     const missing = mountWizard({ bridge: missingBridge });
     await missing.open();
-    expect(rowSubtitle("training")).toBe("Required · where your rides come from");
+    expect(rowSubtitle("training")).toBe("Connect or import ride files.");
     expect(trigger("training").textContent).toBe("Connect");
     expect(rowState("training")).toBe("pending");
     expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
@@ -1289,7 +1289,7 @@ describe("setup card", () => {
       expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
     });
     expect(rowState("training")).toBe("pending");
-    expect(rowSubtitle("training")).toBe("Required · where your rides come from");
+    expect(rowSubtitle("training")).toBe("Connect or import ride files.");
     expect(trigger("training").textContent).toBe("Connect");
     wizard.controller.dispose();
   });
