@@ -970,7 +970,8 @@ export class CoachAgent {
               this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
             }
           } catch (err) {
-            this.log.warn("Dropped message summarization failed, continuing without summary", err);
+            this.log.warn("Dropped message summarization failed, retaining original messages", err);
+            requeued = dropped;
             if (previousSummary) {
               summaryMsg = makeSummaryMessage(
                 previousSummary,
@@ -1059,6 +1060,17 @@ export class CoachAgent {
             messages,
             ...this.compactionParams(turnBudget),
           });
+          if (
+            shouldCompact({
+              messages: compacted.messages,
+              systemPrompt: this.systemPrompt,
+              contextWindowTokens: this.config.contextWindowTokens,
+            })
+          ) {
+            throw new Error(
+              "Conversation could not be shortened safely to fit the context budget. Please try again.",
+            );
+          }
           messages = compacted.messages;
           if (compacted.summary && compacted.summaryProvenance) {
             this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
