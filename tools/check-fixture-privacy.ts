@@ -254,10 +254,9 @@ function findIdHitsInJsonFile(file: string): PrivacyHit[] {
 function findIdHitsInMdFile(file: string): PrivacyHit[] {
   const source = readFileSync(file, "utf-8");
   if (isSkippedFile(source)) return [];
-  const stripped = source.replace(/```[\s\S]*?```/g, (block) => block.replace(/[^\n]/g, " "));
-  const lineStarts = buildLineStarts(stripped);
+  const lineStarts = buildLineStarts(source);
   const hits: PrivacyHit[] = [];
-  for (const hit of matchIntervalsId(stripped, 0)) {
+  for (const hit of matchIntervalsId(source, 0)) {
     const { line, column } = offsetToLineCol(lineStarts, hit.offset);
     hits.push({
       file,
@@ -266,7 +265,7 @@ function findIdHitsInMdFile(file: string): PrivacyHit[] {
       path: "$",
       rule: "intervals-id",
       code: "source.intervals_id",
-      detail: `real intervals.icu id shape "${hit.value}" in prose`,
+      detail: `real intervals.icu id shape "${hit.value}" in Markdown`,
     });
   }
   return hits;

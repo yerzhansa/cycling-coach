@@ -45,6 +45,7 @@ export interface ChangesetHit {
   readonly line: number;
   readonly column: number;
   readonly namedPackages: readonly string[];
+  readonly reason: "missing-release-target" | "empty-user-facing";
 }
 
 const MD_EXTS = new Set([".md", ".mdx"]);
@@ -164,16 +165,6 @@ export function discoverUserFacingReleaseTargets(packagesDir: string): Set<strin
   return new Set([...discoverPublishedBinaries(packagesDir), ...INDEPENDENT_RELEASE_TARGETS]);
 }
 
-/**
- * Lint a single changeset file. Returns a hit when the body carries a
- * `User-facing:` line but no named frontmatter package is a user-facing release target.
- * Returns `[]` when there is no `User-facing:` line, when the file is skipped,
- * when it is a non-changeset (README/config), or when the routing is correct.
- *
- * The hit's line/column point at the first `User-facing:` line (the offending
- * surface), so the report tells the author exactly which line provoked the
- * routing requirement.
- */
 function findHitsInChangesetFile(file: string, published: ReadonlySet<string>): ChangesetHit[] {
   if (NON_CHANGESET_BASENAMES.has(basenameOf(file))) return [];
   const source = readFileSync(file, "utf-8");
@@ -181,30 +172,35 @@ function findHitsInChangesetFile(file: string, published: ReadonlySet<string>): 
 
   const { frontmatter, body, bodyStartLine } = splitFrontmatter(source);
 
-  // Find the first `User-facing:` marker in the BODY only — the frontmatter is
-  // the package list, not prose, so a stray match there must not count. Scanning
-  // per body line yields both the existence check and an accurate location.
   const bodyLines = body.split("\n");
-  let markerBodyIdx = -1;
-  let column = 1;
+  const named = parseFrontmatterPackages(frontmatter);
+  const hasReleaseTarget = named.some((name) => published.has(name));
+  const hits: ChangesetHit[] = [];
+  let reportedRouting = false;
   for (let i = 0; i < bodyLines.length; i++) {
-    const m = USER_FACING_RE.exec(bodyLines[i]);
-    if (m !== null) {
-      markerBodyIdx = i;
-      column = m.index + 1;
-      break;
+    const marker = USER_FACING_RE.exec(bodyLines[i]);
+    if (marker === null) continue;
+    let content = bodyLines[i].slice(marker.index + marker[0].length).trim();
+    if (content === "") content = bodyLines[i + 1]?.trim() ?? "";
+    const structural =
+      /^(?:#{1,6}(?:\s|$)|`{3,}|~{3,}|[-*+]\s|\d+[.)]\s|>|\||<!--|(?:-\s*){3,}$|(?:_\s*){3,}$|(?:\*\s*){3,}$)/.test(
+        content,
+      );
+    const substantive =
+      !structural && !USER_FACING_RE.test(content) && /[\p{L}\p{N}]/u.test(content);
+    const location = {
+      file,
+      line: bodyStartLine + i,
+      column: marker.index + 1,
+      namedPackages: named,
+    };
+    if (!substantive) hits.push({ ...location, reason: "empty-user-facing" });
+    if (!hasReleaseTarget && !reportedRouting) {
+      hits.push({ ...location, reason: "missing-release-target" });
+      reportedRouting = true;
     }
   }
-  if (markerBodyIdx === -1) return [];
-
-  const named = parseFrontmatterPackages(frontmatter);
-  if (named.some((name) => published.has(name))) return [];
-
-  // Translate the body-relative line back to the original source line so the
-  // report points at the offending line, not an offset into the stripped body.
-  const line = bodyStartLine + markerBodyIdx;
-
-  return [{ file, line, column, namedPackages: named }];
+  return hits;
 }
 
 /**
@@ -230,6 +226,9 @@ const DEFAULT_SCAN_PATHS: readonly string[] = [".changeset"];
 const DEFAULT_PACKAGES_DIR = "packages";
 
 function formatHit(hit: ChangesetHit): string {
+  if (hit.reason === "empty-user-facing") {
+    return `${hit.file}:${hit.line}:${hit.column}  User-facing: requires substantive release-note text`;
+  }
   const named =
     hit.namedPackages.length > 0
       ? hit.namedPackages.map((n) => `"${n}"`).join(", ")
@@ -262,12 +261,10 @@ export function main(argv: readonly string[]): number {
     );
     return 0;
   }
-  console.error(
-    `check-changeset-userfacing: ${hits.length} misfiled User-facing changeset(s) found:`,
-  );
+  console.error(`check-changeset-userfacing: ${hits.length} User-facing violation(s) found:`);
   for (const hit of hits) console.error("  " + formatHit(hit));
   console.error(
-    "\nA `User-facing:` line must name a user-facing release target: an npm binary " +
+    "\nA `User-facing:` line needs substantive text and a user-facing release target: an npm binary " +
       "or the independently released @enduragent/desktop app. " +
       `Currently: ${[...releaseTargets].sort().join(", ") || "none"}. ` +
       "Add it to the changeset frontmatter, or drop the User-facing line if the change " +
