@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { desktopFixtureLaunchArgs } from "./helpers/desktop-fixture-launch-args.js";
 
 describe("Desktop fixture launch arguments", () => {
-  it.each(["true", "1", "false"])("disables the sandbox on Linux with CI=%s", (ci) => {
-    expect(desktopFixtureLaunchArgs("linux", ci)).toEqual(["--no-sandbox"]);
+  it.each(["true", "1", "false"])("uses sandbox-free basic storage on Linux with CI=%s", (ci) => {
+    expect(desktopFixtureLaunchArgs("linux", ci)).toEqual([
+      "--no-sandbox",
+      "--password-store=basic",
+    ]);
   });
 
   it.each([undefined, ""])("preserves the sandbox on Linux with CI=%s", (ci) => {
