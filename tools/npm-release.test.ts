@@ -366,6 +366,21 @@ describe("protected workflow and source identities", () => {
 });
 
 describe("policy and sealed artifact gates", () => {
+  it("accepts GitHub revision timestamps with offsets and fractional seconds", async () => {
+    const revision = "1998-08-06T14:37:10.649+05:00";
+    routes.set("rulesets/1", tagPolicy({ updated_at: revision }));
+    vi.stubEnv("RESERVATION_RULESET_UPDATED_AT", revision);
+    await expect(validatePolicies()).resolves.toBeUndefined();
+    await expect(verifyPolicy()).resolves.toEqual({
+      RESERVATION_RULESET_ID: "1",
+      RESERVATION_RULESET_UPDATED_AT: revision,
+    });
+    vi.stubEnv("RESERVATION_RULESET_UPDATED_AT", "1998-08-06T09:37:10.649Z");
+    await expect(validatePolicies()).rejects.toThrow("ruleset changed");
+    vi.stubEnv("RESERVATION_RULESET_UPDATED_AT", "1998-08-06T14:37:10.650+05:00");
+    await expect(validatePolicies()).rejects.toThrow("ruleset changed");
+  });
+
   it("accepts active main-only environments and immutable reservation tags", async () => {
     await expect(validatePolicies()).resolves.toBeUndefined();
   });

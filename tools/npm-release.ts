@@ -232,7 +232,10 @@ async function reservationPolicy() {
   return {
     id,
     ruleset,
-    updatedAt: text(ruleset.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u),
+    updatedAt: text(
+      ruleset.updated_at,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/u,
+    ),
   };
 }
 
