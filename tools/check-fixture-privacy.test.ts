@@ -187,6 +187,27 @@ function expectOnlyCode(hits: readonly PrivacyHit[], code: string): void {
 }
 
 describe("Rule A — real intervals.icu id shape", () => {
+  it.each(["", "```json", "~~~text"])("flags Markdown identifiers with fence %j", (fence) => {
+    const id = `i${"9".repeat(8)}`;
+    const opening = fence ? `${fence}\n` : "";
+    const closing = fence ? `\n${fence.slice(0, 3)}` : "";
+    const file = write("sample.md", `${opening}athlete ${id}${closing}\n`);
+    expect(findIdHits([file])).toEqual([
+      expect.objectContaining({ file, line: fence ? 2 : 1, column: 9, rule: "intervals-id" }),
+    ]);
+  });
+
+  it("preserves Markdown placeholder and explicit file exemptions", () => {
+    const placeholder = `i${"1234"}${"5678"}`;
+    const forbidden = `i${"9".repeat(9)}`;
+    expect(findIdHits([write("placeholder.md", `\`\`\`\n${placeholder}\n\`\`\`\n`)])).toEqual([]);
+    expect(
+      findIdHits([
+        write("skip.md", `<!-- fixture-privacy-lint:skip-file -->\n\`\`\`\n${forbidden}\n\`\`\``),
+      ]),
+    ).toEqual([]);
+  });
+
   it("flags an i+9-digit id inside a JSON string", () => {
     const file = write("fixture.json", `{ "id": "i123456789", "type": "Ride" }\n`);
     const hits = findIdHits([file]);
