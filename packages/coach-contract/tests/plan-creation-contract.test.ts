@@ -9,9 +9,12 @@ import {
   PlanCreationAnswerRpcResultSchema,
   PlanCreationAnswerSummarySchema,
   PlanCreationCardModelSchema,
+  PlanCreationDiscardRpcParamsSchema,
+  PlanCreationDiscardRpcResultSchema,
   PlanCreationOpenQuestionSchema,
   PlanCreationStartRpcParamsSchema,
   PlanCreationStartRpcResultSchema,
+  NoRpcEventSchema,
 } from "../src/index.js";
 
 const creationId = "01J00000000000000000000000";
@@ -606,9 +609,31 @@ describe("Plan Creation contract", () => {
         extra: true,
       }),
     ).toThrow();
+    expect(
+      PlanCreationDiscardRpcParamsSchema.parse({
+        commandId: "discard",
+        creationId,
+        expectedVersion: 1,
+      }),
+    ).toEqual({ commandId: "discard", creationId, expectedVersion: 1 });
+    expect(() =>
+      PlanCreationDiscardRpcParamsSchema.parse({
+        commandId: "discard",
+        creationId,
+        expectedVersion: 1,
+        extra: true,
+      }),
+    ).toThrow();
+    expect(() =>
+      PlanCreationDiscardRpcParamsSchema.parse({
+        commandId: "discard",
+        creationId,
+        expectedVersion: 0,
+      }),
+    ).toThrow();
   });
 
-  it("accepts every terminal result and only the two registered operations", () => {
+  it("accepts every terminal result and only the three registered operations", () => {
     expect(
       PlanCreationStartRpcResultSchema.parse({
         status: "started",
@@ -630,18 +655,45 @@ describe("Plan Creation contract", () => {
         PlanCreationAnswerRpcResultSchema.parse({ status: "rejected", reason, planCreation: null }),
       ).toEqual({ status: "rejected", reason, planCreation: null });
     }
+    expect(PlanCreationDiscardRpcResultSchema.parse({ status: "discarded" })).toEqual({
+      status: "discarded",
+    });
+    for (const reason of ["stale-version", "command-conflict", "no-unfinished-creation"] as const) {
+      expect(
+        PlanCreationDiscardRpcResultSchema.parse({
+          status: "rejected",
+          reason,
+          planCreation: reason === "stale-version" ? card : null,
+        }),
+      ).toMatchObject({ status: "rejected", reason });
+    }
+    expect(() =>
+      PlanCreationDiscardRpcResultSchema.parse({ status: "discarded", planCreation: null }),
+    ).toThrow();
+    expect(() =>
+      PlanCreationDiscardRpcResultSchema.parse({
+        status: "rejected",
+        reason: "invalid-answer",
+        planCreation: null,
+      }),
+    ).toThrow();
     expect(COACH_RPC_METHOD_NAMES.filter((name) => name.startsWith("plan_creation."))).toEqual([
       "plan_creation.start",
       "plan_creation.answer",
+      "plan_creation.discard",
     ]);
   });
 
-  it("registers strict start and answer envelopes without events", () => {
+  it("registers strict Plan Creation envelopes without events", () => {
     const requests = [
       { method: "plan_creation.start", params: { commandId: "start" } },
       {
         method: "plan_creation.answer",
         params: { commandId: "answer", creationId, expectedVersion: 1, answer: answers[2] },
+      },
+      {
+        method: "plan_creation.discard",
+        params: { commandId: "discard", creationId, expectedVersion: 1 },
       },
     ] as const;
     requests.forEach((request, id) =>
@@ -649,8 +701,18 @@ describe("Plan Creation contract", () => {
         request.method,
       ),
     );
-    for (const method of ["plan_creation.start", "plan_creation.answer"] as const) {
+    for (const method of [
+      "plan_creation.start",
+      "plan_creation.answer",
+      "plan_creation.discard",
+    ] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse({}).success).toBe(false);
     }
+    expect(COACH_RPC_METHOD_REGISTRY["plan_creation.discard"]).toEqual({
+      wireName: "plan_creation.discard",
+      requestSchema: PlanCreationDiscardRpcParamsSchema,
+      responseSchema: PlanCreationDiscardRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
   });
 });

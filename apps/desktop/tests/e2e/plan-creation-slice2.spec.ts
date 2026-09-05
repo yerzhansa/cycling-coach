@@ -16,6 +16,8 @@ interface Scenario {
   readonly fixture: RunningDesktopFixture;
   readonly scratch: string;
   readonly colorScheme: "light" | "dark";
+  readonly width: number;
+  readonly height: number;
   browser: Browser;
   page: Page;
 }
@@ -41,10 +43,9 @@ async function connect(
   if (initializeAppearance) {
     const navigation = page.getByRole("navigation", { name: "Main navigation" });
     await navigation.getByRole("button", { name: "Settings", exact: true }).click();
-    const appearance = page.getByRole("group", { name: "Appearance", exact: true }).getByRole(
-      "button",
-      { name: colorScheme === "light" ? "Light" : "Dark", exact: true },
-    );
+    const appearance = page
+      .getByRole("group", { name: "Appearance", exact: true })
+      .getByRole("button", { name: colorScheme === "light" ? "Light" : "Dark", exact: true });
     await appearance.click();
     await expect(appearance).toHaveAttribute("aria-pressed", "true");
     await navigation.getByRole("button", { name: "Chat", exact: true }).click();
@@ -79,12 +80,24 @@ async function launch(
       hidden: true,
       routeChatAttachmentComposer: true,
     });
+    const connected = await connect(playwright, fixture, appearance.colorScheme, true);
+    await test.info().attach("initial-native-viewport", {
+      body: JSON.stringify(
+        await connected.page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+      ),
+      contentType: "application/json",
+    });
+    expect(
+      await connected.page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+    ).toEqual({ width: appearance.width, height: appearance.height });
     return {
       backend,
       fixture,
       scratch,
       colorScheme: appearance.colorScheme,
-      ...(await connect(playwright, fixture, appearance.colorScheme, true)),
+      width: appearance.width,
+      height: appearance.height,
+      ...connected,
     };
   } catch (error) {
     try {
@@ -105,6 +118,16 @@ async function relaunch(scenario: Scenario, playwright: Playwright): Promise<voi
   const started = performance.now();
   await scenario.fixture.relaunch(() => scenario.backend.reopen());
   Object.assign(scenario, await connect(playwright, scenario.fixture, scenario.colorScheme));
+  await test.info().attach("relaunched-native-viewport", {
+    body: JSON.stringify(
+      await scenario.page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+    ),
+    contentType: "application/json",
+  });
+  expect(await scenario.page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({
+    width: scenario.width,
+    height: scenario.height,
+  });
   await expect(scenario.page.getByRole("region", { name: "Plan Creation progress" })).toBeVisible();
   await test.info().attach("relaunch-timing", {
     body: JSON.stringify({
@@ -129,7 +152,10 @@ async function close(scenario: Scenario): Promise<void> {
     const screenshotPath = test.info().outputPath("final-desktop.png");
     await scenario.fixture.screenshot(screenshotPath);
     await test.info().attach("final-desktop", { path: screenshotPath, contentType: "image/png" });
-    await test.info().attach("final-dom", { body: scenario.fixture.readCapturedSurface("dom"), contentType: "text/html" });
+    await test.info().attach("final-dom", {
+      body: scenario.fixture.readCapturedSurface("dom"),
+      contentType: "text/html",
+    });
   } finally {
     await scenario.browser.close().catch(() => {});
     try {
@@ -424,7 +450,9 @@ for (const appearance of [
           return size;
         `);
         try {
-          await expect.poll(() => scenario.page.evaluate(() => window.innerWidth)).toBe(Math.round(appearance.width / 1.25));
+          await expect
+            .poll(() => scenario.page.evaluate(() => window.innerWidth))
+            .toBe(Math.round(appearance.width / 1.25));
           await scenario.page.getByRole("button", { name: "Back to answers", exact: true }).focus();
           await expect(
             scenario.page.getByRole("button", { name: "Back to answers", exact: true }),

@@ -2328,12 +2328,16 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       status: "answered",
       planCreation: answeredCard,
     }));
+    const discardPlanCreation = vi.fn<PlanCreationOperations["plan_creation.discard"]>(
+      async () => ({ status: "discarded" }),
+    );
     const rpc = createCoachRpcServer({
       engine: engine(),
       operations: {
         ...operations,
         "plan_creation.start": startPlanCreation,
         "plan_creation.answer": answerPlanCreation,
+        "plan_creation.discard": discardPlanCreation,
       },
       token,
       owner: "app-supervised",
@@ -2352,22 +2356,37 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       expectedVersion: 1,
       answer: { kind: "goal" as const, goal: { kind: "fitness" as const, outcome: "Build power" } },
     };
-    for (const request of [
-      { id: "start", method: "plan_creation.start", params: startParams },
-      { id: "answer", method: "plan_creation.answer", params: answerParams },
+    const discardParams = { commandId: "discard-1", creationId, expectedVersion: 2 };
+    for (const { result, ...request } of [
+      {
+        id: "start",
+        method: "plan_creation.start",
+        params: startParams,
+        result: { status: "started", outcome: "created", planCreation: startedCard },
+      },
+      {
+        id: "answer",
+        method: "plan_creation.answer",
+        params: answerParams,
+        result: { status: "answered", planCreation: answeredCard },
+      },
+      {
+        id: "discard",
+        method: "plan_creation.discard",
+        params: discardParams,
+        result: { status: "discarded" },
+      },
     ]) {
       renderer.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
       expect(parseCoachRpcEnvelope(await renderer.frames.next())).toEqual({
         jsonrpc: "2.0",
         id: request.id,
-        result:
-          request.method === "plan_creation.start"
-            ? { status: "started", outcome: "created", planCreation: startedCard }
-            : { status: "answered", planCreation: answeredCard },
+        result,
       });
     }
     expect(startPlanCreation).toHaveBeenCalledWith(startParams);
     expect(answerPlanCreation).toHaveBeenCalledWith(answerParams);
+    expect(discardPlanCreation).toHaveBeenCalledWith(discardParams);
 
     for (const request of [
       {
@@ -2380,6 +2399,11 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         method: "plan_creation.answer",
         params: { ...answerParams, extra: true },
       },
+      {
+        id: "invalid-discard",
+        method: "plan_creation.discard",
+        params: { ...discardParams, extra: true },
+      },
     ]) {
       renderer.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
       expect(parseCoachRpcEnvelope(await renderer.frames.next())).toMatchObject({
@@ -2389,6 +2413,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     }
     expect(startPlanCreation).toHaveBeenCalledOnce();
     expect(answerPlanCreation).toHaveBeenCalledOnce();
+    expect(discardPlanCreation).toHaveBeenCalledOnce();
     await renderer.close();
   });
 

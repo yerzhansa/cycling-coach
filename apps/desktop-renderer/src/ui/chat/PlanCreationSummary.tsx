@@ -1,5 +1,5 @@
 import type { PlanCreationCardModel } from "@enduragent/coach-contract";
-import type { ReactElement } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 import { Check } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -12,12 +12,19 @@ export function PlanCreationSummary(props: {
   const paused = useEnduragentStore((state) => state.chat.planCreationPaused);
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
   const editingKey = useEnduragentStore((state) => state.chat.planCreationEditingKey);
+  const focusRequest = useEnduragentStore((state) => state.chat.planCreationFocusRequest);
+  const discardButton = useRef<HTMLButtonElement>(null);
   const ready = props.model.readiness === "ready";
   const canContinue = paused && props.model.openQuestion !== null;
   const total =
     props.model.openQuestion?.step.total ??
     props.model.answeredSummaries[0]?.question.step.total ??
     props.model.answeredSummaries.length;
+  useEffect(() => {
+    if (focusRequest?.target === "discard") {
+      queueMicrotask(() => discardButton.current?.focus());
+    }
+  }, [focusRequest?.revision, focusRequest?.target]);
   return (
     <section className="grid min-w-0 gap-inset" aria-label="Plan Creation progress">
       {props.model.answeredSummaries.length === 0 ? null : (
@@ -81,12 +88,26 @@ export function PlanCreationSummary(props: {
               </p>
               <strong data-parity="progress.title">New Plan</strong>
             </div>
-            <span
-              className="self-start rounded-full bg-ink/7 px-2 py-1 text-xs font-medium text-ink-2"
-              data-parity="progress.status"
-            >
-              {ready ? "Ready" : "In progress"}
-            </span>
+            <div className="flex items-center gap-inset self-start">
+              <span
+                className="rounded-full bg-ink/7 px-2 py-1 text-xs font-medium text-ink-2"
+                data-parity="progress.status"
+              >
+                {ready ? "Ready" : "In progress"}
+              </span>
+              <Button
+                ref={discardButton}
+                type="button"
+                variant="destructive"
+                size="sm"
+                data-plan-creation-discard={props.model.creationId}
+                aria-haspopup="dialog"
+                disabled={busy || actions === null}
+                onClick={() => actions?.openPlanCreationDiscard()}
+              >
+                Discard
+              </Button>
+            </div>
           </div>
           <p className="m-0 text-xs text-ink-2" data-parity="progress.summary">
             {ready

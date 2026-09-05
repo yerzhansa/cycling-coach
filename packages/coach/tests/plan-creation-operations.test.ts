@@ -151,6 +151,9 @@ function harness(
     readUnfinished: async () => current,
     start: async () => ({ outcome: "resumed", snapshot: current }),
     recordAnswer,
+    discard: async () => {
+      throw new Error("unused");
+    },
   };
   const host = createPlanCreationOperations({
     repository,
@@ -653,6 +656,9 @@ describe("Plan Creation operations", () => {
         recordAnswer: async () => {
           throw new PlanCreationStoreError("stale-version");
         },
+        discard: async () => {
+          throw new Error("unused");
+        },
       },
       identity: {
         deviceId: async () => "test-device",
@@ -723,5 +729,94 @@ describe("Plan Creation operations", () => {
     expect(
       PlanCreationCardModelSchema.parse(projectPlanCreationCard(current, { today })),
     ).toBeTruthy();
+  });
+
+  it("maps every discard outcome and projects the current Card on rejection", async () => {
+    let current: PlanCreationSnapshot | undefined = snapshot();
+    let discardError: PlanCreationStoreError | Error | undefined;
+    const readUnfinished = vi.fn(async () => current);
+    const discard = vi.fn<PlanCreationRepository["discard"]>(async () => {
+      if (discardError !== undefined) throw discardError;
+      current = undefined;
+      return { outcome: "discarded" };
+    });
+    const host = createPlanCreationOperations({
+      repository: {
+        readUnfinished,
+        start: async () => {
+          throw new Error("unused");
+        },
+        recordAnswer: async () => {
+          throw new Error("unused");
+        },
+        discard,
+      },
+      identity: {
+        deviceId: async () => "test-device",
+        newUlid: () => id("9"),
+        hlcStamp: () => ({ physicalMs: 883_612_800_000, counter: 0 }),
+      },
+      crypto: globalThis.crypto,
+      eventCandidates: { read: async () => [] },
+      today: () => today,
+    });
+    const request = { commandId: "discard", creationId: id("1"), expectedVersion: 1 };
+
+    await expect(host["plan_creation.discard"](request)).resolves.toEqual({
+      status: "discarded",
+    });
+    expect(readUnfinished).not.toHaveBeenCalled();
+    expect(discard).toHaveBeenCalledWith({
+      command: {
+        commandId: "discard",
+        requestDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        nowMs: 883_612_800_000,
+        deviceId: "test-device",
+        hlcPhysicalMs: 883_612_800_000,
+        hlcCounter: 0,
+      },
+      creationId: id("1"),
+      expectedVersion: 1,
+    });
+    await expect(host.readCard()).resolves.toBeNull();
+
+    readUnfinished.mockClear();
+    await expect(host["plan_creation.discard"](request)).resolves.toEqual({
+      status: "discarded",
+    });
+    expect(readUnfinished).not.toHaveBeenCalled();
+
+    current = snapshot([stored(1, fitnessGoal)]);
+    discardError = new PlanCreationStoreError("stale-version");
+    await expect(host["plan_creation.discard"](request)).resolves.toMatchObject({
+      status: "rejected",
+      reason: "stale-version",
+      planCreation: { creationId: id("1"), version: 2 },
+    });
+
+    discardError = new PlanCreationStoreError("command-conflict");
+    await expect(host["plan_creation.discard"](request)).resolves.toMatchObject({
+      status: "rejected",
+      reason: "command-conflict",
+      planCreation: { creationId: id("1"), version: 2 },
+    });
+
+    discardError = new PlanCreationStoreError("no-unfinished-creation");
+    current = { ...snapshot(), id: id("7") };
+    await expect(host["plan_creation.discard"](request)).resolves.toMatchObject({
+      status: "rejected",
+      reason: "no-unfinished-creation",
+      planCreation: { creationId: id("7"), version: 1 },
+    });
+
+    current = undefined;
+    await expect(host["plan_creation.discard"](request)).resolves.toEqual({
+      status: "rejected",
+      reason: "no-unfinished-creation",
+      planCreation: null,
+    });
+
+    discardError = new Error("unexpected");
+    await expect(host["plan_creation.discard"](request)).rejects.toThrow("unexpected");
   });
 });

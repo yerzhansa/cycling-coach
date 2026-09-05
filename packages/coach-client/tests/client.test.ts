@@ -232,6 +232,15 @@ const rpcDeadlineCases = [
     },
     30_000,
   ],
+  [
+    "plan_creation.discard",
+    {
+      commandId: "plan-discard",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+    },
+    30_000,
+  ],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -1190,6 +1199,7 @@ describe("RPC receive and observers", () => {
           reason: "no-unfinished-creation",
           planCreation: null,
         },
+        "plan_creation.discard": { status: "discarded" },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({

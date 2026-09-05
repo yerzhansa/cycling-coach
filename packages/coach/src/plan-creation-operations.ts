@@ -1,6 +1,8 @@
 import {
   PlanCreationAnswerRpcParamsSchema,
   PlanCreationAnswerRpcResultSchema,
+  PlanCreationDiscardRpcParamsSchema,
+  PlanCreationDiscardRpcResultSchema,
   PlanCreationStartRpcParamsSchema,
   PlanCreationStartRpcResultSchema,
   type PlanCreationCardModel,
@@ -207,6 +209,29 @@ export function createPlanCreationOperations(input: {
           return PlanCreationAnswerRpcResultSchema.parse({
             status: "rejected",
             reason: error.code === "missing-creation" ? "no-unfinished-creation" : error.code,
+            planCreation: await readCard(),
+          });
+        }
+        throw error;
+      }
+    },
+    async "plan_creation.discard"(request) {
+      const parsed = PlanCreationDiscardRpcParamsSchema.parse(request);
+      try {
+        await input.repository.discard({
+          command: await stamp(parsed.commandId, await requestDigest(input.crypto, parsed)),
+          creationId: parsed.creationId,
+          expectedVersion: parsed.expectedVersion,
+        });
+        return PlanCreationDiscardRpcResultSchema.parse({ status: "discarded" });
+      } catch (error) {
+        if (
+          error instanceof PlanCreationStoreError &&
+          ["stale-version", "command-conflict", "no-unfinished-creation"].includes(error.code)
+        ) {
+          return PlanCreationDiscardRpcResultSchema.parse({
+            status: "rejected",
+            reason: error.code,
             planCreation: await readCard(),
           });
         }

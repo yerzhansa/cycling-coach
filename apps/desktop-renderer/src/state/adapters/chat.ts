@@ -1,5 +1,9 @@
 import type { CoachDecisionReadModel, TranscriptPageEntry } from "@enduragent/coach-contract";
-import type { ChatView, ChatViewControls } from "../../chat/controller";
+import type {
+  ChatView,
+  ChatViewControls,
+  PlanCreationDiscardEvent,
+} from "../../chat/controller";
 import type { ChatState } from "../../turn-state";
 import {
   EMPTY_CHAT_SURFACE,
@@ -184,6 +188,36 @@ function historicalTimeline(
   return timeline;
 }
 
+function conversationTimelineWithDiscardEvents(
+  historicalItems: readonly ChatTranscriptItemView[],
+  liveItems: readonly ChatTranscriptItemView[],
+  events: readonly PlanCreationDiscardEvent[],
+): readonly ChatTranscriptItemView[] {
+  const appended = new Set<string>();
+  const timeline: ChatTranscriptItemView[] = [];
+  const appendEvents = (afterMessageId: string | null): void => {
+    for (const event of events) {
+      if (event.afterMessageId !== afterMessageId || appended.has(event.eventId)) continue;
+      timeline.push({ kind: "plan-creation-discard", eventId: event.eventId });
+      appended.add(event.eventId);
+    }
+  };
+  const appendItems = (items: readonly ChatTranscriptItemView[]): void => {
+    for (const item of items) {
+      timeline.push(item);
+      if (item.kind === "message") appendEvents(item.message.id);
+    }
+  };
+  appendItems(historicalItems);
+  appendEvents(null);
+  appendItems(liveItems);
+  for (const event of events) {
+    if (appended.has(event.eventId)) continue;
+    timeline.push({ kind: "plan-creation-discard", eventId: event.eventId });
+  }
+  return timeline;
+}
+
 export function createChatViewAdapter(input: {
   readonly publish: (next: ChatSurfaceState) => void;
   readonly buffer?: ChatStreamBuffer;
@@ -267,9 +301,13 @@ export function createChatViewAdapter(input: {
       .filter((delivery) => delivery.state !== "cancelled")
       .map((delivery) => ({ kind: "planning-request", delivery }));
     const planCreation = controls?.planCreation;
+    const conversationItems = conversationTimelineWithDiscardEvents(
+      historicalItems,
+      liveItems,
+      planCreation?.discardEvents ?? [],
+    );
     const timeline = [
-      ...historicalItems,
-      ...liveItems,
+      ...conversationItems,
       ...planningItems,
       ...(planCreation?.loaded === true && planCreation.value !== null
         ? ([{ kind: "plan-creation", model: planCreation.value }] as const)
@@ -281,10 +319,11 @@ export function createChatViewAdapter(input: {
     const planCreationPaused = planCreation?.paused ?? false;
     const planCreationEditingKey = planCreation?.editingKey ?? null;
     const planCreationBlocksWork =
-      !planCreationPaused &&
-      planCreation?.value !== null &&
-      planCreation?.value !== undefined &&
-      (planCreationEditingKey !== null || planCreation.value.openQuestion !== null);
+      planCreation?.discardConfirmationOpen === true ||
+      (!planCreationPaused &&
+        planCreation?.value !== null &&
+        planCreation?.value !== undefined &&
+        (planCreationEditingKey !== null || planCreation.value.openQuestion !== null));
     const decisionLoading = controls?.decisionLoading === true;
     const decisionLoadError = controls?.queueLoadError ?? controls?.decisionLoadError ?? null;
     const decisionUnavailable = decisionLoading || decisionLoadError !== null;
@@ -327,11 +366,14 @@ export function createChatViewAdapter(input: {
       planCreationPaused,
       planCreationEditingKey,
       planCreationFocusRevision: planCreation?.focusRevision ?? 0,
+      planCreationDiscardConfirmationOpen: planCreation?.discardConfirmationOpen ?? false,
+      planCreationFocusRequest: planCreation?.focusRequest ?? null,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
       notice: decisionBlocksWork
         ? null
         : (state.activeTurn?.error?.athleteMessage ??
+          planCreation?.notice ??
           (state.status === "streaming" ? null : state.progress)),
       coachProgress:
         state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,

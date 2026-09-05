@@ -27,7 +27,7 @@ import { QueuedMessages } from "./QueuedMessages";
 import { SpendNotice } from "./SpendNotice";
 import { TrainingContextPanel } from "./TrainingContextPanel";
 import { Transcript } from "./Transcript";
-import { PlanCreationDock } from "./PlanCreationCards";
+import { PlanCreationDiscardDialog, PlanCreationDock } from "./PlanCreationCards";
 
 const CHAT_DISCLAIMER =
   "Not medical advice, and not a substitute for a doctor or a certified coach.";
@@ -234,6 +234,7 @@ export function ChatView(): ReactElement {
           composer.current?.reset();
         }}
       />
+      <PlanCreationDiscardDialog />
       <FollowLatest />
     </section>
   );

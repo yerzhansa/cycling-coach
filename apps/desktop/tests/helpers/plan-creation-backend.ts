@@ -41,6 +41,38 @@ interface ScriptRequest {
   readonly params: unknown;
 }
 
+interface QueuedMessage {
+  readonly queuedMessageId: string;
+  readonly messageId: string;
+  readonly submissionId: string;
+  readonly attachmentIds: readonly string[];
+  readonly text: string;
+  readonly kind: "ordinary" | "slash-command";
+  readonly position: number;
+  readonly restored: false;
+}
+
+interface TranscriptTurn {
+  readonly turnId: string;
+  readonly completedAt: string;
+  readonly athleteText: string;
+  readonly coachText: string;
+}
+
+const ordinaryCoachReply = "Keep the effort conversational and finish feeling fresh.";
+const completedAt = "1998-09-02T00:00:00.000Z";
+const fixtureId = (value: string) => `${"0".repeat(26 - value.length)}${value}`;
+const activePlanId = fixtureId("A");
+const closedPlanId = fixtureId("B");
+const pastChats = [
+  {
+    boundaryRef: "a".repeat(64),
+    boundaryAt: "1998-08-01T00:00:00.000Z",
+    reason: "explicit-reset" as const,
+    turnCount: 2,
+  },
+];
+
 export interface StoredPlanCreationAnswerRow {
   readonly sequence: number;
   readonly creation_version: number;
@@ -59,6 +91,9 @@ export class PlanCreationBackend {
   private host: PlanCreationHost | undefined;
   private sequence = 0;
   private instant = 883_612_800_000;
+  private queueRevision = 0;
+  private queue: QueuedMessage[] = [];
+  private transcript: TranscriptTurn[] = [];
 
   constructor(
     private readonly databasePath: string,
@@ -99,8 +134,31 @@ export class PlanCreationBackend {
             intervals: { ...config.intervals, credential_configured: false },
           });
         }
-        if (request.method === "getChatAttachmentComposer") {
+        if (
+          request.method === "getChatAttachmentComposer" ||
+          (!coexistence && request.method === "saveChatAttachmentDraftText") ||
+          request.method === "removeChatAttachment" ||
+          request.method === "retryChatAttachment" ||
+          request.method === "selectChatAttachmentWorkout" ||
+          request.method === "clearChatAttachmentDraft"
+        ) {
           return response(emptyAttachmentComposer);
+        }
+        if (!coexistence && request.method === "getChatQueue")
+          return response(this.queueSnapshot());
+        if (!coexistence && request.method === "enqueueChatMessage")
+          return response(this.enqueue(request.params));
+        if (!coexistence && request.method === "resumeChatQueue") return this.runScriptedCoach();
+        if (!coexistence && request.method === "getTranscriptPage") {
+          return response({
+            schemaVersion: 1,
+            status: "page",
+            turns: this.transcript,
+            nextCursor: null,
+          });
+        }
+        if (request.method === "listArchivedConversations") {
+          return response({ schemaVersion: 1, conversations: pastChats, truncated: false });
         }
         if (request.method === "resumePlanningRequests") return response({ deliveries: [] });
         if (request.method === "listPlanningRequests") {
@@ -117,6 +175,13 @@ export class PlanCreationBackend {
           return response(
             await this.requireHost()["plan_creation.answer"](
               request.params as Parameters<PlanCreationHost["plan_creation.answer"]>[0],
+            ),
+          );
+        }
+        if (request.method === "plan_creation.discard") {
+          return response(
+            await this.requireHost()["plan_creation.discard"](
+              request.params as Parameters<PlanCreationHost["plan_creation.discard"]>[0],
             ),
           );
         }
@@ -175,6 +240,154 @@ export class PlanCreationBackend {
         "SELECT command_name,status FROM planning_command WHERE command_name IN ('plan_creation.start','plan_creation.answer') ORDER BY created_at_ms,command_id",
       ),
     };
+  }
+
+  async inspectDiscard() {
+    const store = this.requireStore();
+    const creations = await store.all(
+      "SELECT id,status,version,terminal_at_ms FROM plan_creation ORDER BY created_at_ms,id",
+    );
+    const answers = await store.all(
+      "SELECT id,creation_id,sequence,creation_version,answer_key,value_json FROM plan_creation_answer ORDER BY creation_id,sequence,id",
+    );
+    return {
+      commands: await store.all("SELECT * FROM planning_command ORDER BY command_name,command_id"),
+      creations: creations.map((row) => ({
+        id: String(row.id),
+        status: String(row.status),
+        version: Number(row.version),
+        terminalAtMs: row.terminal_at_ms === null ? null : Number(row.terminal_at_ms),
+      })),
+      answers: answers.map((row) => ({
+        id: String(row.id),
+        creationId: String(row.creation_id),
+        sequence: Number(row.sequence),
+        creationVersion: Number(row.creation_version),
+        answerKey: String(row.answer_key),
+        valueJson: String(row.value_json),
+      })),
+    };
+  }
+
+  async seedUnrelatedPlans(): Promise<void> {
+    const store = this.requireStore();
+    const existing = await store.get("SELECT count(*) count FROM planning_plan");
+    if (existing?.count === 2) return;
+    if (existing?.count !== 0) throw new TypeError("Unrelated Plan fixture is incomplete");
+    await store.run(
+      `INSERT INTO plan (
+id,origin_id,name,primary_goal,start_date_key,target_date_key,status,kind,total_weeks,
+week_start_day,structure_json,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,NULL,?,?,19980803,19981025,'active','full_plan',12,1,'{}',?,?,?,?,0)`,
+      [
+        activePlanId,
+        "Active endurance Plan",
+        "Complete an autumn endurance event",
+        883_000_000_000,
+        883_200_000_000,
+        "fixture-device",
+        883_200_000_000,
+      ],
+    );
+    await store.run(
+      `INSERT INTO planning_plan (
+plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,
+updated_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,'active',1,1,883000000000,NULL,NULL,NULL,883200000000,'fixture-device',883200000000,0)`,
+      [activePlanId],
+    );
+    await store.run(
+      `INSERT INTO plan (
+id,origin_id,name,primary_goal,start_date_key,target_date_key,status,kind,total_weeks,
+week_start_day,structure_json,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,NULL,?,?,19980406,19980628,'ended','full_plan',12,1,'{}',?,?,?,?,0)`,
+      [
+        closedPlanId,
+        "Closed base Plan",
+        "Build aerobic durability",
+        875_000_000_000,
+        882_000_000_000,
+        "fixture-device",
+        882_000_000_000,
+      ],
+    );
+    await store.run(
+      `INSERT INTO planning_plan (
+plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,
+updated_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,'closed',2,1,875000000000,882000000000,'stopped','athlete',882000000000,'fixture-device',882000000000,0)`,
+      [closedPlanId],
+    );
+    await store.run(`INSERT INTO planned_workout (id,date_key,sport,structure_json,provenance,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000C',19980714,'cycling','{"durationMinutes":45}','manual','fixture-device',883200000000,0)`);
+    await store.run(`INSERT INTO athlete_preference (id,preference_key,value_json,status,version,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000D','weekly-hours','8','active',1,883200000000,883200000000,'fixture-device',883200000000,0)`);
+    await store.run(`INSERT INTO training_restriction (id,kind,status,version,start_date_key,end_date_key,confirmed_at_ms,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
+VALUES ('0000000000000000000000000E','no-hard-training','active',1,19980713,19980720,883200000000,883200000000,883200000000,'fixture-device',883200000000,0)`);
+  }
+
+  async inspectUnrelated() {
+    const store = this.requireStore();
+    return {
+      plans: await store.all("SELECT * FROM plan ORDER BY id"),
+      schedule: await store.all("SELECT * FROM planned_workout ORDER BY id"),
+      preferences: await store.all("SELECT * FROM athlete_preference ORDER BY id"),
+      restrictions: await store.all("SELECT * FROM training_restriction ORDER BY id"),
+      activePlans: await store.all(
+        "SELECT * FROM planning_plan WHERE status='active' ORDER BY plan_id",
+      ),
+      closedPlans: await store.all(
+        "SELECT * FROM planning_plan WHERE status='closed' ORDER BY plan_id",
+      ),
+    };
+  }
+
+  private queueSnapshot() {
+    return { schemaVersion: 1 as const, revision: this.queueRevision, items: this.queue };
+  }
+
+  private enqueue(value: unknown) {
+    const params = value as {
+      readonly submissionId: string;
+      readonly text: string;
+      readonly attachmentIds?: readonly string[];
+    };
+    if (!this.queue.some((item) => item.submissionId === params.submissionId)) {
+      this.queueRevision += 1;
+      this.queue.push({
+        queuedMessageId: `queued-${this.queueRevision}`,
+        messageId: `message-${this.queueRevision}`,
+        submissionId: params.submissionId,
+        attachmentIds: params.attachmentIds ?? [],
+        text: params.text,
+        kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+        position: this.queue.length,
+        restored: false,
+      });
+    }
+    return this.queueSnapshot();
+  }
+
+  private runScriptedCoach(): readonly string[] {
+    const queued = this.queue[0];
+    if (queued === undefined || this.queue.length !== 1 || queued.kind !== "ordinary") {
+      throw new TypeError("Scripted Coach requires one ordinary queued message");
+    }
+    const turnId = `ordinary-turn-${this.transcript.length + 1}`;
+    this.transcript.push({
+      turnId,
+      completedAt,
+      athleteText: queued.text,
+      coachText: ordinaryCoachReply,
+    });
+    this.queue = [];
+    this.queueRevision += 1;
+    return [
+      JSON.stringify({ type: "turn-start", turnId, chatId: "desktop" }),
+      JSON.stringify({ type: "text_delta", turnId, delta: ordinaryCoachReply }),
+      JSON.stringify({ type: "final-text", turnId, text: ordinaryCoachReply }),
+      JSON.stringify({ snapshot: this.queueSnapshot(), response: { text: ordinaryCoachReply } }),
+    ];
   }
 
   private requireStore(): SqlStore & MigratorStore {
