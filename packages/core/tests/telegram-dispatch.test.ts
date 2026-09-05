@@ -6,6 +6,18 @@ import { APICallError } from "@ai-sdk/provider";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
 import { startTypingHeartbeat, TYPING_HEARTBEAT_MS } from "../src/channels/telegram.js";
 
+import {
+  ConfirmationGate,
+  createProposalSummarizers,
+  createToolConfirmationPort,
+} from "../src/agent/confirmation-gate.js";
+import { createPureCoreIntervalsTools } from "../src/sport.js";
+import { createPlatformCalendarMutations } from "../src/athlete-data.js";
+import { gateMutatingTool } from "../../engine/src/agent/coach-agent.js";
+import { createTurnContext } from "../../engine/src/agent/turn-context.js";
+import { COACH_EVENT_TAG } from "../src/agent/event-provenance.js";
+import type { IntervalsClient } from "intervals-icu-api";
+
 let dataDir: string;
 
 beforeEach(() => {
@@ -395,6 +407,65 @@ describe("confirmation callbacks", () => {
         ],
       },
     });
+  });
+
+  it.each<"intervals_delete_workout" | "intervals_update_workout">([
+    "intervals_delete_workout",
+    "intervals_update_workout",
+  ])("shows the execution-time refusal for %s through the host callback", async (toolName) => {
+    const { bot, agent, drainPending } = await buildBot();
+    let category = "WORKOUT";
+    const write = vi.fn();
+    const client = {
+      events: {
+        get: vi.fn(async () => ({
+          ok: true,
+          value: {
+            id: 42,
+            name: "Synthetic workout",
+            category,
+            startDateLocal: "2999-01-02T00:00:00",
+            tags: [COACH_EVENT_TAG],
+          },
+        })),
+        update: write,
+        delete: write,
+      },
+    } as unknown as IntervalsClient;
+    const gate = new ConfirmationGate();
+    const raw = createPureCoreIntervalsTools(
+      client,
+      "UTC",
+      undefined,
+      createPlatformCalendarMutations(client),
+    )[toolName]!;
+    const wrapped = gateMutatingTool(
+      toolName,
+      raw,
+      createToolConfirmationPort({
+        gate,
+        summarizers: createProposalSummarizers({ intervals: client, tz: "UTC" }),
+      }),
+    );
+    await wrapped.execute!({ eventId: 42, changes: { name: "Revised workout" } }, {
+      experimental_context: createTurnContext(null, "telegram:777"),
+    } as never);
+    const proposal = gate.peek("telegram:777")!;
+    agent.confirmations.confirm.mockImplementation((chatId: string, nonce: string) =>
+      gate.confirm(chatId, nonce),
+    );
+    category = "NOTE";
+    const ctx = callbackCtx(`cg:y:${proposal.nonce}`);
+    await getCallbackQueryData(bot)(ctx);
+    await drainPending();
+    expect(write).not.toHaveBeenCalled();
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("Nothing was changed"));
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("category NOTE"));
+    expect(ctx.reply).not.toHaveBeenCalledWith(expect.stringContaining("Done"));
+    await getCallbackQueryData(bot)(ctx);
+    await drainPending();
+    expect(write).not.toHaveBeenCalled();
+    expect(client.events.get).toHaveBeenCalledTimes(2);
   });
 
   it("acks then executes a matching confirmation", async () => {

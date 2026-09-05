@@ -27,6 +27,7 @@ export interface PendingProposal {
 
 export type ConfirmOutcome =
   | { status: "executed"; summary: string; result: unknown }
+  | { status: "refused"; summary: string; message: string; result: unknown }
   | { status: "failed"; summary: string; message: string }
   | { status: "expired" }
   | { status: "mismatch" }
@@ -34,6 +35,7 @@ export type ConfirmOutcome =
 
 export function formatConfirmOutcome(outcome: ConfirmOutcome): string {
   if (outcome.status === "executed") return `Done — ${outcome.summary}.`;
+  if (outcome.status === "refused") return `Nothing was changed — ${outcome.message}`;
   if (outcome.status === "failed") return `That didn't go through — ${outcome.message}`;
   return "That proposal expired — ask me again and I'll re-propose.";
 }
@@ -77,7 +79,20 @@ export class ConfirmationGate {
     if (proposal.nonce !== nonce) return { status: "mismatch" };
     this.proposals.delete(chatId);
     try {
-      return { status: "executed", summary: proposal.summary, result: await proposal.run() };
+      const result = await proposal.run();
+      const error = stringField(result, "error");
+      if (error !== undefined) {
+        const details = stringField(result, "details");
+        if (details !== undefined) {
+          return { status: "refused", summary: proposal.summary, message: details, result };
+        }
+        return {
+          status: "failed",
+          summary: proposal.summary,
+          message: stringField(result, "message") ?? error,
+        };
+      }
+      return { status: "executed", summary: proposal.summary, result };
     } catch (err) {
       return {
         status: "failed",
