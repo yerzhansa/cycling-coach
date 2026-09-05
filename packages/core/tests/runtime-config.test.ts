@@ -177,3 +177,41 @@ describe("runtime configuration authority", () => {
     }
   });
 });
+
+describe("Astra explicit public API selection", () => {
+  it("preserves defaults and background choices when opting in and back out", () => {
+    const initial = resolveRuntimeConfig({
+      llm: {
+        provider: "openai",
+        apiKey: "fake-key",
+        compactModel: "gpt-5.6-luna",
+        flushModel: "gpt-5.6-luna",
+      },
+    });
+    expect(initial.llm.model).toBe("gpt-5.6-sol");
+    const selected = resolveRuntimeConfig({ llm: { model: "gpt-6-astra" } }, initial);
+    expect(selected.llm).toEqual({ ...initial.llm, model: "gpt-6-astra" });
+    expect(selected.contextWindowTokens).toBe(200_000);
+    const restored = resolveRuntimeConfig({ llm: { model: "gpt-5.6-sol" } }, selected);
+    expect(restored.llm).toEqual(initial.llm);
+    expect(restored.contextWindowTokens).toBe(initial.contextWindowTokens);
+  });
+
+  it.each(["openai-codex", "codex-agent"] as const)("refuses unverified %s support", (provider) => {
+    expect(() => resolveRuntimeConfig({ llm: { provider, model: "gpt-6-astra" } })).toThrow(
+      "not enabled for this connection",
+    );
+  });
+});
+
+it("keeps implicit OpenAI background work on its previous model when opting into Astra", () => {
+  const initial = resolveRuntimeConfig({ llm: { provider: "openai", apiKey: "fake-key" } });
+  const selected = resolveRuntimeConfig({ llm: { model: "gpt-6-astra" } }, initial);
+  expect(selected.llm.flushModel).toBe(initial.llm.flushModel ?? initial.llm.model);
+  expect(selected.llm.compactModel).toBe(initial.llm.compactModel ?? initial.llm.model);
+  const fresh = resolveRuntimeConfig({
+    llm: { provider: "openai", model: "gpt-6-astra", apiKey: "fake-key" },
+  });
+  expect(fresh.llm.flushModel).toBe("gpt-5.6-sol");
+  expect(fresh.llm.compactModel).toBe("gpt-5.6-sol");
+});

@@ -173,6 +173,7 @@ function mapUsage(u: CodexUsage): LanguageModelUsage {
 // upstream falls back to its default-model template for those, so price unknown
 // codex ids at gpt-5.6-sol rates rather than dropping to undefined.
 function resolveCodexPriceId(modelId: string): string {
+  if (modelId === "gpt-6-astra") return modelId;
   return PRICE_TABLE["openai-codex"]?.[modelId] ? modelId : "gpt-5.6-sol";
 }
 
@@ -262,6 +263,9 @@ export async function codexGenerateText(
     classifyFailure: (error: unknown) => FailureReason;
   },
 ): Promise<GenerateResult> {
+  if (opts.modelId === "gpt-6-astra") {
+    throw new Error("GPT-6 Astra is not enabled for this connection; use the public OpenAI API.");
+  }
   const {
     system,
     messages,
