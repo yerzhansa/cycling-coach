@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { assertCliOAuthHome, DesktopOwnedOAuthHomeError } from "./auth/profile-store.js";
 import { parseArgs } from "node:util";
 import { createInterface as createReadlineInterface } from "node:readline";
 import { writeSync } from "node:fs";
@@ -333,6 +335,16 @@ export async function runBinary(
   hooks: RunBinaryHooks = {},
 ): Promise<void> {
   const { command, positionals } = parseCommand(binary);
+  if (command !== "version") {
+    try {
+      assertCliOAuthHome(join(CONFIG_DIR, "auth-profiles.json"));
+    } catch (error) {
+      if (!(error instanceof DesktopOwnedOAuthHomeError)) throw error;
+      console.error(error.message);
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   if (command === "setup") {
     const { runSetup } = await import("./setup.js");

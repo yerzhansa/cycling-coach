@@ -1,3 +1,4 @@
+import { createUtilityOAuthClient, isOAuthResponse } from "./oauth-protocol.js";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -111,6 +112,10 @@ async function run(): Promise<void> {
     process.exit(exitCode);
   }
   const controller = new AbortController();
+  const oauth = createUtilityOAuthClient({
+    send: (request) => parentPort.postMessage(request),
+    signal: controller.signal,
+  });
   let started = false;
   let finished = false;
   let resolveStart!: (frame: UtilityStartFrame | undefined) => void;
@@ -122,6 +127,10 @@ async function run(): Promise<void> {
       const frame = startFrame(event.data);
       started = true;
       resolveStart(frame);
+      return;
+    }
+    if (isOAuthResponse(event.data)) {
+      oauth.receive(event.data);
       return;
     }
     if (exactFrame(event.data, "shutdown")) {
@@ -147,6 +156,7 @@ async function run(): Promise<void> {
       },
     });
     result = await runAppSupervisedEnduragent({
+      oauthOwner: oauth.owner,
       env,
       terminal: {
         input: Readable.from([]),
@@ -164,6 +174,7 @@ async function run(): Promise<void> {
   if (!finished) {
     finished = true;
   }
+  oauth.close();
   parentPort.removeListener("message", onMessage);
   await postTerminalAndWait(result);
   process.exit(result.exitCode);
