@@ -1063,7 +1063,7 @@ describe("coach sync composition", () => {
       const batch = importBatchWithReport.mock.calls[0]![0];
       expect(batch.platform_records).toEqual([]);
       expect(batch.files).toHaveLength(1);
-      expect(batch.files[0]!.bytes).toBe(bytes);
+      expect(batch.files[0]).toMatchObject({ bytes });
       expect(batch.files[0]!.input_path).toBe(artifact.file.input_path);
     } finally {
       await harness.store.close();

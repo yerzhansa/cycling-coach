@@ -18,8 +18,17 @@ export interface ImportArtifact {
   };
 }
 
+export interface ImportArtifactSource extends Omit<ImportArtifact, "bytes"> {
+  readonly readBytes: () => Promise<Uint8Array>;
+}
+
+export async function readImportArtifact(input: ImportArtifact | ImportArtifactSource): Promise<ImportArtifact> {
+  const bytes = "readBytes" in input ? await input.readBytes() : input.bytes;
+  return { ...input, bytes: new Uint8Array(bytes) };
+}
+
 export interface ImportBatch {
-  readonly files: readonly ImportArtifact[];
+  readonly files: readonly (ImportArtifact | ImportArtifactSource)[];
   readonly platform_records: readonly PlatformImportArtifact[];
 }
 

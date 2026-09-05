@@ -91,7 +91,8 @@ function validateTcxNamespaces(root: Element, order: ReturnType<typeof documentO
       }
     }
   };
-  const visitCore = (element: Element): void => {
+  const pending: Element[] = [root];
+  for (let element = pending.pop(); element; element = pending.pop()) {
     const allowed = element.localName === "Activity" ? ["Sport"] : element.localName === "Lap" ? ["StartTime"] : [];
     attrIssues(element, allowed, order, issues);
     for (const child of childElements(element)) {
@@ -102,11 +103,10 @@ function validateTcxNamespaces(root: Element, order: ReturnType<typeof documentO
       if (child.namespaceURI !== TCX) {
         issues.push({ order: elementOrder(order, child), path: elementPath(child) });
       } else {
-        visitCore(child);
+        pending.push(child);
       }
     }
-  };
-  visitCore(root);
+  }
   throwFirstIssue("xml.namespace", issues);
 }
 
