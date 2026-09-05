@@ -198,10 +198,11 @@ async function choose(page: Page, backend: PlanCreationBackend, version: number,
     ).toBeVisible();
   } else {
     await expect(
-      page.getByText("The essentials are complete. Draft preview arrives in a later update.", {
+      page.getByText("The essentials are complete.", {
         exact: true,
       }),
     ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Build Draft", exact: true })).toBeVisible();
   }
   await test.info().attach(`answer-${version}-timing`, {
     body: JSON.stringify({
@@ -288,10 +289,11 @@ test("completes the Fitness Goal with an authored success answer", async ({ play
     await completeFitnessGoal(scenario);
     const progress = scenario.page.getByRole("region", { name: "Plan Creation progress" });
     await expect(
-      progress.getByText("The essentials are complete. Draft preview arrives in a later update.", {
+      progress.getByText("The essentials are complete.", {
         exact: true,
       }),
     ).toBeVisible();
+    await expect(progress.getByRole("button", { name: "Build Draft", exact: true })).toBeVisible();
     await expect(scenario.page.getByRole("button", { name: "Send message" })).toBeEnabled();
     const answers = await scenario.backend.answers();
     expect(answers.map((answer) => answer.answer_key)).toEqual([
@@ -582,10 +584,10 @@ for (const appearance of [
       expect(await requireCard(scenario.backend)).toEqual(card);
       expect(await scenario.backend.answers()).toEqual(answers);
       await expect(
-        scenario.page.getByText(
-          "The essentials are complete. Draft preview arrives in a later update.",
-          { exact: true },
-        ),
+        scenario.page.getByText("The essentials are complete.", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        scenario.page.getByRole("button", { name: "Build Draft", exact: true }),
       ).toBeVisible();
     } finally {
       await close(scenario);

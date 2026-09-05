@@ -21,6 +21,8 @@ import type {
   PlanCreationCardModel,
   PlanCreationDiscardRpcParams,
   PlanCreationDiscardRpcResult,
+  PlanCreationPreviewRpcParams,
+  PlanCreationPreviewRpcResult,
   PlanCreationStartRpcParams,
   PlanCreationStartRpcResult,
   QueuedChatMessage,
@@ -40,6 +42,7 @@ import {
 } from "../src/chat/controller";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits";
 import type { DesktopCoachClientProvider } from "../src/coach-client";
+import { planCreationDraft } from "./plan-creation-draft-fixtures";
 import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state";
 
 const questionStep = { current: 1, total: 9 } as const;
@@ -366,6 +369,9 @@ function client(
       | { readonly status: "found"; readonly delivery: PlanningRequestDelivery }
       | { readonly status: "missing" }
     >;
+    readonly previewPlanCreation?: (
+      request: PlanCreationPreviewRpcParams,
+    ) => Promise<PlanCreationPreviewRpcResult>;
     readonly startPlanCreation?: (
       request: PlanCreationStartRpcParams,
     ) => Promise<PlanCreationStartRpcResult>;
@@ -452,6 +458,14 @@ function client(
     }
     if (method === "retryPlanningRequest") {
       return (sessions.retryPlanningRequest?.() ?? Promise.resolve({ status: "missing" })) as never;
+    }
+    if (method === "plan_creation.preview") {
+      return (sessions.previewPlanCreation?.(request as PlanCreationPreviewRpcParams) ??
+        Promise.resolve({
+          status: "rejected",
+          reason: "no-unfinished-creation",
+          planCreation: null,
+        })) as never;
     }
     if (method === "plan_creation.start") {
       return (sessions.startPlanCreation?.(request as PlanCreationStartRpcParams) ??
@@ -2301,6 +2315,92 @@ describe("chat controller", () => {
     expect(chatMessages(fake)).toEqual(["Chat continues"]);
   });
 
+  it("retries Draft preview with a stable command and restores review on relaunch", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(4)],
+      openQuestion: null,
+      draft: null,
+      draftStale: false,
+    };
+    const review: PlanCreationCardModel = {
+      ...ready,
+      version: 11,
+      status: "review",
+      draft: planCreationDraft(ready.answeredSummaries),
+    };
+    const previewPlanCreation = vi
+      .fn<(request: PlanCreationPreviewRpcParams) => Promise<PlanCreationPreviewRpcResult>>()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue({ status: "previewed", planCreation: review });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      previewPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    await controller.buildPlanCreationDraft();
+    expect(controls.at(-1)?.planCreation?.value).toEqual(ready);
+    await controller.buildPlanCreationDraft();
+    expect(previewPlanCreation).toHaveBeenCalledTimes(2);
+    expect(previewPlanCreation.mock.calls[0]?.[0]).toEqual({
+      commandId: expect.any(String),
+      creationId: ready.creationId,
+      expectedVersion: ready.version,
+    });
+    expect(previewPlanCreation.mock.calls[1]?.[0]).toEqual(previewPlanCreation.mock.calls[0]?.[0]);
+    expect(controls.at(-1)?.planCreation?.value).toEqual(review);
+    await expect(controller.submit("Chat continues during review")).resolves.toBe(true);
+
+    const relaunched = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: review }),
+      }),
+    );
+    await relaunched.controller.start();
+    expect(relaunched.controls.at(-1)?.planCreation?.value).toEqual(review);
+  });
+
+  it("retains the previous stale Draft when no Workouts fit a rebuild", async () => {
+    const draft = planCreationDraft([planLengthSummary(4)]);
+    const review: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 12,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(8)],
+      openQuestion: null,
+      draft,
+      draftStale: true,
+    };
+    const previewPlanCreation = vi
+      .fn<(request: PlanCreationPreviewRpcParams) => Promise<PlanCreationPreviewRpcResult>>()
+      .mockResolvedValue({
+        status: "rejected",
+        reason: "no-workouts",
+        explanation: "Confirmed limits leave no Workouts.",
+        planCreation: review,
+      });
+    const { controller, controls } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: review }),
+        previewPlanCreation,
+      }),
+    );
+    await controller.start();
+    await controller.buildPlanCreationDraft();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: review,
+      notice:
+        "No Workouts fit anywhere in this Plan under your confirmed limits. Edit those limits to continue.",
+      busy: false,
+    });
+    expect(controls.at(-1)?.planCreation?.value?.draft).toEqual(draft);
+  });
+
   it("submits an edited answer at the current version and closes the editor", async () => {
     const ready: PlanCreationCardModel = {
       draft: null,
@@ -2342,6 +2442,47 @@ describe("chat controller", () => {
       paused: false,
       editingKey: null,
     });
+  });
+
+  it("installs changed review answers without changing the Draft snapshot", async () => {
+    const originalAnswers = [planLengthSummary(4)];
+    const review: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 11,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: originalAnswers,
+      openQuestion: null,
+      draft: planCreationDraft(originalAnswers),
+      draftStale: false,
+    };
+    const changed: PlanCreationCardModel = {
+      ...review,
+      version: 12,
+      answeredSummaries: [planLengthSummary(8)],
+      draftStale: true,
+    };
+    const answerPlanCreation = vi
+      .fn<(request: PlanCreationAnswerRpcParams) => Promise<PlanCreationAnswerRpcResult>>()
+      .mockResolvedValue({ status: "answered", planCreation: changed });
+    const { controller, controls } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: review }),
+        answerPlanCreation,
+      }),
+    );
+    await controller.start();
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 8 });
+
+    expect(answerPlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: review.creationId,
+      expectedVersion: review.version,
+      answer: { kind: "plan-length", weeks: 8 },
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({ value: changed, editingKey: null });
+    expect(controls.at(-1)?.planCreation?.value?.draft?.answeredSummaries).toEqual(originalAnswers);
   });
 
   it("preserves Edit and focus state when an identical Plan Creation model is restored", async () => {

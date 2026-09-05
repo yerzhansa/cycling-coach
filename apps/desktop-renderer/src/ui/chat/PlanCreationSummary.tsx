@@ -7,6 +7,7 @@ import { useEnduragentStore } from "../../state/store";
 
 export function PlanCreationSummary(props: {
   readonly model: PlanCreationCardModel;
+  readonly answersOnly?: boolean;
 }): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const paused = useEnduragentStore((state) => state.chat.planCreationPaused);
@@ -76,58 +77,68 @@ export function PlanCreationSummary(props: {
           ))}
         </ul>
       )}
-      <Card size="sm" className="min-w-0" data-parity="progress.card">
-        <CardContent className="grid gap-inset">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-inset">
-            <div className="grid gap-[calc(var(--inset)/2)]">
-              <p
-                className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2"
-                data-parity="progress.eyebrow"
-              >
-                Plan creation
-              </p>
-              <strong data-parity="progress.title">New Plan</strong>
+      {props.answersOnly ? null : (
+        <Card size="sm" className="min-w-0" data-parity="progress.card">
+          <CardContent className="grid gap-inset">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-inset">
+              <div className="grid gap-[calc(var(--inset)/2)]">
+                <p
+                  className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2"
+                  data-parity="progress.eyebrow"
+                >
+                  Plan creation
+                </p>
+                <strong data-parity="progress.title">New Plan</strong>
+              </div>
+              <div className="flex items-center gap-inset self-start">
+                <span
+                  className="rounded-full bg-ink/7 px-2 py-1 text-xs font-medium text-ink-2"
+                  data-parity="progress.status"
+                >
+                  {ready ? "Ready" : "In progress"}
+                </span>
+                <Button
+                  ref={discardButton}
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  data-plan-creation-discard={props.model.creationId}
+                  aria-haspopup="dialog"
+                  disabled={busy || actions === null}
+                  onClick={() => actions?.openPlanCreationDiscard()}
+                >
+                  Discard
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-inset self-start">
-              <span
-                className="rounded-full bg-ink/7 px-2 py-1 text-xs font-medium text-ink-2"
-                data-parity="progress.status"
-              >
-                {ready ? "Ready" : "In progress"}
-              </span>
-              <Button
-                ref={discardButton}
-                type="button"
-                variant="destructive"
-                size="sm"
-                data-plan-creation-discard={props.model.creationId}
-                aria-haspopup="dialog"
-                disabled={busy || actions === null}
-                onClick={() => actions?.openPlanCreationDiscard()}
-              >
-                Discard
-              </Button>
+            <p className="m-0 text-xs text-ink-2" data-parity="progress.summary">
+              {ready
+                ? "The essentials are complete."
+                : `${props.model.answeredSummaries.length} of ${total} answered.`}
+            </p>
+            <div className="flex flex-wrap gap-inset" data-parity="progress.actions">
+              {ready && props.model.draft === null ? (
+                <Button
+                  disabled={actions === null || busy || editingKey !== null}
+                  onClick={() => actions?.buildPlanCreationDraft()}
+                >
+                  Build Draft
+                </Button>
+              ) : null}
+              {canContinue ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={actions === null || busy}
+                  onClick={() => actions?.continuePlanCreation()}
+                >
+                  Continue
+                </Button>
+              ) : null}
             </div>
-          </div>
-          <p className="m-0 text-xs text-ink-2" data-parity="progress.summary">
-            {ready
-              ? "The essentials are complete. Draft preview arrives in a later update."
-              : `${props.model.answeredSummaries.length} of ${total} answered.`}
-          </p>
-          <div className="flex justify-end" data-parity="progress.actions">
-            {canContinue ? (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={actions === null || busy}
-                onClick={() => actions?.continuePlanCreation()}
-              >
-                Continue
-              </Button>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
     </section>
   );
 }

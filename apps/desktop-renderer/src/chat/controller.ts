@@ -231,6 +231,7 @@ export interface ChatController {
   clearPlanningRequestFocus(): void;
   startPlanCreation(): Promise<void>;
   answerPlanCreation(answer: PlanCreationAnswerInput): Promise<void>;
+  buildPlanCreationDraft(): Promise<void>;
   pausePlanCreation(): void;
   continuePlanCreation(): void;
   editPlanCreation(answerKey: PlanCreationAnswerSummary["answerKey"]): void;
@@ -2026,6 +2027,50 @@ export function createChatController(input: {
         else planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
       } catch {
         planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
+      } finally {
+        planCreationBusy = false;
+        render();
+      }
+    },
+    async buildPlanCreationDraft() {
+      if (
+        disposed ||
+        planCreationBusy ||
+        planCreationDiscardConfirmationOpen ||
+        planCreation === null ||
+        planCreation.readiness !== "ready" ||
+        planCreationEditingKey !== null
+      )
+        return;
+      const creationId = planCreation.creationId;
+      const expectedVersion = planCreation.version;
+      const key = JSON.stringify({ operation: "preview", creationId, expectedVersion });
+      planCreationBusy = true;
+      planCreationError = null;
+      planCreationNotice = null;
+      render();
+      try {
+        const result = await (
+          await input.clients.getClient()
+        ).call("plan_creation.preview", {
+          commandId: planCommandId(key),
+          creationId,
+          expectedVersion,
+        });
+        pendingPlanCreationCommand = null;
+        installPlanCreation(result.planCreation);
+        if (result.status === "rejected") {
+          planCreationNotice =
+            result.reason === "no-workouts"
+              ? "No Workouts fit anywhere in this Plan under your confirmed limits. Edit those limits to continue."
+              : result.reason === "not-ready"
+                ? "Answer the remaining question before building."
+                : result.reason === "stale-version"
+                  ? "The answers changed. Start a fresh build."
+                  : "Build failed. Your answers and last complete Draft are preserved.";
+        }
+      } catch {
+        planCreationNotice = "Build failed. Your answers and last complete Draft are preserved.";
       } finally {
         planCreationBusy = false;
         render();
