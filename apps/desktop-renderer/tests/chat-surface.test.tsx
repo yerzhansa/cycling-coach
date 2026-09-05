@@ -26,6 +26,7 @@ import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice";
 import { useEnduragentStore } from "../src/state/store";
 import { SLASH_COMMANDS } from "../src/chat/commands";
 import { ChatView } from "../src/ui/chat/ChatView";
+import { planCreationDraft } from "./plan-creation-draft-fixtures";
 
 function stubActions(): ChatActions {
   return {
@@ -44,6 +45,7 @@ function stubActions(): ChatActions {
     retryPlanningRequestLoad: vi.fn(),
     clearPlanningRequestFocus: vi.fn(),
     startPlanCreation: vi.fn(),
+    buildPlanCreationDraft: vi.fn(),
     answerPlanCreation: vi.fn(),
     pausePlanCreation: vi.fn(),
     continuePlanCreation: vi.fn(),
@@ -2824,11 +2826,137 @@ describe("chat surface", () => {
         timeline: [{ kind: "plan-creation", model: ready }],
         sendDisabled: false,
       });
-      expect(
-        screen.getByText("The essentials are complete. Draft preview arrives in a later update."),
-      ).toBeVisible();
+      expect(screen.getByText("The essentials are complete.")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Build Draft" })).toBeVisible();
       expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Build Draft" }));
+      expect(actions.buildPlanCreationDraft).toHaveBeenCalledOnce();
       expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    });
+
+    it("renders the whole Draft with closed builder details and separate review actions", async () => {
+      const draft = planCreationDraft();
+      const model: PlanCreationCardModel = {
+        ...planCreationModel(null),
+        status: "review",
+        draft,
+      };
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Review the whole Draft before activating.")).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Every week and Workout" })).toBeVisible();
+      expect(screen.getByText("4 weeks · 3 Workouts · 180 min")).toBeVisible();
+      expect(screen.getAllByText("Priority 1 · Undated")).toHaveLength(3);
+      expect(screen.getByText("No Workouts this week.")).toBeVisible();
+      expect(screen.getByText("Confirmed limits leave no Workouts in this week.")).toBeVisible();
+      for (const week of draft.weeks) {
+        expect(screen.getByText(new RegExp(`Week ${week.number} ·`))).toBeVisible();
+      }
+      const disclosure = screen.getByText("How this Plan was built").closest("details");
+      expect(disclosure).not.toHaveAttribute("open");
+      await userEvent.click(screen.getByText("How this Plan was built"));
+      expect(disclosure).toHaveAttribute("open");
+      expect(
+        screen.getByText("Endurance ride limited to 60 minutes by your confirmed limits."),
+      ).toBeVisible();
+      const discard = screen.getByRole("button", { name: "Discard" });
+      const edit = screen.getByRole("button", { name: "Edit answers" });
+      const activate = screen.getByRole("button", { name: "Activate Plan" });
+      expect(activate).toBeDisabled();
+      expect(discard.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(
+        edit.compareDocumentPosition(activate) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      await userEvent.click(discard);
+      expect(actions.openPlanCreationDiscard).toHaveBeenCalledOnce();
+      expect(composer()).toBeEnabled();
+    });
+
+    it("keeps fixed Workout dates and pinned status visible during Draft review", () => {
+      const draft = planCreationDraft();
+      draft.mode = "fixed";
+      for (const week of draft.weeks) {
+        for (const workout of week.workouts) {
+          workout.date = week.start;
+          workout.pinned = true;
+        }
+      }
+      const model: PlanCreationCardModel = {
+        ...planCreationModel(null),
+        status: "review",
+        draft,
+      };
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+      render(<Harness />);
+
+      expect(screen.queryByText("Priority 1 · Undated")).toBeNull();
+      expect(screen.getAllByText("planned · Pinned")).toHaveLength(3);
+      for (const date of ["7 Sept 1998", "21 Sept 1998", "28 Sept 1998"]) {
+        expect(screen.getByText(date, { exact: true })).toBeVisible();
+      }
+    });
+
+    it("preserves Draft inputs below changed answers and rebuilds with the current card", async () => {
+      const original = planCreationModel(null, {
+        answeredSummaries: [
+          {
+            answerKey: "plan-length",
+            title: "Plan length",
+            detail: "4 weeks",
+            question: planLengthQuestion("How long should this Fitness Plan be?"),
+            answer: { kind: "plan-length", weeks: 4 },
+          },
+        ],
+      });
+      const model: PlanCreationCardModel = {
+        ...original,
+        version: 3,
+        status: "review",
+        draft: planCreationDraft(original.answeredSummaries),
+        draftStale: true,
+        answeredSummaries: original.answeredSummaries.map((summary) => ({
+          ...summary,
+          detail: "8 weeks",
+          answer: { kind: "plan-length", weeks: 8 },
+        })),
+      };
+      setChat({
+        planCreationLoaded: true,
+        planCreation: model,
+        timeline: [{ kind: "plan-creation", model }],
+      });
+      render(<Harness />);
+
+      const changed = screen.getByRole("heading", { name: "Changed answers" });
+      const outline = screen.getByRole("heading", { name: "Every week and Workout" });
+      expect(
+        changed.compareDocumentPosition(outline) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.getByText("4 weeks", { exact: true })).toBeVisible();
+      expect(screen.getByText("8 weeks", { exact: true })).toBeVisible();
+      expect(screen.getByText("Plan length · current answer")).toBeVisible();
+      expect(
+        screen.getByText(
+          "This Draft preserves the earlier answers and Workouts. Rebuild before activation.",
+        ),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Activate Plan" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Rebuild Draft" }));
+      expect(actions.buildPlanCreationDraft).toHaveBeenCalledOnce();
+      await userEvent.click(screen.getByRole("button", { name: "Edit answers" }));
+      expect(screen.getByText("A changed answer makes the Draft stale.")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Edit Plan length" })).toBeEnabled();
+      await userEvent.click(screen.getByRole("button", { name: "Back to Draft" }));
+      expect(screen.getByRole("heading", { name: "Every week and Workout" })).toBeVisible();
     });
 
     it("keeps summaries in the conversation and submits authored success", async () => {

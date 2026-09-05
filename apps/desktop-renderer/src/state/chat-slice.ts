@@ -121,6 +121,7 @@ export interface ChatActions {
   clearPlanningRequestFocus(): void;
   startPlanCreation(): void;
   answerPlanCreation(answer: PlanCreationAnswerInput): void;
+  buildPlanCreationDraft(): void;
   pausePlanCreation(): void;
   continuePlanCreation(): void;
   editPlanCreation(answerKey: PlanCreationAnswerSummary["answerKey"]): void;

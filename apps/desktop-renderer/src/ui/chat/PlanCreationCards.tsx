@@ -1,5 +1,5 @@
 import type { PlanCreationCardModel } from "@enduragent/coach-contract";
-import { useCallback, useEffect, useRef, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Button } from "../../components/ui/button";
 import {
   Dialog,
@@ -12,6 +12,8 @@ import {
 } from "../../components/ui/dialog";
 import { useEnduragentStore } from "../../state/store";
 import { PlanCreationQuestionCard } from "./PlanCreationQuestionCard";
+import { Card, CardContent } from "../../components/ui/card";
+import { PlanCreationDraftCards } from "./PlanCreationDraftCards";
 import { PlanCreationSummary } from "./PlanCreationSummary";
 
 export function PlanCreationDiscardDialog(): ReactElement {
@@ -145,8 +147,50 @@ export function PlanCreationDock(props: {
 export function PlanCreationConversation(props: {
   readonly model: PlanCreationCardModel | null;
 }): ReactElement | null {
+  const [editVersion, setEditVersion] = useState<number | null>(null);
+  const editingKey = useEnduragentStore((state) => state.chat.planCreationEditingKey);
+  const actions = useEnduragentStore((state) => state.chatActions);
   if (props.model === null) return null;
-  return <PlanCreationSummary model={props.model} />;
+  const model = props.model;
+  if (model.draft === null) return <PlanCreationSummary model={model} />;
+  if (editVersion === model.version)
+    return (
+      <section className="grid min-w-0 gap-inset" aria-label="Edit Plan answers">
+        <Card size="sm">
+          <CardContent className="grid gap-inset">
+            <p className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2">
+              Plan creation
+            </p>
+            <h3 className="m-0 text-base leading-6 font-semibold">Edit answers</h3>
+            <p className="m-0 text-sm text-ink-2">A changed answer makes the Draft stale.</p>
+            <div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  actions?.cancelPlanCreationEdit();
+                  setEditVersion(null);
+                }}
+              >
+                Back to Draft
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+        <PlanCreationSummary model={model} answersOnly />
+      </section>
+    );
+  return (
+    <>
+      {editingKey !== null || model.openQuestion !== null ? (
+        <PlanCreationSummary model={model} answersOnly />
+      ) : null}
+      <PlanCreationDraftCards
+        model={model}
+        draft={model.draft}
+        onEditAnswers={() => setEditVersion(model.version)}
+      />
+    </>
+  );
 }
 
 export function PlanCreationDiscardConsequence(props: { readonly eventId: string }): ReactElement {

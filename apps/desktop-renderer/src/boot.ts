@@ -359,6 +359,7 @@ export function bootRenderer(): Disposer {
     clearPlanningRequestFocus: () => chatController.clearPlanningRequestFocus(),
     startPlanCreation: () => void chatController.startPlanCreation(),
     answerPlanCreation: (answer) => void chatController.answerPlanCreation(answer),
+    buildPlanCreationDraft: () => void chatController.buildPlanCreationDraft(),
     pausePlanCreation: () => chatController.pausePlanCreation(),
     continuePlanCreation: () => chatController.continuePlanCreation(),
     editPlanCreation: (answerKey) => chatController.editPlanCreation(answerKey),

@@ -115,6 +115,7 @@ function stubActions(): ChatActions {
     retryPlanningRequestLoad: vi.fn(),
     clearPlanningRequestFocus: vi.fn(),
     startPlanCreation: vi.fn(),
+    buildPlanCreationDraft: vi.fn(),
     answerPlanCreation: vi.fn(),
     pausePlanCreation: vi.fn(),
     continuePlanCreation: vi.fn(),

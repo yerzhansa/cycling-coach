@@ -1,4 +1,7 @@
-import type { PlanCreationCardModel } from "@enduragent/coach-contract";
+import {
+  PlanCreationPreviewRpcParamsSchema,
+  type PlanCreationCardModel,
+} from "@enduragent/coach-contract";
 import {
   createPlanCreationRepository,
   type PlanCreationRepository,
@@ -178,6 +181,13 @@ export class PlanCreationBackend {
             ),
           );
         }
+        if (request.method === "plan_creation.preview") {
+          return response(
+            await this.requireHost()["plan_creation.preview"](
+              PlanCreationPreviewRpcParamsSchema.parse(request.params),
+            ),
+          );
+        }
         if (request.method === "plan_creation.discard") {
           return response(
             await this.requireHost()["plan_creation.discard"](
@@ -238,6 +248,21 @@ export class PlanCreationBackend {
       ),
       commands: await store.all(
         "SELECT command_name,status FROM planning_command WHERE command_name IN ('plan_creation.start','plan_creation.answer') ORDER BY created_at_ms,command_id",
+      ),
+    };
+  }
+
+  async inspectDrafts() {
+    const store = this.requireStore();
+    return {
+      creations: await store.all(
+        "SELECT id,status,version,current_draft_revision_number FROM plan_creation ORDER BY created_at_ms,id",
+      ),
+      revisions: await store.all(
+        "SELECT * FROM plan_creation_draft_revision ORDER BY creation_id,revision_number",
+      ),
+      commands: await store.all(
+        "SELECT * FROM planning_command WHERE command_name='plan_creation.preview' ORDER BY created_at_ms,command_id",
       ),
     };
   }
