@@ -253,6 +253,27 @@ describe("npm package coordinator dispatch", { timeout: 30_000 }, () => {
 });
 
 describe("protected-main npm workflow boundaries", () => {
+  it("resolves runner paths only in the publishing step environment", () => {
+    for (const source of [release, coordinator]) {
+      for (const [name, value] of Object.entries(source.jobs)) {
+        for (const expression of Object.values(value.env)) {
+          expect(expression, name).not.toMatch(/\brunner\s*(?:\.|\[)/);
+        }
+      }
+    }
+    for (const name of ["primary-stage", "alias-stage"]) {
+      const source = job(release, name);
+      const stage = source.steps.find((step) => step.run?.includes("npm-release.ts stage"));
+      const receipt = source.steps.find((step) =>
+        step.uses?.startsWith("actions/upload-artifact@"),
+      );
+      expect(stage?.env, name).toMatchObject({
+        PUBLISHER_NPM: "${{ runner.temp }}/publisher/package/bin/npm-cli.js",
+        RECEIPT_PATH: receipt?.with.path,
+      });
+    }
+  });
+
   it("gates every job through a main-only explicit dispatch", () => {
     expect(Object.keys(release.on)).toEqual(["workflow_dispatch"]);
     expect(job(release, "parse-tag").if).toBe(
@@ -332,7 +353,13 @@ describe("protected-main npm workflow boundaries", () => {
   });
 
   it("pins the administrator-verified reservation policy in every reserve, intent, and stage job", () => {
-    for (const name of ["reserve", "primary-intent", "alias-intent", "primary-stage", "alias-stage"]) {
+    for (const name of [
+      "reserve",
+      "primary-intent",
+      "alias-intent",
+      "primary-stage",
+      "alias-stage",
+    ]) {
       const source = job(release, name);
       expect(source.env, name).toMatchObject({
         RESERVATION_RULESET_ID: "${{ vars.RESERVATION_RULESET_ID }}",

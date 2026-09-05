@@ -338,8 +338,6 @@ jobs:
       REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
       RELEASE_PACKAGE: cycling-coach
       PUBLISHER_NODE: node
-      PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
-      RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -365,6 +363,9 @@ jobs:
       - name: Restore the exact prepared archives
         run: node tools/npm-release.ts restore "$RUNNER_TEMP/npm-release"
       - name: Stage exact archive for human approval
+        env:
+          PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
+          RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
         run: node tools/npm-release.ts stage "$RUNNER_TEMP/npm-release"
       - name: Retain accepted or uncertain stage outcome
         if: always()
@@ -425,8 +426,6 @@ jobs:
       REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
       RELEASE_PACKAGE: enduragent
       PUBLISHER_NODE: node
-      PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
-      RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -452,6 +451,9 @@ jobs:
       - name: Restore the exact prepared archives
         run: node tools/npm-release.ts restore "$RUNNER_TEMP/npm-release"
       - name: Stage exact archive for human approval
+        env:
+          PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
+          RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
         run: node tools/npm-release.ts stage "$RUNNER_TEMP/npm-release"
       - name: Retain accepted or uncertain stage outcome
         if: always()
