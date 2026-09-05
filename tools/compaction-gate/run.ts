@@ -142,7 +142,7 @@ async function judgeOnce(
       maxOutputTokens: JUDGE_MAX_OUTPUT_TOKENS,
     });
     try {
-      return parseJudgeVerdict(text);
+      return parseJudgeVerdict(text, payload.facts.map((fact) => fact.id));
     } catch (err) {
       lastErr = err;
     }
