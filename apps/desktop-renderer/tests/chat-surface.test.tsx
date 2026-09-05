@@ -350,6 +350,8 @@ function planCreationModel(
   patch: PlanCreationModelPatch = {},
 ): PlanCreationCardModel {
   return {
+    draft: null,
+    draftStale: false,
     creationId: "01J00000000000000000000000",
     version: patch.version ?? 1,
     status: "in-progress",

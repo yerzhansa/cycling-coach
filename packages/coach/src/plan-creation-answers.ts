@@ -2,12 +2,14 @@ import {
   PLAN_CREATION_ANSWER_KEYS,
   PlanCreationAnswerInputSchema,
   PlanCreationCardModelSchema,
+  PlanCreationDraftSchema,
   type PlanCreationAnswerInput,
   type PlanCreationAnswerSummary,
   type PlanCreationCardModel,
   type PlanCreationGoal,
   type PlanCreationOpenQuestion,
 } from "@enduragent/coach-contract";
+import type { CreationDraftInput } from "@enduragent/sport-cycling";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
   PlanCreationStoreError,
@@ -614,27 +616,40 @@ function questionForKey(
   }
 }
 
+export function projectPlanCreationAnswerSummaries(
+  snapshot: PlanCreationSnapshot,
+  flow: PlanCreationAnswerFlow,
+  context: PlanCreationProjectionContext,
+): PlanCreationAnswerSummary[] {
+  return flow.order.flatMap((key) => {
+    const stored = flow.valid.get(key);
+    return stored === undefined
+      ? []
+      : [answerSummary(snapshot, stored, questionForKey(snapshot, flow, context, key))];
+  });
+}
+
 export function projectPlanCreationCard(
   snapshot: PlanCreationSnapshot,
   context: PlanCreationProjectionContext = {
     today: new Date().toISOString().slice(0, 10),
   },
 ): PlanCreationCardModel {
-  if (snapshot.status !== "in-progress") return corrupt();
+  if (snapshot.status !== "in-progress" && snapshot.status !== "review") return corrupt();
   const flow = resolvePlanCreationAnswerFlow(snapshot);
-  const answeredSummaries = flow.order.flatMap((key) => {
-    const stored = flow.valid.get(key);
-    return stored === undefined
-      ? []
-      : [answerSummary(snapshot, stored, questionForKey(snapshot, flow, context, key))];
-  });
   const question = flow.next === null ? null : questionForKey(snapshot, flow, context, flow.next);
   return PlanCreationCardModelSchema.parse({
     creationId: snapshot.id,
     version: snapshot.version,
-    status: "in-progress",
+    status: snapshot.status,
+    draft:
+      snapshot.currentDraft === null
+        ? null
+        : PlanCreationDraftSchema.parse(JSON.parse(snapshot.currentDraft.outputSnapshotJson)),
+    draftStale:
+      snapshot.currentDraft !== null && snapshot.currentDraft.inputVersion + 1 !== snapshot.version,
     readiness: question === null ? "ready" : "incomplete",
-    answeredSummaries,
+    answeredSummaries: projectPlanCreationAnswerSummaries(snapshot, flow, context),
     openQuestion: question,
   });
 }
@@ -673,4 +688,53 @@ export function validPlanCreationAnswer(
       : answer.restriction.endDate >= today;
   }
   return true;
+}
+
+export function resolvePlanCreationDraftAnswers(
+  snapshot: PlanCreationSnapshot,
+): CreationDraftInput["answers"] | null {
+  const flow = resolvePlanCreationAnswerFlow(snapshot);
+  if (flow.next !== null) return null;
+  const goalAnswer = flow.valid.get("goal")?.answer;
+  const length = flow.valid.get("plan-length")?.answer;
+  const availability = flow.valid.get("availability")?.answer;
+  const startTiming = flow.valid.get("start-timing")?.answer;
+  const commitments = flow.valid.get("commitments")?.answer;
+  const baseline = flow.valid.get("baseline")?.answer;
+  const success = flow.valid.get("success")?.answer;
+  const restriction = flow.valid.get("restriction")?.answer;
+  if (
+    goalAnswer?.kind !== "goal" ||
+    availability?.kind !== "availability" ||
+    startTiming?.kind !== "start-timing" ||
+    commitments?.kind !== "commitments" ||
+    baseline?.kind !== "baseline" ||
+    success?.kind !== "success" ||
+    restriction?.kind !== "restriction"
+  )
+    return corrupt();
+  const goal = goalAnswer.goal;
+  const normalizedGoal = (): CreationDraftInput["answers"]["goal"] => {
+    if (goal.kind === "fitness") {
+      if (length?.kind !== "plan-length") return corrupt();
+      return { ...goal, weeks: length.weeks };
+    }
+    if (goal.kind === "event-manual") return { kind: "event", name: goal.name, date: goal.date };
+    const candidate = snapshot.seed?.eventCandidates.find(
+      (value) => value.candidateId === goal.candidateId,
+    );
+    return candidate === undefined
+      ? corrupt()
+      : { kind: "event", name: candidate.name, date: candidate.date };
+  };
+  const { kind: _kind, ...schedule } = availability;
+  return {
+    goal: normalizedGoal(),
+    availability: schedule,
+    startTiming: startTiming.timing,
+    commitments: commitments.commitments,
+    baseline: baseline.baseline,
+    success: success.success,
+    restriction: restriction.restriction,
+  };
 }

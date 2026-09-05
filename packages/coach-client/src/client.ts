@@ -185,6 +185,7 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   listPlanningRequests: 30_000,
   "plan_creation.start": 30_000,
   "plan_creation.answer": 30_000,
+  "plan_creation.preview": 30_000,
   "plan_creation.discard": 30_000,
 };
 

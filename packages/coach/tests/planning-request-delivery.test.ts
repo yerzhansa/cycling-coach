@@ -277,6 +277,8 @@ describe("Planning request delivery", () => {
       creationId: "01J60HFQ7T0000000000000001",
       version: 1,
       status: "in-progress" as const,
+      draft: null,
+      draftStale: false,
       readiness: "incomplete" as const,
       answeredSummaries: [],
       openQuestion: {

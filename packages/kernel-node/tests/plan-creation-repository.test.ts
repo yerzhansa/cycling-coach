@@ -66,6 +66,151 @@ describe("Plan Creation repository", () => {
       expectedVersion,
     });
 
+  const draftInput = (expectedVersion = 1, commandId = "preview", draftId = id("8")) => ({
+    command: stamp(commandId, "d", 883_612_800_003),
+    creationId,
+    expectedVersion,
+    draftId,
+    inputSnapshotJson: JSON.stringify({ answers: [], today: "1998-01-01", ftp: null }),
+    inputFingerprint: "e".repeat(64),
+    outputSnapshotJson: JSON.stringify({ weeks: [{ workouts: [{ name: "Endurance ride" }] }] }),
+    builderId: "cycling",
+    builderVersion: "1",
+    activationFingerprint: "f".repeat(64),
+  });
+
+  it("stores immutable revisions and keeps the earlier draft after an answer edit", async () => {
+    await start();
+    const first = await repository.recordDraft(draftInput());
+    expect(first).toMatchObject({
+      outcome: "recorded",
+      snapshot: {
+        status: "review",
+        version: 2,
+        currentDraft: { revisionNumber: 1, parentRevisionNumber: null, inputVersion: 1 },
+      },
+    });
+    const before = await store.all("SELECT * FROM plan_creation_draft_revision");
+    const edited = await answer(2);
+    expect(edited.snapshot).toMatchObject({
+      status: "review",
+      version: 3,
+      currentDraft: first.snapshot.currentDraft,
+    });
+    expect(await store.all("SELECT * FROM plan_creation_draft_revision")).toEqual(before);
+    const second = await repository.recordDraft(draftInput(3, "rebuild", id("9")));
+    expect(second.snapshot).toMatchObject({
+      status: "review",
+      version: 4,
+      currentDraft: { revisionNumber: 2, parentRevisionNumber: 1, inputVersion: 3 },
+    });
+    expect(
+      (await store.all("SELECT * FROM plan_creation_draft_revision ORDER BY revision_number"))[0],
+    ).toEqual(before[0]);
+    await expect(
+      store.run("UPDATE plan_creation_draft_revision SET builder_version='2'"),
+    ).rejects.toThrow();
+    await expect(store.run("DELETE FROM plan_creation_draft_revision")).rejects.toThrow();
+    expect(await store.all("SELECT * FROM plan")).toEqual([]);
+    await expect(createPlanCreationRepository(store).readUnfinished()).resolves.toEqual(
+      second.snapshot,
+    );
+  });
+
+  it("replays the recorded preview after answers, rebuild, discard, and a new creation", async () => {
+    await start();
+    const input = draftInput();
+    const original = await repository.recordDraft(input);
+    await answer(2);
+    await repository.recordDraft(draftInput(3, "rebuild", id("9")));
+    await expect(repository.recordDraft(input)).resolves.toEqual({
+      outcome: "replayed",
+      snapshot: original.snapshot,
+    });
+    await discard(4);
+    await expect(repository.replayDraft(input.command)).resolves.toEqual(original.snapshot);
+    await repository.start({ command: stamp("next-start", "a"), creationId: secondId, seed });
+    await expect(repository.recordDraft(input)).resolves.toEqual({
+      outcome: "replayed",
+      snapshot: original.snapshot,
+    });
+    await expect(repository.readUnfinished()).resolves.toMatchObject({ id: secondId, version: 1 });
+    expect(await store.all("SELECT * FROM plan_creation_draft_revision")).toHaveLength(2);
+    await expect(
+      repository.recordDraft({ ...input, command: stamp("preview", "a") }),
+    ).rejects.toMatchObject({ code: "command-conflict" });
+    await expect(repository.replayDraft(stamp("preview", "a"))).rejects.toMatchObject({
+      code: "command-conflict",
+    });
+  });
+
+  it("rejects missing and stale previews without writing a revision or command", async () => {
+    await expect(repository.recordDraft(draftInput())).rejects.toMatchObject({
+      code: "no-unfinished-creation",
+    });
+    await start();
+    await expect(
+      repository.recordDraft({ ...draftInput(), creationId: secondId }),
+    ).rejects.toMatchObject({ code: "no-unfinished-creation" });
+    await answer();
+    await expect(repository.recordDraft(draftInput())).rejects.toMatchObject({
+      code: "stale-version",
+    });
+    await discard(2);
+    await expect(repository.recordDraft(draftInput(2))).rejects.toMatchObject({
+      code: "no-unfinished-creation",
+    });
+    expect(await store.all("SELECT * FROM plan_creation_draft_revision")).toEqual([]);
+    expect(
+      await store.all("SELECT * FROM planning_command WHERE command_name='plan_creation.preview'"),
+    ).toEqual([]);
+  });
+
+  it("serializes competing preview and answer commands against one expected version", async () => {
+    await start();
+    const results = await Promise.allSettled([repository.recordDraft(draftInput()), answer()]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.find(({ status }) => status === "rejected")).toMatchObject({
+      reason: { code: "stale-version" },
+    });
+    const snapshot = await repository.readUnfinished();
+    expect(snapshot?.version).toBe(2);
+    const revisionRows = await store.all("SELECT * FROM plan_creation_draft_revision");
+    expect(revisionRows.length + (snapshot?.answers.length ?? 0)).toBe(1);
+  });
+
+  it("serializes a preview racing discard without attaching a draft to a terminal creation", async () => {
+    await start();
+    const results = await Promise.allSettled([discard(), repository.recordDraft(draftInput())]);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.find(({ status }) => status === "rejected")).toMatchObject({
+      reason: { code: "no-unfinished-creation" },
+    });
+    await expect(repository.readUnfinished()).resolves.toBeUndefined();
+    expect(await store.all("SELECT * FROM plan_creation_draft_revision")).toEqual([]);
+  });
+
+  it("rolls back the draft and review pointer when the command ledger fails", async () => {
+    await start();
+    const before = await dumpStore(store);
+    const failingRepository = createPlanCreationRepository({
+      exec: (sql) => store.exec(sql),
+      run(sql, params) {
+        if (sql.includes("INSERT INTO planning_command"))
+          throw new Error("Synthetic draft ledger failure");
+        return store.run(sql, params);
+      },
+      get: (sql, params) => store.get(sql, params),
+      all: (sql, params) => store.all(sql, params),
+      close: () => store.close(),
+      transaction: (operation) => store.transaction(operation),
+    });
+    await expect(failingRepository.recordDraft(draftInput())).rejects.toThrow(
+      "Synthetic draft ledger failure",
+    );
+    expect(await dumpStore(store)).toBe(before);
+  });
+
   it("creates once and resumes without replacing the seed", async () => {
     await expect(start()).resolves.toMatchObject({ outcome: "created", snapshot: { version: 1 } });
     const otherSeed = {
@@ -437,10 +582,13 @@ describe("Plan Creation repository", () => {
     };
     const answers = [goalAnswer, lengthAnswer, editedGoalAnswer];
     for (const input of answers) await repository.recordAnswer(input);
+    const draft = draftInput(4);
+    await repository.recordDraft(draft);
     const sourceSnapshot = await repository.readUnfinished();
     expect(sourceSnapshot).toMatchObject({
       id: creationId,
-      version: 4,
+      version: 5,
+      currentDraft: { revisionNumber: 1, inputVersion: 4 },
       answers: [
         { id: id("3"), answerKey: "goal", sequence: 1, creationVersion: 2 },
         { id: id("4"), answerKey: "plan-length", sequence: 2, creationVersion: 3 },
@@ -478,12 +626,17 @@ describe("Plan Creation repository", () => {
       for (const query of [
         "SELECT * FROM plan_creation ORDER BY id",
         "SELECT * FROM plan_creation_answer ORDER BY creation_id,sequence,id",
+        "SELECT * FROM plan_creation_draft_revision ORDER BY creation_id,revision_number,id",
         "SELECT * FROM planning_command ORDER BY command_name,command_id",
       ]) {
         expect(await destination.all(query)).toEqual(await store.all(query));
       }
       const restoredRepository = createPlanCreationRepository(destination);
       await expect(restoredRepository.readUnfinished()).resolves.toEqual(sourceSnapshot);
+      await expect(restoredRepository.recordDraft(draft)).resolves.toEqual({
+        outcome: "replayed",
+        snapshot: sourceSnapshot,
+      });
       for (const input of answers) {
         await expect(restoredRepository.recordAnswer(input)).resolves.toEqual({
           outcome: "replayed",

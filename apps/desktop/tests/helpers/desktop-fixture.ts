@@ -569,6 +569,11 @@ export async function launchDesktopFixture(input: {
         ReturnType<PlanCreationOperations["plan_creation.answer"]>
       >;
     },
+    async "plan_creation.preview"(request) {
+      return finalFrame(await invoke("plan_creation.preview", request)) as Awaited<
+        ReturnType<PlanCreationOperations["plan_creation.preview"]>
+      >;
+    },
     async "plan_creation.discard"(request) {
       return finalFrame(await invoke("plan_creation.discard", request)) as Awaited<
         ReturnType<PlanCreationOperations["plan_creation.discard"]>

@@ -2222,6 +2222,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       creationId,
       version: 1,
       status: "in-progress",
+      draft: null,
+      draftStale: false,
       readiness: "incomplete",
       answeredSummaries: [],
       openQuestion: {
@@ -2253,6 +2255,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       creationId,
       version: 2,
       status: "in-progress",
+      draft: null,
+      draftStale: false,
       readiness: "incomplete",
       answeredSummaries: [
         {
@@ -2328,6 +2332,9 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       status: "answered",
       planCreation: answeredCard,
     }));
+    const previewPlanCreation = vi.fn<PlanCreationOperations["plan_creation.preview"]>(
+      async () => ({ status: "rejected", reason: "not-ready", planCreation: answeredCard }),
+    );
     const discardPlanCreation = vi.fn<PlanCreationOperations["plan_creation.discard"]>(
       async () => ({ status: "discarded" }),
     );
@@ -2337,6 +2344,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         ...operations,
         "plan_creation.start": startPlanCreation,
         "plan_creation.answer": answerPlanCreation,
+        "plan_creation.preview": previewPlanCreation,
         "plan_creation.discard": discardPlanCreation,
       },
       token,
@@ -2356,6 +2364,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       expectedVersion: 1,
       answer: { kind: "goal" as const, goal: { kind: "fitness" as const, outcome: "Build power" } },
     };
+    const previewParams = { commandId: "preview-1", creationId, expectedVersion: 2 };
     const discardParams = { commandId: "discard-1", creationId, expectedVersion: 2 };
     for (const { result, ...request } of [
       {
@@ -2369,6 +2378,12 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         method: "plan_creation.answer",
         params: answerParams,
         result: { status: "answered", planCreation: answeredCard },
+      },
+      {
+        id: "preview",
+        method: "plan_creation.preview",
+        params: previewParams,
+        result: { status: "rejected", reason: "not-ready", planCreation: answeredCard },
       },
       {
         id: "discard",
@@ -2386,6 +2401,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     }
     expect(startPlanCreation).toHaveBeenCalledWith(startParams);
     expect(answerPlanCreation).toHaveBeenCalledWith(answerParams);
+    expect(previewPlanCreation).toHaveBeenCalledWith(previewParams);
     expect(discardPlanCreation).toHaveBeenCalledWith(discardParams);
 
     for (const request of [
@@ -2398,6 +2414,11 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         id: "invalid-answer",
         method: "plan_creation.answer",
         params: { ...answerParams, extra: true },
+      },
+      {
+        id: "invalid-preview",
+        method: "plan_creation.preview",
+        params: { ...previewParams, extra: true },
       },
       {
         id: "invalid-discard",
@@ -2413,6 +2434,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     }
     expect(startPlanCreation).toHaveBeenCalledOnce();
     expect(answerPlanCreation).toHaveBeenCalledOnce();
+    expect(previewPlanCreation).toHaveBeenCalledOnce();
     expect(discardPlanCreation).toHaveBeenCalledOnce();
     await renderer.close();
   });

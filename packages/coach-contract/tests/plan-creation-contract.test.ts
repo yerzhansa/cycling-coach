@@ -12,6 +12,10 @@ import {
   PlanCreationDiscardRpcParamsSchema,
   PlanCreationDiscardRpcResultSchema,
   PlanCreationOpenQuestionSchema,
+  PlanCreationDraftSchema,
+  PlanCreationPreviewRpcParamsSchema,
+  PlanCreationPreviewRpcResultSchema,
+  ListPlanningRequestsRpcResultSchema,
   PlanCreationStartRpcParamsSchema,
   PlanCreationStartRpcResultSchema,
   NoRpcEventSchema,
@@ -48,6 +52,8 @@ const card = {
   creationId,
   version: 1,
   status: "in-progress" as const,
+  draft: null,
+  draftStale: false,
   readiness: "incomplete" as const,
   answeredSummaries: [],
   openQuestion: goalQuestion,
@@ -633,7 +639,7 @@ describe("Plan Creation contract", () => {
     ).toThrow();
   });
 
-  it("accepts every terminal result and only the three registered operations", () => {
+  it("accepts every terminal result and only the four registered operations", () => {
     expect(
       PlanCreationStartRpcResultSchema.parse({
         status: "started",
@@ -680,6 +686,7 @@ describe("Plan Creation contract", () => {
     expect(COACH_RPC_METHOD_NAMES.filter((name) => name.startsWith("plan_creation."))).toEqual([
       "plan_creation.start",
       "plan_creation.answer",
+      "plan_creation.preview",
       "plan_creation.discard",
     ]);
   });
@@ -690,6 +697,10 @@ describe("Plan Creation contract", () => {
       {
         method: "plan_creation.answer",
         params: { commandId: "answer", creationId, expectedVersion: 1, answer: answers[2] },
+      },
+      {
+        method: "plan_creation.preview",
+        params: { commandId: "preview", creationId, expectedVersion: 1 },
       },
       {
         method: "plan_creation.discard",
@@ -704,6 +715,7 @@ describe("Plan Creation contract", () => {
     for (const method of [
       "plan_creation.start",
       "plan_creation.answer",
+      "plan_creation.preview",
       "plan_creation.discard",
     ] as const) {
       expect(COACH_RPC_METHOD_REGISTRY[method].eventSchema.safeParse({}).success).toBe(false);
@@ -714,5 +726,145 @@ describe("Plan Creation contract", () => {
       responseSchema: PlanCreationDiscardRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
+  });
+});
+
+const draft = {
+  kind: "draft",
+  answeredSummaries: [
+    {
+      answerKey: "goal",
+      title: "Goal",
+      detail: "Build fitness",
+      source: { kind: "athlete" },
+      question: goalQuestion,
+      answer: { kind: "goal", goal: { kind: "fitness" } },
+    },
+  ],
+  goal: { kind: "fitness", weeks: 4 },
+  mode: "flexible",
+  start: "1998-09-02",
+  end: "1998-09-29",
+  spanKind: "Fitness Plan",
+  computedWeeks: 4,
+  weeks: [
+    {
+      number: 1,
+      start: "1998-09-02",
+      end: "1998-09-08",
+      notes: [],
+      workouts: [
+        {
+          id: "w1-template-1",
+          name: "Controlled effort",
+          kind: "hard",
+          date: null,
+          minutes: 45,
+          pinned: false,
+          power: null,
+          guidance: "Use comfortable perceived effort or your known heart-rate guidance",
+        },
+      ],
+    },
+  ],
+  notes: [],
+  guidance: "Use comfortable perceived effort or your known heart-rate guidance",
+  ftp: null,
+  builderId: "cycling-creation-draft",
+  builderVersion: "1",
+  inputFingerprint: "a".repeat(64),
+  outputFingerprint: "b".repeat(64),
+};
+
+describe("Plan Creation Draft contract", () => {
+  it("round-trips a review Draft through preview and planning request hydration", () => {
+    const review = { ...card, status: "review", readiness: "ready", openQuestion: null, draft };
+    const result = { status: "previewed", planCreation: review };
+    expect(PlanCreationPreviewRpcResultSchema.parse(JSON.parse(JSON.stringify(result)))).toEqual(
+      result,
+    );
+    expect(
+      ListPlanningRequestsRpcResultSchema.parse({ deliveries: [], planCreation: review })
+        .planCreation,
+    ).toEqual(review);
+    expect(PlanCreationCardModelSchema.parse({ ...review, draftStale: true }).draftStale).toBe(
+      true,
+    );
+  });
+
+  it("requires valid answer summaries and limits them to sixteen", () => {
+    expect(PlanCreationDraftSchema.parse(draft).answeredSummaries).toEqual(draft.answeredSummaries);
+    expect(
+      PlanCreationDraftSchema.safeParse({ ...draft, answeredSummaries: undefined }).success,
+    ).toBe(false);
+    expect(PlanCreationDraftSchema.safeParse({ ...draft, answeredSummaries: [] }).success).toBe(
+      true,
+    );
+    expect(
+      PlanCreationDraftSchema.safeParse({
+        ...draft,
+        answeredSummaries: Array(16).fill(draft.answeredSummaries[0]),
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanCreationDraftSchema.safeParse({
+        ...draft,
+        answeredSummaries: Array(17).fill(draft.answeredSummaries[0]),
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanCreationDraftSchema.safeParse({
+        ...draft,
+        answeredSummaries: [{ ...draft.answeredSummaries[0], answerKey: "baseline" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a stored Draft for review and valid fingerprints and dates", () => {
+    expect(PlanCreationCardModelSchema.safeParse({ ...card, status: "review" }).success).toBe(
+      false,
+    );
+    expect(PlanCreationCardModelSchema.safeParse({ ...card, draftStale: true }).success).toBe(
+      false,
+    );
+    expect(
+      PlanCreationDraftSchema.safeParse({ ...draft, inputFingerprint: "not-a-hash" }).success,
+    ).toBe(false);
+    expect(PlanCreationDraftSchema.safeParse({ ...draft, start: "1998-02-30" }).success).toBe(
+      false,
+    );
+    expect(PlanCreationDraftSchema.safeParse({ ...draft, ftp: 250 }).success).toBe(false);
+  });
+
+  it("rejects forged preview fields and preserves every rejection reason", () => {
+    const request = { commandId: "preview", creationId, expectedVersion: 1 };
+    expect(PlanCreationPreviewRpcParamsSchema.parse(request)).toEqual(request);
+    for (const extra of [{ draft }, { readiness: "ready" }, { expectedVersion: 0 }])
+      expect(PlanCreationPreviewRpcParamsSchema.safeParse({ ...request, ...extra }).success).toBe(
+        false,
+      );
+    for (const reason of [
+      "not-ready",
+      "stale-version",
+      "command-conflict",
+      "no-unfinished-creation",
+    ])
+      expect(
+        PlanCreationPreviewRpcResultSchema.parse({
+          status: "rejected",
+          reason,
+          planCreation: null,
+        }),
+      ).toEqual({ status: "rejected", reason, planCreation: null });
+    const noWorkouts = {
+      status: "rejected",
+      reason: "no-workouts",
+      planCreation: null,
+      explanation: "No Workouts fit under the confirmed limits.",
+    };
+    expect(PlanCreationPreviewRpcResultSchema.parse(noWorkouts)).toEqual(noWorkouts);
+    expect(
+      PlanCreationPreviewRpcResultSchema.safeParse({ ...noWorkouts, explanation: "" }).success,
+    ).toBe(false);
   });
 });

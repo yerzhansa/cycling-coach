@@ -473,17 +473,92 @@ export const PlanCreationAnswerSummarySchema = z
   });
 export type PlanCreationAnswerSummary = z.infer<typeof PlanCreationAnswerSummarySchema>;
 
+const PlanCreationDraftWorkoutSchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    name: z.string().min(1).max(512),
+    kind: z.enum(["hard", "endurance", "long", "easy", "event"]),
+    date: PlanCreationCivilDateSchema.nullable(),
+    minutes: z.number().positive().max(1440),
+    pinned: z.boolean(),
+    guidance: z.string().min(1).max(512),
+    power: z.null(),
+  })
+  .strict();
+
+export const PlanCreationDraftSchema = z
+  .object({
+    kind: z.literal("draft"),
+    answeredSummaries: z.array(PlanCreationAnswerSummarySchema).max(16),
+    goal: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("fitness"),
+          outcome: z.string().min(1).max(2_000).optional(),
+          weeks: PlanCreationPlanLengthWeeksSchema,
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("event"),
+          name: z.string().min(1).max(512),
+          date: PlanCreationCivilDateSchema,
+        })
+        .strict(),
+    ]),
+    mode: z.enum(["fixed", "flexible"]),
+    start: PlanCreationCivilDateSchema,
+    end: PlanCreationCivilDateSchema,
+    spanKind: z.enum(["Short block", "Event preparation", "Base Plan", "Fitness Plan"]),
+    computedWeeks: z.number().int().positive(),
+    weeks: z
+      .array(
+        z
+          .object({
+            number: z.number().int().min(1).max(24),
+            start: PlanCreationCivilDateSchema,
+            end: PlanCreationCivilDateSchema,
+            workouts: z.array(PlanCreationDraftWorkoutSchema).max(6),
+            notes: z.array(z.string().min(1).max(2_000)).max(32),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(24),
+    notes: z.array(z.string().min(1).max(2_000)).max(1_000),
+    guidance: z.string().min(1).max(512),
+    ftp: z.null(),
+    builderId: z.string().min(1).max(128),
+    builderVersion: z.string().min(1).max(128),
+    inputFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
+    outputFingerprint: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+export type PlanCreationDraft = z.infer<typeof PlanCreationDraftSchema>;
+
 export const PlanCreationCardModelSchema = z
   .object({
     creationId: PlanCreationUlidSchema,
     version: z.number().int().positive(),
-    status: z.literal("in-progress"),
+    status: z.enum(["in-progress", "review"]),
+    draft: PlanCreationDraftSchema.nullable(),
+    draftStale: z.boolean(),
     readiness: z.enum(["incomplete", "ready"]),
     answeredSummaries: z.array(PlanCreationAnswerSummarySchema).max(16),
     openQuestion: PlanCreationOpenQuestionSchema.nullable(),
   })
   .strict()
   .superRefine((card, context) => {
+    if ((card.status === "review") !== (card.draft !== null)) {
+      context.addIssue({ code: "custom", path: ["draft"], message: "review requires a Draft" });
+    }
+    if (card.draft === null && card.draftStale) {
+      context.addIssue({
+        code: "custom",
+        path: ["draftStale"],
+        message: "missing Draft cannot be stale",
+      });
+    }
     if ((card.readiness === "ready") !== (card.openQuestion === null)) {
       context.addIssue({
         code: "custom",
@@ -560,7 +635,46 @@ export const PlanCreationDiscardRpcResultSchema = z.discriminatedUnion("status",
 ]);
 export type PlanCreationDiscardRpcResult = z.infer<typeof PlanCreationDiscardRpcResultSchema>;
 
+export const PlanCreationPreviewRpcParamsSchema = z
+  .object({
+    commandId: PlanCreationCommandIdSchema,
+    creationId: PlanCreationUlidSchema,
+    expectedVersion: z.number().int().positive(),
+  })
+  .strict();
+export type PlanCreationPreviewRpcParams = z.infer<typeof PlanCreationPreviewRpcParamsSchema>;
+
+export const PlanCreationPreviewRpcResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("previewed"), planCreation: PlanCreationCardModelSchema }).strict(),
+  z.discriminatedUnion("reason", [
+    z
+      .object({
+        status: z.literal("rejected"),
+        reason: z.enum([
+          "stale-version",
+          "command-conflict",
+          "no-unfinished-creation",
+          "not-ready",
+        ]),
+        planCreation: PlanCreationCardModelSchema.nullable(),
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal("rejected"),
+        reason: z.literal("no-workouts"),
+        explanation: z.string().min(1).max(2_000),
+        planCreation: PlanCreationCardModelSchema.nullable(),
+      })
+      .strict(),
+  ]),
+]);
+export type PlanCreationPreviewRpcResult = z.infer<typeof PlanCreationPreviewRpcResultSchema>;
+
 export interface PlanCreationOperations {
+  "plan_creation.preview"(
+    request: PlanCreationPreviewRpcParams,
+  ): Promise<PlanCreationPreviewRpcResult>;
   "plan_creation.start"(request: PlanCreationStartRpcParams): Promise<PlanCreationStartRpcResult>;
   "plan_creation.answer"(
     request: PlanCreationAnswerRpcParams,

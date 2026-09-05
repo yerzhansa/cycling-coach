@@ -232,6 +232,8 @@ describe("chat view adapter", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
     const model = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 1,
       status: "in-progress" as const,
@@ -363,6 +365,8 @@ describe("chat view adapter", () => {
     const published: ChatSurfaceState[] = [];
     const adapter = createChatViewAdapter({ publish: (next) => published.push(next) });
     const model: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000000",
       version: 3,
       status: "in-progress",
@@ -455,6 +459,8 @@ describe("chat view adapter", () => {
     });
 
     const nextModel: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
       creationId: "01J00000000000000000000001",
       version: 1,
       status: "in-progress",
@@ -508,6 +514,8 @@ describe("chat view adapter", () => {
       controls({
         planCreation: {
           value: {
+            draft: null,
+            draftStale: false,
             creationId: "01J00000000000000000000000",
             version: 1,
             status: "in-progress",
