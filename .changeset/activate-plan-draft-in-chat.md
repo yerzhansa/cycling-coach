@@ -1,4 +1,5 @@
 ---
+"@enduragent/desktop": patch
 "@enduragent/coach-contract": patch
 "@enduragent/coach": patch
 "@enduragent/coach-client": patch
