@@ -1,5 +1,7 @@
 import type {
   CoachDecisionAnswer,
+  ListPlansResult,
+  PlanCreationCardModel,
   PlanError,
   PlanHydrationState,
   PlanNavigationTarget,
@@ -52,6 +54,17 @@ export type PlanReadSurfaceState =
   | { readonly status: "loading"; readonly value: null }
   | { readonly status: "ready"; readonly value: PlanningReadModel }
   | { readonly status: "unavailable"; readonly value: PlanningReadModel | null };
+
+export type PlanLibraryState =
+  | { readonly status: "loading"; readonly value: null }
+  | { readonly status: "ready"; readonly value: ListPlansResult }
+  | { readonly status: "unavailable"; readonly value: ListPlansResult | null };
+
+export interface PlanLibraryActions {
+  startCreation(): void;
+  continueCreation(creation: PlanCreationCardModel): void;
+  changeInChat(): void;
+}
 
 export interface PlanningReadActions {
   refresh(): void;
@@ -144,6 +157,10 @@ export interface PlanActions {
 export interface PlanSlice {
   readonly plan: PlanSurfaceState;
   readonly planSurface: PlanReadSurfaceState;
+  readonly planLibrary: PlanLibraryState;
+  readonly planLibraryActions: PlanLibraryActions | null;
+  setPlanLibrary: (value: PlanLibraryState) => void;
+  bindPlanLibraryActions: (actions: PlanLibraryActions | null) => void;
   readonly planFocus: PlanNavigationTarget | null;
   readonly planReturnToChat: boolean;
   readonly planActions: PlanActions | null;
@@ -187,6 +204,14 @@ export function planAttentionCount(plan: PlanSurfaceState): number {
 
 export const createPlanSlice: StateCreator<EnduragentState, [], [], PlanSlice> = (set) => ({
   plan: EMPTY_PLAN_SURFACE,
+  planLibrary: { status: "loading", value: null },
+  planLibraryActions: null,
+  setPlanLibrary(value) {
+    set({ planLibrary: value });
+  },
+  bindPlanLibraryActions(actions) {
+    set({ planLibraryActions: actions });
+  },
   planSurface: { status: "loading", value: null },
   planFocus: null,
   planReturnToChat: false,

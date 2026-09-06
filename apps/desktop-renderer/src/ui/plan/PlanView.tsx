@@ -53,6 +53,7 @@ import { useEnduragentStore } from "../../state/store";
 import { CoachDecisionPanel } from "../chat/CoachDecisionPanel";
 import { Composer, type ComposerHandle } from "../chat/Composer";
 import { ConversationTranscript } from "../chat/Transcript";
+import { PlanLibrary } from "./PlanLibrary";
 import { Page } from "../shared/Page";
 import { WorkoutArchiveExportControl } from "../training/TrainingExportControls";
 
@@ -4583,6 +4584,15 @@ function ReadyProjection(): ReactElement {
 }
 
 export function PlanView(): ReactElement {
+  const library = useEnduragentStore((state) => state.planLibrary);
+  const libraryActions = useEnduragentStore((state) => state.planLibraryActions);
+  const planningActions = useEnduragentStore((state) => state.planningReadActions);
+  const creationFocus = useEnduragentStore((state) => state.chat.planCreationFocusRequest);
+  const details = useRef<HTMLDivElement>(null);
+  const startButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (creationFocus?.target === "start") startButton.current?.focus();
+  }, [creationFocus, library.value?.creation]);
   const plan = useEnduragentStore((state) => state.plan);
   const actions = useEnduragentStore((state) => state.planActions);
   const model = planReadModel(plan);
@@ -4626,7 +4636,18 @@ export function PlanView(): ReactElement {
       subtitle={subtitle}
       busy={loading}
       action={
-        coachWorkspace ? (
+        library.value !== null && !coachWorkspace && !historyPage ? (
+          library.value.creation === null ? (
+            <Button
+              ref={startButton}
+              id="start-plan"
+              disabled={libraryActions === null}
+              onClick={() => libraryActions?.startCreation()}
+            >
+              {library.value.active === null ? "Start a Plan" : "Start a new Plan"}
+            </Button>
+          ) : undefined
+        ) : coachWorkspace ? (
           <Button
             id="plan-coach-close"
             type="button"
@@ -4656,27 +4677,63 @@ export function PlanView(): ReactElement {
       contentMode={coachWorkspace ? "workspace" : "scroll"}
     >
       <div className={coachWorkspace ? "h-full min-h-0" : "grid gap-6"}>
-        {plan.hydration.status === "stale" ? (
-          <StaleNotice message={plan.hydration.error.message} />
+        {library.status === "unavailable" ? (
+          <div role="alert" className="grid gap-inset">
+            <StaleNotice message="Plan library could not load. Try again." />
+            <Button variant="outline" onClick={() => planningActions?.refresh()}>
+              Try again
+            </Button>
+          </div>
         ) : null}
-        {plan.hydration.status === "loading" ? (
-          <p className="m-0 text-ink-2" role="status" aria-live="polite">
-            Loading your Plan…
-          </p>
-        ) : plan.hydration.status === "failed" ? (
-          <StatusCard
-            title="Plan could not load"
-            support={plan.hydration.error.message}
-            retry={plan.hydration.error.retryable}
+        {library.value !== null && !coachWorkspace && !historyPage ? (
+          <PlanLibrary
+            library={library.value}
+            readDetails={() => {
+              details.current?.scrollIntoView({ block: "start", behavior: "instant" });
+              details.current?.focus({ preventScroll: true });
+            }}
           />
-        ) : plan.hydration.status === "unsupported-capability" ? (
-          <StatusCard
-            title="Plan is not available yet"
-            support="Update Enduragent and its local service to use Plan."
-          />
-        ) : (
-          <ReadyProjection />
-        )}
+        ) : null}
+        <div
+          ref={details}
+          tabIndex={-1}
+          className={coachWorkspace ? "h-full min-h-0" : "grid gap-6"}
+        >
+          {library.value !== null && activeOverview ? (
+            <div className="flex justify-end">
+              <Button
+                id="plan-history-trigger"
+                type="button"
+                variant="outline"
+                onClick={() => actions?.openHistory()}
+              >
+                <History className="size-4" aria-hidden="true" />
+                Plan history
+              </Button>
+            </div>
+          ) : null}
+          {plan.hydration.status === "stale" ? (
+            <StaleNotice message={plan.hydration.error.message} />
+          ) : null}
+          {plan.hydration.status === "loading" ? (
+            <p className="m-0 text-ink-2" role="status" aria-live="polite">
+              Loading your Plan…
+            </p>
+          ) : plan.hydration.status === "failed" ? (
+            <StatusCard
+              title="Plan could not load"
+              support={plan.hydration.error.message}
+              retry={plan.hydration.error.retryable}
+            />
+          ) : plan.hydration.status === "unsupported-capability" ? (
+            <StatusCard
+              title="Plan is not available yet"
+              support="Update Enduragent and its local service to use Plan."
+            />
+          ) : (
+            <ReadyProjection />
+          )}
+        </div>
         <CoursePickerDialog />
       </div>
     </Page>

@@ -14,7 +14,7 @@ import { createArchiveViewAdapter } from "./state/adapters/archive";
 import { createChatViewAdapter } from "./state/adapters/chat";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding";
-import { createPlanViewAdapter } from "./state/adapters/plan";
+import { createPlanViewAdapter, listPlans } from "./state/adapters/plan";
 import { createRideImportAdapter } from "./state/adapters/ride-import";
 import {
   createAthleteSettingsAdapter,
@@ -56,6 +56,7 @@ import { createRideImportController, subscribeToDroppedRideImports } from "./rid
 import { createTrainingExportController } from "./training-export/controller";
 import { settleInitialSetupStatus } from "./initial-setup-status";
 import { createPlanController } from "./plan/controller";
+import { subscribePlanLibraryRefresh } from "./plan/library-refresh";
 
 export type Disposer = () => void;
 
@@ -75,6 +76,19 @@ export function onboardingCredentialMutationsBlocked(
 
 export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
+  const planReturnStorageKey = "enduragent.plan.return-on-launch";
+  try {
+    if (window.localStorage.getItem(planReturnStorageKey) === "true") {
+      store.getState().setActiveView("plan");
+    }
+  } catch {}
+  const disposePlanReturn = store.subscribe((state, previousState) => {
+    if (state.activeView === previousState.activeView) return;
+    try {
+      if (state.activeView === "plan") window.localStorage.setItem(planReturnStorageKey, "true");
+      else window.localStorage.removeItem(planReturnStorageKey);
+    } catch {}
+  });
   const platform = rendererPlatformProjection(window.enduragentAuth.platform);
   store.getState().setOnboardingStartupSettled(false);
   const onLifecycle = (event: WindowEventMap["enduragent-lifecycle"]): void => {
@@ -133,6 +147,8 @@ export function bootRenderer(): Disposer {
     view: trainingAdapter.view,
   });
   const planController = createPlanController({
+    listPlans: () => listPlans(clients),
+    renderLibrary: (next) => store.getState().setPlanLibrary(next),
     read: () => window.enduragentAuth.getPlanningReadModel(),
     render: (next) => store.getState().setPlanSurface(next),
     navigate: (view) => store.getState().setActiveView(view),
@@ -177,12 +193,13 @@ export function bootRenderer(): Disposer {
   const chatController = createChatController({
     clients,
     view: chatAdapter.view,
+    openChat: () => store.getState().setActiveView("chat"),
     refreshTrainingContext: async () => {
       await Promise.all([trainingContextController.refresh(), planController.refresh()]);
     },
     refreshSpend: () => spendController.refresh(),
     refreshPlan: async () => {
-      await planController.refresh();
+      await planController.refresh(true);
       try {
         const hydration = await window.enduragentAuth.getPlanState();
         store.getState().setPlanHydration(hydration);
@@ -211,6 +228,22 @@ export function bootRenderer(): Disposer {
   const disposeSetupReadiness = store.subscribe((state, previousState) => {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
   });
+  store.getState().bindPlanLibraryActions({
+    startCreation: () => {
+      chatController.resumeCreation(store.getState().planLibrary.value?.creation ?? null);
+      store.getState().setActiveView("chat");
+      void chatController.startPlanCreation();
+    },
+    continueCreation: (creation) => {
+      void chatController.continueCreationFromLibrary(creation.creationId);
+    },
+    changeInChat: () => {
+      chatController.pausePlanCreation();
+      store.getState().setActiveView("chat");
+      requestAnimationFrame(focusComposer);
+    },
+  });
+  const disposePlanLibraryRefresh = subscribePlanLibraryRefresh(planController);
   const disposePlanToChatRefresh = store.subscribe((state, previousState) => {
     if (previousState.activeView === "plan" && state.activeView === "chat") {
       chatController.refreshPlanningRequests();
@@ -659,7 +692,10 @@ export function bootRenderer(): Disposer {
     store.getState().bindOnboardingActions(null);
     disposeRideAnalysisSelection();
     disposeSetupReadiness();
+    disposePlanReturn();
     disposePlanToChatRefresh();
+    disposePlanLibraryRefresh();
+    store.getState().bindPlanLibraryActions(null);
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     desktopUpdateController.dispose();

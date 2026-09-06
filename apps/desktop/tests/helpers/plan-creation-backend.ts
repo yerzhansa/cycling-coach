@@ -109,11 +109,13 @@ const response = (value: unknown): readonly string[] => [JSON.stringify(value)];
 export class PlanCreationBackend {
   readonly script: DesktopFixtureScript;
   readonly creationRequests: ScriptRequest[] = [];
+  readonly planListRequests: ScriptRequest[] = [];
   private store: (SqlStore & MigratorStore) | undefined;
   private repository: PlanCreationRepository | undefined;
   private host: PlanCreationHost | undefined;
   private planning: PlanningOperations | undefined;
   planStateReadFails = false;
+  planListReadFails = false;
   private sequence = 0;
   private instant = 883_612_800_000;
   private queueRevision = 0;
@@ -129,8 +131,7 @@ export class PlanCreationBackend {
     this.script = {
       onRequest: async (value) => {
         const request = value as ScriptRequest;
-        if (request.method.startsWith("plan_creation.") || request.method === "plan.list")
-          this.creationRequests.push(request);
+        if (request.method.startsWith("plan_creation.")) this.creationRequests.push(request);
         if (coexistence && request.method === "listArchivedConversations") {
           return response({
             schemaVersion: 1,
@@ -208,6 +209,8 @@ export class PlanCreationBackend {
           return response(await this.planState());
         }
         if (request.method === "plan.list") {
+          this.planListRequests.push(request);
+          if (this.planListReadFails) throw new Error("Synthetic Plan library read failure");
           return response(
             await this.requireHost()["plan.list"](ListPlansParamsSchema.parse(request.params)),
           );
@@ -309,6 +312,121 @@ export class PlanCreationBackend {
     if (this.planning?.getPlanState === undefined)
       throw new TypeError("Plan inspection is unavailable");
     return this.planning.getPlanState({});
+  }
+
+  async library() {
+    return this.requireHost()["plan.list"]({});
+  }
+
+  async seedLibrary(presence: {
+    readonly creation: boolean;
+    readonly active: boolean;
+    readonly closed: boolean;
+  }): Promise<void> {
+    const store = this.requireStore();
+    const insertPlan = async (plan: {
+      readonly id: string;
+      readonly name: string;
+      readonly start: number;
+      readonly end: number;
+      readonly weekStartDay: number;
+      readonly closedAt: number | null;
+      readonly reason: "stopped" | "completed" | "legacy-unclassified" | null;
+    }) => {
+      const updatedAt = plan.closedAt ?? 883_612_800_000;
+      await store.run(
+        `INSERT INTO plan (
+id,origin_id,name,primary_goal,start_date_key,target_date_key,status,kind,total_weeks,
+week_start_day,structure_json,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,NULL,?,'Improve fitness',?,?,?,'short_race_preparation',4,?,'{}',850000000000,?,'fixture-device',?,0)`,
+        [
+          plan.id,
+          plan.name,
+          plan.start,
+          plan.end,
+          plan.closedAt === null ? "active" : "ended",
+          plan.weekStartDay,
+          updatedAt,
+          updatedAt,
+        ],
+      );
+      await store.run(
+        `INSERT INTO planning_plan (
+plan_id,status,version,current_revision_number,activated_at_ms,closed_at_ms,close_reason,close_actor,
+updated_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,?,1,1,850000000000,?,?,?,?,'fixture-device',?,0)`,
+        [
+          plan.id,
+          plan.closedAt === null ? "active" : "closed",
+          plan.closedAt,
+          plan.reason,
+          plan.reason === "completed"
+            ? "system:plan-completion"
+            : plan.reason === "stopped"
+              ? "athlete"
+              : null,
+          updatedAt,
+          updatedAt,
+        ],
+      );
+    };
+    if (presence.active) {
+      await insertPlan({
+        id: activePlanId,
+        name: "Active endurance Plan",
+        start: 19980101,
+        end: 19980128,
+        weekStartDay: 4,
+        closedAt: null,
+        reason: null,
+      });
+    }
+    if (presence.closed) {
+      for (const plan of [
+        {
+          id: closedPlanId,
+          name: "Closed base Plan",
+          start: 19971001,
+          end: 19971028,
+          weekStartDay: 3,
+          closedAt: 879_292_800_000,
+          reason: "stopped",
+        },
+        {
+          id: fixtureId("F"),
+          name: "Earlier fitness Plan",
+          start: 19970801,
+          end: 19970828,
+          weekStartDay: 5,
+          closedAt: 873_158_400_000,
+          reason: "legacy-unclassified",
+        },
+        {
+          id: fixtureId("G"),
+          name: "Recent endurance Plan",
+          start: 19971101,
+          end: 19971128,
+          weekStartDay: 6,
+          closedAt: 881_971_200_000,
+          reason: "completed",
+        },
+      ] as const)
+        await insertPlan(plan);
+    }
+    if (presence.creation) {
+      const started = await this.requireHost()["plan_creation.start"]({
+        commandId: "seed-library-creation",
+      });
+      if (started.status !== "started") throw new TypeError("Plan Creation seed was rejected");
+      const answered = await this.requireHost()["plan_creation.answer"]({
+        commandId: "seed-library-goal",
+        creationId: started.planCreation.creationId,
+        expectedVersion: started.planCreation.version,
+        answer: { kind: "goal", goal: { kind: "fitness" } },
+      });
+      if (answered.status !== "answered")
+        throw new TypeError("Plan Creation goal seed was rejected");
+    }
   }
 
   async inspectActivation() {
