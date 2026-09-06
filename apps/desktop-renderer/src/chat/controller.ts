@@ -11,6 +11,7 @@ import {
 } from "@enduragent/coach-client";
 import {
   PLAN_CREATION_ANSWER_KEYS,
+  PlanChangeIntentSchema,
   PlanActiveProjectionDataSchema,
   type AttachmentAdmissionReadModel,
   type ChatAttachmentComposerReadModel,
@@ -21,6 +22,8 @@ import {
   type CreatePlanningRequestRpcParams,
   type CreateWorkoutPlanningRequestRpcParams,
   type PlanHandoffSuggestion,
+  type ListPlansResult,
+  type PlanChangeIntent,
   type PlanCreationAnswerInput,
   type PlanCreationAnswerSummary,
   type PlanCreationCardModel,
@@ -29,6 +32,8 @@ import {
   type TranscriptPageEntry,
   type TurnEvent,
 } from "@enduragent/coach-contract";
+import { previewPlanChange, applyPlanChange } from "../state/adapters/plan";
+import { EMPTY_PLAN_CHANGE_SURFACE, type PlanChangeSurfaceState } from "../state/chat-slice";
 import type { DesktopCoachClientProvider } from "../coach-client";
 import {
   DESKTOP_CHAT_ID,
@@ -215,6 +220,10 @@ export interface ChatView {
 }
 
 export interface ChatController {
+  openPlanChangeEditor(): void;
+  backFromPlanChangeEditor(): void;
+  previewPlanChange(intent: PlanChangeIntent): Promise<void>;
+  applyPlanChange(decision: "apply" | "cancel"): Promise<void>;
   start(): Promise<void>;
   resume(): Promise<void>;
   refreshAttachments(): Promise<void>;
@@ -320,6 +329,10 @@ export function createChatController(input: {
   readonly refreshTrainingContext: () => Promise<void>;
   readonly refreshSpend: () => Promise<void>;
   readonly refreshPlan?: () => Promise<void>;
+  readonly readPlanLibrary?: () => ListPlansResult | null;
+  readonly readPlanChange?: () => PlanChangeSurfaceState;
+  readonly publishPlanChange?: (next: PlanChangeSurfaceState) => void;
+  readonly refreshPlanLibrary?: () => Promise<void>;
   readonly openChat?: () => void;
   readonly readTranscriptPage?: (request: {
     readonly cursor: string | null;
@@ -1731,8 +1744,136 @@ export function createChatController(input: {
     return task;
   };
 
+  const readChange = (): PlanChangeSurfaceState =>
+    input.readPlanChange?.() ?? EMPTY_PLAN_CHANGE_SURFACE;
+  const publishChange = (patch: Partial<PlanChangeSurfaceState>): void => {
+    if (!disposed) input.publishPlanChange?.({ ...readChange(), ...patch });
+  };
+  const changeFocus = (target: "editor" | "preview" | "change") => ({
+    target,
+    revision: (readChange().focusRequest?.revision ?? 0) + 1,
+  });
+
   render();
   return {
+    openPlanChangeEditor() {
+      const active = input.readPlanLibrary?.()?.active;
+      if (disposed || readChange().busy || !active) return;
+      publishChange({
+        open: true,
+        planId: active.planId,
+        editorOpen: true,
+        error: null,
+        focusRequest: changeFocus("editor"),
+      });
+    },
+    backFromPlanChangeEditor() {
+      if (disposed || readChange().busy) return;
+      publishChange({ editorOpen: false, error: null, focusRequest: changeFocus("change") });
+    },
+    async previewPlanChange(intent) {
+      const library = input.readPlanLibrary?.();
+      const active = library?.active;
+      if (disposed || readChange().busy || !active) return;
+      const parameterCopy =
+        intent.kind === "weekly-duration"
+          ? "Enter a weekly duration above zero."
+          : "day" in intent && (!Number.isInteger(intent.day) || intent.day < 1 || intent.day > 7)
+            ? "Choose the weekday to change."
+            : intent.kind === "weekday-unavailable" || intent.kind === "hard-weekday"
+              ? "Choose the weekday to change."
+              : "Enter a duration above zero.";
+      if (!PlanChangeIntentSchema.safeParse(intent).success) {
+        publishChange({ error: parameterCopy });
+        return;
+      }
+      publishChange({ busy: true, error: null, notice: null });
+      try {
+        const result = await previewPlanChange(input.clients, {
+          planId: active.planId,
+          expectedVersion: active.version,
+          intent,
+        });
+        if (disposed) return;
+        if (result.status === "rejected") {
+          publishChange({
+            error:
+              result.reason === "stale-version"
+                ? "This request used an older Plan revision. Request a fresh preview."
+                : result.reason === "invalid-intent"
+                  ? parameterCopy
+                  : "This Change could not be previewed. Training is unchanged.",
+          });
+          return;
+        }
+        const superseded = library.changes.find(
+          (change) => change.changeId === result.change.supersedes,
+        );
+        publishChange({
+          open: true,
+          planId: active.planId,
+          editorOpen: false,
+          notice: superseded
+            ? `This preview supersedes “${superseded.title}”. Training is unchanged until confirmation.`
+            : "Review the exact changes before confirming.",
+        });
+        await input.refreshPlanLibrary?.();
+        publishChange({ focusRequest: changeFocus("preview") });
+      } catch {
+        publishChange({ error: "This Change could not be previewed. Training is unchanged." });
+      } finally {
+        publishChange({ busy: false });
+      }
+    },
+    async applyPlanChange(decision) {
+      const library = input.readPlanLibrary?.();
+      const active = library?.active;
+      if (disposed || readChange().busy || !active) return;
+      const pending = library.changes.find((change) => change.status === "pending");
+      if (!pending) {
+        publishChange({ notice: "This preview is no longer pending. Training is unchanged." });
+        return;
+      }
+      publishChange({ busy: true, error: null, notice: null });
+      try {
+        const result = await applyPlanChange(input.clients, {
+          planId: active.planId,
+          changeId: pending.changeId,
+          expectedVersion: active.version,
+          decision,
+        });
+        if (disposed) return;
+        if (result.status === "rejected") {
+          publishChange({
+            notice:
+              result.reason === "stale-version"
+                ? "This preview is stale because the Plan or its sources changed. Request a fresh preview; no training changed."
+                : result.reason === "not-pending"
+                  ? "This preview is no longer pending. Training is unchanged."
+                  : "This Change could not be applied. Training and the pending preview are unchanged.",
+          });
+          return;
+        }
+        publishChange({
+          open: true,
+          planId: active.planId,
+          editorOpen: false,
+          notice:
+            result.status === "applied"
+              ? "Change applied locally. Training now matches the confirmed preview."
+              : "Change cancelled. Training is unchanged; the preview remains in history.",
+        });
+        await input.refreshPlanLibrary?.();
+        publishChange({ focusRequest: changeFocus("change") });
+      } catch {
+        publishChange({
+          notice:
+            "This Change could not be applied. Training and the pending preview are unchanged.",
+        });
+      } finally {
+        publishChange({ busy: false });
+      }
+    },
     start() {
       return start();
     },

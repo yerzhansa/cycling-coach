@@ -208,6 +208,12 @@ export function bootRenderer(): Disposer {
   const chatController = createChatController({
     clients,
     view: chatAdapter.view,
+    readPlanLibrary: () => store.getState().planLibrary.value,
+    readPlanChange: () => store.getState().planChange,
+    publishPlanChange: (next) => store.getState().setPlanChange(next),
+    refreshPlanLibrary: async () => {
+      await store.getState().planLibraryActions?.refresh();
+    },
     openChat: () => store.getState().setActiveView("chat"),
     refreshTrainingContext: async () => {
       await Promise.all([trainingContextController.refresh(), planController.refresh()]);
@@ -260,11 +266,30 @@ export function bootRenderer(): Disposer {
     },
     changeInChat: () => {
       chatController.pausePlanCreation();
+      const state = store.getState();
+      state.setPlanChange({
+        ...state.planChange,
+        open: true,
+        planId: state.planLibrary.value?.active?.planId ?? null,
+      });
       store.getState().setActiveView("chat");
       requestAnimationFrame(focusComposer);
     },
   });
   const disposePlanLibraryRefresh = subscribePlanLibraryRefresh(planController);
+  const disposePendingChangeRestore = store.subscribe((state, previousState) => {
+    const pending =
+      state.planLibrary.value?.changes.some((change) => change.status === "pending") ?? false;
+    const hadPending =
+      previousState.planLibrary.value?.changes.some((change) => change.status === "pending") ??
+      false;
+    if (
+      pending &&
+      (!hadPending || (!previousState.chat.planCreationLoaded && state.chat.planCreationLoaded))
+    ) {
+      chatController.pausePlanCreation();
+    }
+  });
   const disposePlanToChatRefresh = store.subscribe((state, previousState) => {
     if (previousState.activeView === "plan" && state.activeView === "chat") {
       chatController.refreshPlanningRequests();
@@ -411,6 +436,10 @@ export function bootRenderer(): Disposer {
     }).render,
   });
   store.getState().bindChatActions({
+    openPlanChangeEditor: () => chatController.openPlanChangeEditor(),
+    backFromPlanChangeEditor: () => chatController.backFromPlanChangeEditor(),
+    previewPlanChange: (intent) => void chatController.previewPlanChange(intent),
+    applyPlanChange: (decision) => void chatController.applyPlanChange(decision),
     submit: (message, attachmentIds) => chatController.submit(message, attachmentIds),
     chooseAttachments: () => chatController.chooseAttachments(),
     pasteAttachment: () => chatController.pasteAttachment(),
@@ -716,6 +745,7 @@ export function bootRenderer(): Disposer {
     disposePlanReturn();
     disposePlanToChatRefresh();
     disposePlanLibraryRefresh();
+    disposePendingChangeRestore();
     store.getState().bindPlanLibraryActions(null);
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);

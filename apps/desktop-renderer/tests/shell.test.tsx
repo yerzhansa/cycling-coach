@@ -100,6 +100,10 @@ const SELECTED_RIDE_HISTORY = {
 
 function stubActions(): ChatActions {
   return {
+    openPlanChangeEditor: vi.fn(),
+    backFromPlanChangeEditor: vi.fn(),
+    previewPlanChange: vi.fn(),
+    applyPlanChange: vi.fn(),
     submit: vi.fn(),
     chooseAttachments: vi.fn(),
     pasteAttachment: vi.fn(),

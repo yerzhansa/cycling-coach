@@ -11,6 +11,8 @@ import {
   closePlan,
   createPlanViewAdapter,
   readPlanHistory,
+  previewPlanChange,
+  applyPlanChange,
   type PlanBridge,
 } from "../src/state/adapters/plan";
 import {
@@ -2104,5 +2106,47 @@ describe("Plan library RPC adapters", () => {
       planId: result.planId,
       expectedVersion: 7,
     });
+  });
+});
+
+describe("Plan Change RPC adapters", () => {
+  it("generates unique command ids and preserves preview and decision payloads", async () => {
+    const call = vi.fn().mockResolvedValue({ status: "rejected", reason: "stale-version" });
+    const clients = { getClient: async () => ({ call }) } as unknown as DesktopCoachClientProvider;
+    const preview = {
+      planId: "plan-active",
+      expectedVersion: 4,
+      intent: { kind: "weekly-duration", hours: 6 },
+    } as const;
+    const decision = {
+      planId: "plan-active",
+      expectedVersion: 5,
+      changeId: "change-pending",
+      decision: "apply",
+    } as const;
+    expect(await previewPlanChange(clients, preview)).toEqual({
+      status: "rejected",
+      reason: "stale-version",
+    });
+    await applyPlanChange(clients, decision);
+    await applyPlanChange(clients, { ...decision, decision: "cancel" });
+    expect(call).toHaveBeenNthCalledWith(1, "plan_change.preview", {
+      ...preview,
+      commandId: expect.any(String),
+    });
+    expect(call).toHaveBeenNthCalledWith(2, "plan_change.apply", {
+      ...decision,
+      commandId: expect.any(String),
+    });
+    expect(call).toHaveBeenNthCalledWith(3, "plan_change.apply", {
+      ...decision,
+      decision: "cancel",
+      commandId: expect.any(String),
+    });
+    expect(new Set(call.mock.calls.map(([, request]) => request.commandId)).size).toBe(3);
+    for (const [, request] of call.mock.calls)
+      expect(request.commandId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
   });
 });
