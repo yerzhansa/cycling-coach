@@ -14,7 +14,12 @@ import { createArchiveViewAdapter } from "./state/adapters/archive";
 import { createChatViewAdapter } from "./state/adapters/chat";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding";
-import { createPlanViewAdapter, listPlans } from "./state/adapters/plan";
+import {
+  closePlan,
+  createPlanViewAdapter,
+  listPlans,
+  readPlanHistory,
+} from "./state/adapters/plan";
 import { createRideImportAdapter } from "./state/adapters/ride-import";
 import {
   createAthleteSettingsAdapter,
@@ -229,6 +234,9 @@ export function bootRenderer(): Disposer {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
   });
   store.getState().bindPlanLibraryActions({
+    closePlan: (input) => closePlan(clients, input),
+    readPlanHistory: (planId) => readPlanHistory(clients, planId),
+    refresh: () => planController.refresh(true),
     startCreation: () => {
       chatController.resumeCreation(store.getState().planLibrary.value?.creation ?? null);
       store.getState().setActiveView("chat");

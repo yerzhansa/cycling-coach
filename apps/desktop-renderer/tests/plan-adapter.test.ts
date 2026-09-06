@@ -4,9 +4,15 @@ import type {
   PlanHydrationState,
   PlanProgressEvent,
 } from "@enduragent/coach-contract";
+import type { CoachClient } from "@enduragent/coach-client";
 import type { DesktopCoachClientProvider } from "../src/coach-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPlanViewAdapter, type PlanBridge } from "../src/state/adapters/plan";
+import {
+  closePlan,
+  createPlanViewAdapter,
+  readPlanHistory,
+  type PlanBridge,
+} from "../src/state/adapters/plan";
 import {
   EMPTY_PLAN_SURFACE,
   type PlanSurfaceState,
@@ -1708,7 +1714,7 @@ describe("Plan view adapter", () => {
     });
   });
 
-  it("ends an active Plan after its final civil date and resumes ordinary cleanup", async () => {
+  it("hydrates an expired active Plan without issuing a completion command", async () => {
     const planId = "00000000000000000000000003";
     const active = planReadModel({
       lifecycle: "active",
@@ -1734,66 +1740,17 @@ describe("Plan view adapter", () => {
         workouts: [],
       },
     });
-    const ended = planReadModel({
-      lifecycle: "ended",
-      scenarioId: "PL-S094",
-      projection: "ended",
-      planId,
-      reconciliation: {
-        status: "not-started",
-        created: 0,
-        pending: 0,
-        failed: 0,
-        total: 0,
-        currentThrough: null,
-        error: null,
-      },
-      data: {},
-    });
-    const cleaned = planReadModel({
-      lifecycle: "ended",
-      scenarioId: "PL-S056",
-      projection: "ended",
-      planId,
-      reconciliation: {
-        status: "verified",
-        created: 0,
-        pending: 0,
-        failed: 0,
-        total: 0,
-        currentThrough: "1998-10-06",
-        error: null,
-      },
-      data: {},
-    });
     const subject = harness({
-      ids: ["natural-completion", "natural-cleanup"],
       getPlanState: async () => ({ status: "ready", state: active }),
-      executePlanTransition: async (command) => ({
-        status: "completed",
-        state: command.transitionId === "PL-T29" ? ended : cleaned,
-      }),
     });
 
     subject.adapter.start();
     await settle();
-    await settle();
+    subject.adapter.open();
     await settle();
 
-    expect(subject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
-      {
-        transitionId: "PL-T29",
-        commandId: "natural-completion",
-        planId,
-        asOf: "1998-10-05",
-      },
-      {
-        transitionId: "PL-T24",
-        commandId: "natural-cleanup",
-        planId,
-        mode: "cleanup",
-      },
-    ]);
+    expect(subject.surface.hydration).toEqual({ status: "ready", state: active });
+    expect(subject.executePlanTransition).not.toHaveBeenCalled();
   });
 
   it("opens and records the separate race outcome", async () => {
@@ -2086,5 +2043,53 @@ describe("Plan view adapter", () => {
 
     expect(subject.disposeProgress).toHaveBeenCalledOnce();
     expect(subject.surface.hydration).toEqual({ status: "loading" });
+  });
+});
+
+describe("Plan library RPC adapters", () => {
+  function clientProvider() {
+    const client: CoachClient = {
+      call: async () => {
+        throw new Error("Unexpected RPC call");
+      },
+      get handshake(): CoachClient["handshake"] {
+        throw new Error("Unexpected handshake read");
+      },
+      close: async () => undefined,
+    };
+    const clients: DesktopCoachClientProvider = {
+      getClient: async () => client,
+      reconnect: async () => client,
+      close: async () => undefined,
+    };
+    return { clients, call: vi.spyOn(client, "call") };
+  }
+
+  it("reads the final history for the selected Plan", async () => {
+    const { clients, call } = clientProvider();
+    call.mockResolvedValue(null);
+    expect(await readPlanHistory(clients, "00000000000000000000000003")).toBeNull();
+    expect(call).toHaveBeenCalledWith("plan.history", {
+      planId: "00000000000000000000000003",
+    });
+  });
+
+  it("closes the current version with a new command id", async () => {
+    const commandId = "12345678-1234-1234-1234-123456789012";
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(commandId);
+    const result = {
+      status: "closed" as const,
+      planId: "00000000000000000000000003",
+      closedAt: 907459200000,
+      cleanupJobId: "00000000000000000000000004",
+    };
+    const { clients, call } = clientProvider();
+    call.mockResolvedValue(result);
+    expect(await closePlan(clients, { planId: result.planId, expectedVersion: 7 })).toEqual(result);
+    expect(call).toHaveBeenCalledWith("plan.close", {
+      commandId,
+      planId: result.planId,
+      expectedVersion: 7,
+    });
   });
 });

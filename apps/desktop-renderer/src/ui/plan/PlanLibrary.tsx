@@ -3,10 +3,19 @@ import type {
   PlanCreationCardModel,
   PlanSummary,
 } from "@enduragent/coach-contract";
-import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { CHAT_PLAN_CREATION_CONTINUE_MISSING_COPY } from "../../chat/controller";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 import { useEnduragentStore } from "../../state/store";
 
 function dateLabel(value: string): string {
@@ -72,6 +81,7 @@ function spanLabel(plan: PlanSummary): string {
 export function PlanLibrary(props: {
   readonly library: ListPlansResult;
   readonly readDetails: () => void;
+  readonly readFinalDetails: (planId: string, justClosed?: boolean) => void;
 }): ReactElement {
   const actions = useEnduragentStore((state) => state.planLibraryActions);
   const chatActions = useEnduragentStore((state) => state.chatActions);
@@ -82,6 +92,56 @@ export function PlanLibrary(props: {
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
   const focusRequest = useEnduragentStore((state) => state.chat.planCreationFocusRequest);
   const discard = useRef<HTMLButtonElement>(null);
+  const stop = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const [closing, setClosing] = useState<PlanSummary | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
+  const savePending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const confirmClose = async (): Promise<void> => {
+    if (closing === null || actions === null || savePending.current) return;
+    savePending.current = true;
+    setSaving(true);
+    let result;
+    try {
+      result = await actions.closePlan({
+        planId: closing.planId,
+        expectedVersion: closing.version,
+      });
+    } catch {
+      if (mounted.current) {
+        setCloseError("Stopping could not be saved locally. Your Plan is unchanged.");
+        setClosing(null);
+        setSaving(false);
+      }
+      savePending.current = false;
+      return;
+    }
+    savePending.current = false;
+    if (!mounted.current) return;
+    setSaving(false);
+    if (result.status === "rejected") {
+      if (result.reason === "stale-version") {
+        setCloseError("The Plan changed. Review its current details before stopping.");
+        void actions.refresh();
+      } else {
+        setCloseError("Stopping could not be saved locally. Your Plan is unchanged.");
+        setClosing(null);
+      }
+      return;
+    }
+    setClosing(null);
+    setCloseError(null);
+    props.readFinalDetails(result.planId, true);
+    void actions.refresh();
+  };
   const { creation, active, closed } = props.library;
   const total =
     creation?.openQuestion?.step.total ??
@@ -95,6 +155,55 @@ export function PlanLibrary(props: {
   }, [focusRequest]);
   return (
     <section aria-label="Plan library" className="grid min-w-0 gap-inset">
+      {closeError === null || closing !== null ? null : (
+        <p role="alert" className="m-0 text-sm text-danger">
+          {closeError}
+        </p>
+      )}
+      <Dialog
+        open={closing !== null}
+        onOpenChange={(open) => {
+          if (!open && !saving) {
+            setClosing(null);
+            setCloseError(null);
+          }
+        }}
+      >
+        <DialogContent
+          className="w-[min(520px,calc(100vw-32px))] max-w-none gap-0 border-line p-5 shadow-elev-4 sm:max-w-none"
+          showCloseButton={false}
+          initialFocus={cancel}
+          finalFocus={stop}
+          aria-busy={saving ? "true" : undefined}
+        >
+          <DialogHeader className="gap-inset">
+            <DialogTitle className="m-0 text-lg font-semibold">Stop this Plan?</DialogTitle>
+            <DialogDescription className="m-0 leading-5">
+              Final training stays readable. Calendar cleanup can finish later.
+            </DialogDescription>
+          </DialogHeader>
+          {closeError === null ? null : (
+            <p className="mt-inset mb-0 text-xs text-danger" role="alert">
+              {closeError}
+            </p>
+          )}
+          <DialogFooter className="mx-0 mt-row mb-0 flex-row justify-end rounded-none border-0 bg-transparent p-0">
+            <DialogClose
+              render={<Button ref={cancel} variant="outline" size="lg" disabled={saving} />}
+            >
+              Cancel
+            </DialogClose>
+            <Button
+              variant="destructive-solid"
+              size="lg"
+              disabled={saving || actions === null || closeError !== null}
+              onClick={() => void confirmClose()}
+            >
+              Stop Plan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {notice !== CHAT_PLAN_CREATION_CONTINUE_MISSING_COPY ? null : (
         <p role="status" className="m-0 text-sm text-ink-2">
           {notice}
@@ -149,6 +258,18 @@ export function PlanLibrary(props: {
           summary={spanLabel(active)}
         >
           <div className="flex flex-wrap gap-inset">
+            <Button
+              ref={stop}
+              variant="destructive"
+              aria-haspopup="dialog"
+              disabled={actions === null || saving}
+              onClick={() => {
+                setCloseError(null);
+                setClosing(active);
+              }}
+            >
+              Stop Plan
+            </Button>
             <Button variant="outline" onClick={props.readDetails}>
               Read Plan details
             </Button>
@@ -165,7 +286,17 @@ export function PlanLibrary(props: {
           title={plan.name}
           status="Closed"
           summary={`${spanLabel(plan)} · ${plan.closeReason === "stopped" ? "Stopped" : plan.closeReason === "completed" ? "Completed" : "Unknown reason"}`}
-        />
+        >
+          <div className="flex flex-wrap gap-inset">
+            <Button
+              variant="outline"
+              disabled={actions === null}
+              onClick={() => props.readFinalDetails(plan.planId)}
+            >
+              Read final details
+            </Button>
+          </div>
+        </LibraryCard>
       ))}
     </section>
   );

@@ -2,6 +2,9 @@ import type {
   CoachDecisionAnswer,
   ListPlansResult,
   PlanCreationCardModel,
+  PlanCloseResult,
+  PlanCloseRpcParams,
+  PlanHistoryResult,
   PlanError,
   PlanHydrationState,
   PlanNavigationTarget,
@@ -61,6 +64,9 @@ export type PlanLibraryState =
   | { readonly status: "unavailable"; readonly value: ListPlansResult | null };
 
 export interface PlanLibraryActions {
+  closePlan(input: Omit<PlanCloseRpcParams, "commandId">): Promise<PlanCloseResult>;
+  readPlanHistory(planId: string): Promise<PlanHistoryResult>;
+  refresh(): Promise<void>;
   startCreation(): void;
   continueCreation(creation: PlanCreationCardModel): void;
   changeInChat(): void;

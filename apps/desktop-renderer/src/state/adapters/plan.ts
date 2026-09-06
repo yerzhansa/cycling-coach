@@ -7,6 +7,9 @@ import {
   type ExecutePlanTransitionRpcResult,
   type GetPlanStateRpcResult,
   type PlanError,
+  type PlanCloseRpcParams,
+  type PlanCloseResult,
+  type PlanHistoryResult,
   type ListPlansResult,
   type PlanHydrationState,
   type PlanProgressEvent,
@@ -27,6 +30,23 @@ import { createChatViewAdapter } from "./chat";
 
 export async function listPlans(clients: DesktopCoachClientProvider): Promise<ListPlansResult> {
   return (await clients.getClient()).call("plan.list", {});
+}
+
+export async function readPlanHistory(
+  clients: DesktopCoachClientProvider,
+  planId: string,
+): Promise<PlanHistoryResult> {
+  return (await clients.getClient()).call("plan.history", { planId });
+}
+
+export async function closePlan(
+  clients: DesktopCoachClientProvider,
+  input: Omit<PlanCloseRpcParams, "commandId">,
+): Promise<PlanCloseResult> {
+  return (await clients.getClient()).call("plan.close", {
+    ...input,
+    commandId: globalThis.crypto.randomUUID(),
+  });
 }
 
 export interface PlanBridge {
@@ -128,12 +148,6 @@ const UNAVAILABLE_ERROR: PlanError = Object.freeze({
   retryable: true,
 });
 
-function addCivilDate(value: string, days: number): string {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
 function hydrationFromResult(result: GetPlanStateRpcResult): PlanHydrationState {
   return result;
 }
@@ -198,7 +212,6 @@ export function createPlanViewAdapter(input: {
   let autoResumingCleanupPlanId: string | null = null;
   let autoResumingReplacementId: string | null = null;
   let attemptedWeeklyReviewSyncAtMs: number | null = null;
-  let autoCompletingPlanId: string | null = null;
   let active: {
     readonly commandId: string;
     readonly transitionId: PlanTransitionId;
@@ -267,33 +280,6 @@ export function createPlanViewAdapter(input: {
     input.publishHydration(next);
     if (next.status === "ready" || next.status === "stale") {
       syncCoach(next.state);
-      const activeData = PlanActiveProjectionDataSchema.safeParse(next.state.data);
-      const finalPlanDate = activeData.success
-        ? (activeData.data.plan.targetDate ??
-          addCivilDate(activeData.data.plan.startDate, activeData.data.plan.totalWeeks * 7 - 1))
-        : null;
-      if (
-        next.state.lifecycle === "active" &&
-        next.state.planId !== null &&
-        activeData.success &&
-        finalPlanDate !== null &&
-        activeData.data.today > finalPlanDate &&
-        autoCompletingPlanId !== next.state.planId &&
-        active === null
-      ) {
-        const planId = next.state.planId;
-        autoCompletingPlanId = planId;
-        queueMicrotask(() => {
-          if (disposed || active !== null) return;
-          void execute({
-            transitionId: "PL-T29",
-            commandId: createCommandId(),
-            planId,
-            asOf: activeData.data.today,
-          });
-        });
-        return;
-      }
       if (
         (next.state.scenarioId === "PL-S037" || next.state.scenarioId === "PL-S042") &&
         next.state.planId !== null &&
@@ -446,23 +432,6 @@ export function createPlanViewAdapter(input: {
       active = null;
       if (command.transitionId === "PL-T22") input.publishSettingPending(null);
       input.publishTransition({ status: "idle" });
-      if (
-        command.transitionId === "PL-T29" &&
-        result.state.scenarioId === "PL-S094" &&
-        result.state.planId !== null
-      ) {
-        const planId = result.state.planId;
-        autoResumingCleanupPlanId = planId;
-        queueMicrotask(() => {
-          if (disposed || active !== null) return;
-          void execute({
-            transitionId: "PL-T24",
-            commandId: createCommandId(),
-            planId,
-            mode: "cleanup",
-          });
-        });
-      }
       if (command.transitionId === "PL-T24" && result.state.scenarioId === "PL-S056") {
         queueMicrotask(() => void refresh(false));
       }
