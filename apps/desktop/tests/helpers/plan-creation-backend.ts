@@ -1,5 +1,8 @@
 import {
   ListPlansParamsSchema,
+  PlanCloseRpcParamsSchema,
+  PlanHistoryParamsSchema,
+  PlanCreationDraftSchema,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationPreviewRpcParamsSchema,
   type CoachEngine,
@@ -118,6 +121,8 @@ export class PlanCreationBackend {
   planListReadFails = false;
   private sequence = 0;
   private instant = 883_612_800_000;
+  private civilDate = "1998-01-01";
+  private closeFails = false;
   private queueRevision = 0;
   private queue: QueuedMessage[] = [];
   private transcript: TranscriptTurn[] = [];
@@ -215,6 +220,30 @@ export class PlanCreationBackend {
             await this.requireHost()["plan.list"](ListPlansParamsSchema.parse(request.params)),
           );
         }
+        if (request.method === "plan.close") {
+          const fail = this.closeFails;
+          this.closeFails = false;
+          if (fail) {
+            await this.requireStore()
+              .run(`CREATE TEMP TRIGGER reject_close BEFORE INSERT ON planning_command
+WHEN NEW.command_name='plan.close'
+BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
+          }
+          try {
+            return response(
+              await this.requireHost()["plan.close"](
+                PlanCloseRpcParamsSchema.parse(request.params),
+              ),
+            );
+          } finally {
+            if (fail) await this.requireStore().run("DROP TRIGGER reject_close");
+          }
+        }
+        if (request.method === "plan.history") {
+          return response(
+            await this.requireHost()["plan.history"](PlanHistoryParamsSchema.parse(request.params)),
+          );
+        }
         if (request.method === "plan_creation.activate") {
           return response(
             await this.requireHost()["plan_creation.activate"](
@@ -279,7 +308,7 @@ export class PlanCreationBackend {
         identity,
         engine: inspectionEngine,
       },
-      { todayDateKey: () => 19980101 },
+      { todayDateKey: () => Number(this.civilDate.replaceAll("-", "")) },
     );
     this.host = createPlanCreationOperations({
       store: this.store,
@@ -287,8 +316,25 @@ export class PlanCreationBackend {
       identity,
       crypto: globalThis.crypto,
       eventCandidates: { read: async () => [] },
-      today: () => "1998-01-01",
+      today: () => this.civilDate,
+      todayDateKey: () => Number(this.civilDate.replaceAll("-", "")),
+      now: () => Date.parse(`${this.civilDate}T00:00:00.000Z`),
     });
+  }
+
+  setCivilDate(date: string): void {
+    this.civilDate = date;
+    this.instant = Date.parse(`${date}T00:00:00.000Z`);
+  }
+
+  failNextClose(): void {
+    this.closeFails = true;
+  }
+
+  async bumpActivePlanVersion(): Promise<void> {
+    await this.requireStore().run("UPDATE planning_plan SET version=version+1 WHERE plan_id=?", [
+      activePlanId,
+    ]);
   }
 
   async reopen(): Promise<void> {
@@ -369,6 +415,62 @@ updated_at_ms,device_id,hlc_physical_ms,hlc_counter
           updatedAt,
         ],
       );
+      const dateText = (key: number) => String(key).replace(/^(\d{4})(\d{2})(\d{2})$/u, "$1-$2-$3");
+      const start = dateText(plan.start);
+      const end = dateText(plan.end);
+      const day = (offset: number) =>
+        new Date(Date.parse(`${start}T00:00:00.000Z`) + offset * 86_400_000)
+          .toISOString()
+          .slice(0, 10);
+      const snapshot = PlanCreationDraftSchema.parse({
+        kind: "draft",
+        answeredSummaries: [],
+        goal: { kind: "fitness", weeks: 4 },
+        mode: "fixed",
+        start,
+        end,
+        spanKind: "Fitness Plan",
+        computedWeeks: 4,
+        weeks: Array.from({ length: 4 }, (_, index) => ({
+          number: index + 1,
+          start: day(index * 7),
+          end: day(index * 7 + 6),
+          workouts: [
+            {
+              id: `${plan.id}-ride-${index + 1}`,
+              name: "Endurance ride",
+              kind: "endurance",
+              date: day(index * 7),
+              minutes: 45,
+              pinned: false,
+              guidance: "Keep the effort conversational.",
+              power: null,
+            },
+          ],
+          notes: [],
+        })),
+        notes: [],
+        guidance: "Build endurance steadily.",
+        ftp: null,
+        builderId: "fixture",
+        builderVersion: "1",
+        inputFingerprint: "a".repeat(64),
+        outputFingerprint: "b".repeat(64),
+      });
+      await store.run(
+        `INSERT INTO plan_revision (
+id,plan_id,revision_number,parent_revision_number,source_kind,source_id,snapshot_json,
+fingerprint,created_at_ms,device_id,hlc_physical_ms,hlc_counter
+) VALUES (?,?,1,NULL,'migration',NULL,?,?,?,'fixture-device',?,0)`,
+        [
+          fixtureId(`R${plan.id.slice(-1)}`),
+          plan.id,
+          JSON.stringify(snapshot),
+          snapshot.outputFingerprint,
+          updatedAt,
+          updatedAt,
+        ],
+      );
     };
     if (presence.active) {
       await insertPlan({
@@ -436,9 +538,10 @@ updated_at_ms,device_id,hlc_physical_ms,hlc_counter
       planningPlans: await store.all("SELECT * FROM planning_plan ORDER BY plan_id"),
       revisions: await store.all("SELECT * FROM plan_revision ORDER BY plan_id,revision_number"),
       creations: await store.all("SELECT * FROM plan_creation ORDER BY id"),
+      jobs: await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id"),
       workouts: await store.all("SELECT * FROM plan_workout ORDER BY id"),
       commands: await store.all(
-        "SELECT * FROM planning_command WHERE command_name='plan_creation.activate' ORDER BY created_at_ms,command_id",
+        "SELECT * FROM planning_command WHERE command_name IN ('plan_creation.activate','plan.close') ORDER BY created_at_ms,command_id",
       ),
     };
   }

@@ -171,8 +171,12 @@ async function assertMixedLibrary(scenario: Scenario): Promise<void> {
   await expect(library.getByRole("button")).toHaveText([
     "Discard",
     "Continue in Chat",
+    "Stop Plan",
     "Read Plan details",
     "Change in Chat",
+    "Read final details",
+    "Read final details",
+    "Read final details",
   ]);
   await expect(library).toContainText("1 of 9 answered. Active endurance Plan keeps running.");
   await expect(library).toContainText("1 Jan 1998 to 28 Jan 1998 · 4 weeks");
