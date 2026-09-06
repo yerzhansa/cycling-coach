@@ -1107,6 +1107,31 @@ describe("Plan Creation activation", () => {
     };
   };
 
+  it("reads the current calendar connection with an empty library", async () => {
+    const test = await previewHarness();
+    const card = test.card();
+    await test.host["plan_creation.discard"]({
+      commandId: "discard",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    });
+    await expect(test.host["plan.list"]({})).resolves.toMatchObject({
+      calendarConnected: false,
+      creation: null,
+      active: null,
+      closed: [],
+    });
+    test.setConnected(true);
+    await expect(test.host["plan.list"]({})).resolves.toMatchObject({
+      calendarConnected: true,
+      creation: null,
+      active: null,
+      closed: [],
+    });
+    test.setConnected(false);
+    expect((await test.host["plan.list"]({})).calendarConnected).toBe(false);
+  });
+
   it("projects pending, running, failed and verified mirror work across connection changes", async () => {
     const test = await review();
     const activated = await test.host["plan_creation.activate"](test.request);
@@ -1140,6 +1165,7 @@ describe("Plan Creation activation", () => {
     expect(await read()).toEqual({ ...calendar, status: "verified", currentThrough: "1998-09-08" });
     test.setConnected(false);
     expect(await read()).toEqual({ ...calendar, status: "verified", currentThrough: "1998-09-08" });
+    expect((await test.host["plan.list"]({})).calendarConnected).toBe(false);
     await test.store.run("DELETE FROM plan_reconciliation_job WHERE id = ?", [job.id]);
     expect(await read()).toEqual({ ...calendar, window: null });
     test.setConnected(true);
@@ -1387,6 +1413,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
     const after = await test.host["plan.list"]({});
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(after).toEqual({
+      calendarConnected: false,
       creation: null,
       changes: [],
       active: {

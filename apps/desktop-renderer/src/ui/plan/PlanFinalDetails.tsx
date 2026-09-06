@@ -21,6 +21,26 @@ const cleanupLabels = {
   none: "Final history",
 } satisfies Record<NonNullable<PlanHistoryResult>["cleanup"], string>;
 
+function calendarLabel(
+  calendar: NonNullable<PlanHistoryResult>["plan"]["calendar"] | undefined,
+  cleanup: NonNullable<PlanHistoryResult>["cleanup"],
+): string {
+  if (calendar === undefined) return cleanupLabels[cleanup];
+  switch (calendar.status) {
+    case "verified":
+      return "Cleanup complete";
+    case "failed":
+      return calendar.error.endsWith("Retry available.")
+        ? "Calendar cleanup failed. Retry available."
+        : "Calendar cleanup failed.";
+    case "pending":
+    case "running":
+      return "Calendar cleanup pending";
+    case "not-connected":
+      return "Calendar cleanup waits for intervals.icu";
+  }
+}
+
 function dateLabel(value: string): string {
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
@@ -105,7 +125,7 @@ export function PlanFinalDetails(props: {
                 ? `${draft.goal.name} · ${dateLabel(draft.goal.date)}`
                 : (draft.goal.outcome ?? "Improve fitness")}
             </Fact>
-            <Fact label="Calendar">{cleanupLabels[cleanup]}</Fact>
+            <Fact label="Calendar">{calendarLabel(plan.calendar, cleanup)}</Fact>
             <Fact label="Plan span">
               {dateLabel(draft.start)} to {dateLabel(draft.end)} · {draft.weeks.length} weeks ·{" "}
               {draft.spanKind}

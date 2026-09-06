@@ -84,6 +84,16 @@ export function PlanCreationDiscardDialog(): ReactElement {
   );
 }
 
+function calendarWindowEnd(now: number): string {
+  const date = new Date(now);
+  date.setDate(date.getDate() + 6);
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
 export function PlanCreationActivateDialog(): ReactElement | null {
   const open = useEnduragentStore((state) => state.chat.planCreationActivateConfirmationOpen);
   const busy = useEnduragentStore((state) => state.chat.planCreationBusy);
@@ -91,7 +101,36 @@ export function PlanCreationActivateDialog(): ReactElement | null {
   const actions = useEnduragentStore((state) => state.chatActions);
   const knowledge = useEnduragentStore((state) => state.chat.planCreationActivePlanKnowledge);
   const activePlanName = knowledge.kind === "active" ? knowledge.name : null;
+  const library = useEnduragentStore((state) => state.planLibrary.value);
+  const libraryStatus = useEnduragentStore((state) => state.planLibrary.status);
+  const libraryActions = useEnduragentStore((state) => state.planLibraryActions);
   const cancelButton = useRef<HTMLButtonElement>(null);
+  const [connection, setConnection] = useState<"checking" | "fresh" | "stale">("checking");
+  useEffect(() => {
+    if (!open) {
+      setConnection("checking");
+      return;
+    }
+    if (libraryActions === null) {
+      setConnection("stale");
+      return;
+    }
+    let cancelled = false;
+    setConnection("checking");
+    libraryActions.refresh().then(
+      () => {
+        if (!cancelled) setConnection("fresh");
+      },
+      () => {
+        if (!cancelled) setConnection("stale");
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [open, libraryActions]);
+  const connected =
+    connection === "fresh" && libraryStatus === "ready" && (library?.calendarConnected ?? false);
   const cancelActivation = useCallback((): void => {
     actions?.cancelPlanCreationActivate();
   }, [actions]);
@@ -120,8 +159,15 @@ export function PlanCreationActivateDialog(): ReactElement | null {
             {activePlanName === null ? "Activate Plan?" : "Close and activate?"}
           </DialogTitle>
           <DialogDescription className="m-0 leading-5">
-            {`${activePlanName === null ? "" : `${activePlanName} closes. `}The new Plan activates now.`}
+            {`${activePlanName === null ? "" : `${activePlanName} closes. Today’s calendar Workout stays. `}The new Plan activates now.`}
           </DialogDescription>
+          {connection === "checking" ? null : (
+            <p className="m-0 text-sm leading-5 text-ink-2">
+              {connected
+                ? `Dated Workouts sync from ${activePlanName === null ? "today" : "tomorrow"} through ${calendarWindowEnd(Date.now())}.`
+                : "Calendar updates wait until intervals.icu is connected."}
+            </p>
+          )}
         </DialogHeader>
         {error === null ? null : (
           <p className="mt-inset mb-0 text-xs text-danger" role="alert">

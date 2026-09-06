@@ -118,7 +118,10 @@ function change(patch: Partial<PlanChangeModel> = {}): PlanChangeModel {
 function setChanges(changes: PlanChangeModel[]): void {
   act(() =>
     useEnduragentStore.setState({
-      planLibrary: { status: "ready", value: { active, creation: null, closed: [], changes } },
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, active, creation: null, closed: [], changes },
+      },
     }),
   );
 }
@@ -146,7 +149,10 @@ beforeEach(() => {
       notice: null,
       focusRequest: null,
     },
-    planLibrary: { status: "ready", value: { active, creation: null, closed: [], changes: [] } },
+    planLibrary: {
+      status: "ready",
+      value: { calendarConnected: false, active, creation: null, closed: [], changes: [] },
+    },
     planLibraryActions: null,
   });
 });
@@ -175,7 +181,7 @@ describe("Plan Change cards", () => {
       },
       planLibrary: {
         status: "ready",
-        value: { active, creation, closed: [], changes: [change()] },
+        value: { calendarConnected: false, active, creation, closed: [], changes: [change()] },
       },
     });
     patchChange({ open: false, planId: null });

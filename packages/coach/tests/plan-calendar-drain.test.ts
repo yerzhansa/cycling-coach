@@ -197,10 +197,46 @@ async function harness() {
     disconnect: () => {
       connected = false;
     },
+    connect: () => {
+      connected = true;
+    },
   };
 }
 
 describe("Plan calendar drain", () => {
+  it("resumes a recently running job only when a kick reclaims it", async () => {
+    const test = await harness();
+    const { planId } = await test.activate();
+    const pending = await test.reconciliation.readLatestJob(planId, "mirror");
+    if (pending === undefined) throw new Error("Expected mirror job");
+    await test.reconciliation.beginAttempt(pending.id, 904_694_400_000);
+
+    await test.drain.kick();
+    expect(await test.reconciliation.readJob(pending.id)).toMatchObject({
+      status: "running",
+      attemptCount: 1,
+      resumedCount: 0,
+    });
+    expect(test.calendar.events).toEqual([]);
+    expect(test.calendar.lists).toEqual([]);
+
+    await test.drain.kick({ reclaimRunning: true });
+    expect(await test.reconciliation.readJob(pending.id)).toMatchObject({
+      status: "verified",
+      attemptCount: 2,
+      resumedCount: 1,
+    });
+    const selected = (await test.plans.readWorkouts(planId)).filter(
+      (workout) =>
+        workout.dateKey >= test.today() && workout.dateKey <= addCivilDays(test.today(), 6),
+    );
+    expect(selected.length).toBeGreaterThan(0);
+    expect(test.calendar.events.map((event) => event.externalId).sort()).toEqual(
+      selected.map((workout) => planMirrorExternalId(planId, workout.id)).sort(),
+    );
+    expect(test.logger.warn).not.toHaveBeenCalled();
+  });
+
   it("mirrors and verifies the seven-day window after activation", async () => {
     const test = await harness();
     const { planId } = await test.activate();
@@ -700,6 +736,29 @@ describe("Plan calendar drain", () => {
     });
     expect(test.calendar.lists).toEqual([]);
     expect(test.calendar.events).toEqual([]);
+  });
+
+  it("remembers a reclaim request made while disconnected until the next connected kick", async () => {
+    const test = await harness();
+    const { planId } = await test.activate();
+    const pending = await test.reconciliation.readLatestJob(planId, "mirror");
+    if (pending === undefined) throw new Error("Expected mirror job");
+    await test.reconciliation.beginAttempt(pending.id, 904_694_400_000);
+    test.disconnect();
+    await test.drain.kick({ reclaimRunning: true });
+    await test.drain.idle();
+    expect(await test.reconciliation.readJob(pending.id)).toMatchObject({
+      status: "running",
+      attemptCount: 1,
+    });
+    test.connect();
+    await test.drain.kick();
+    expect(await test.reconciliation.readJob(pending.id)).toMatchObject({
+      status: "verified",
+      attemptCount: 2,
+      resumedCount: 1,
+    });
+    expect(test.logger.warn).not.toHaveBeenCalled();
   });
 
   it("serializes concurrent kicks into one run and one rerun and waits for both when idle", async () => {

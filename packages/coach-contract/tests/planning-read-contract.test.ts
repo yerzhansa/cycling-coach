@@ -76,11 +76,30 @@ describe("Plan library contract", () => {
   };
 
   it("accepts the empty library and strict empty params", () => {
-    const empty = { creation: null, active: null, closed: [], changes: [] };
+    const empty = {
+      calendarConnected: false,
+      creation: null,
+      active: null,
+      closed: [],
+      changes: [],
+    };
     expect(ListPlansParamsSchema.parse({})).toEqual({});
     expect(ListPlansResultSchema.parse(empty)).toEqual(empty);
     expect(ListPlansParamsSchema.safeParse({ planId: "extra" }).success).toBe(false);
     expect(ListPlansResultSchema.safeParse({ ...empty, extra: true }).success).toBe(false);
+  });
+
+  it("requires an explicit boolean calendar connection independently of library contents", () => {
+    const library = { creation: null, active: null, closed: [], changes: [] };
+    expect(ListPlansResultSchema.safeParse(library).success).toBe(false);
+    expect(ListPlansResultSchema.safeParse({ ...library, calendarConnected: "true" }).success).toBe(
+      false,
+    );
+    for (const calendarConnected of [false, true]) {
+      expect(ListPlansResultSchema.parse({ ...library, calendarConnected }).calendarConnected).toBe(
+        calendarConnected,
+      );
+    }
   });
 
   it.each(["stopped", "completed", "legacy-unclassified"])(
@@ -96,7 +115,13 @@ describe("Plan library contract", () => {
         calendar: { status: "pending", window: null, currentThrough: null, error: null },
         creationId: null,
       };
-      const library = { creation: null, active, closed: [closed], changes: [] };
+      const library = {
+        calendarConnected: false,
+        creation: null,
+        active,
+        closed: [closed],
+        changes: [],
+      };
       expect(ListPlansResultSchema.parse(library)).toEqual(library);
       expect(ListPlansResultSchema.safeParse({ ...library, active: closed }).success).toBe(false);
       expect(ListPlansResultSchema.safeParse({ ...library, closed: [active] }).success).toBe(false);

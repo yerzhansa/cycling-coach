@@ -1738,7 +1738,7 @@ export async function createLocalCoachComposition(
       initialPlanCompletion ??= planLifecycle
         .completeExpired({ todayDateKey: planningDateKey(), nowMs: now() })
         .then(() => {
-          if (!closing) void drain.kick();
+          if (!closing) void drain.kick({ reclaimRunning: true });
         })
         .catch((error: unknown) => {
           initialPlanCompletion = undefined;

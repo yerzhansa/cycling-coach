@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { lazy, Suspense } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlanController } from "../src/plan/controller";
-import { subscribePlanLibraryRefresh } from "../src/plan/library-refresh";
+import { requestPlanCalendarRetry, subscribePlanLibraryRefresh } from "../src/plan/library-refresh";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice";
 import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice";
 import { useEnduragentStore } from "../src/state/store";
@@ -241,12 +241,105 @@ beforeEach(() => {
 });
 
 describe("Plan library", () => {
+  it.each([
+    [
+      {
+        status: "verified",
+        window: { start: "1998-09-07", end: "1998-09-13" },
+        currentThrough: "1998-09-13",
+        error: null,
+      },
+      "Calendar · 7 Sept 1998 to 13 Sept 1998 · Up to date",
+    ],
+    [
+      {
+        status: "pending",
+        window: { start: "1998-09-07", end: "1998-09-13" },
+        currentThrough: null,
+        error: null,
+      },
+      "Calendar · Updating calendar",
+    ],
+    [
+      {
+        status: "running",
+        window: { start: "1998-09-07", end: "1998-09-13" },
+        currentThrough: null,
+        error: null,
+      },
+      "Calendar · Updating calendar",
+    ],
+    [
+      { status: "pending", window: null, currentThrough: null, error: null },
+      "Calendar · Local only",
+    ],
+    [
+      { status: "not-connected", window: null, currentThrough: null, error: null },
+      "Calendar · Connect to mirror Workouts",
+    ],
+    [
+      {
+        status: "failed",
+        window: null,
+        currentThrough: null,
+        error: "Calendar sync failed. Retry available.",
+      },
+      "Calendar sync failed. Retry available.",
+    ],
+    [
+      { status: "failed", window: null, currentThrough: null, error: "Calendar sync failed." },
+      "Calendar sync failed.",
+    ],
+    [
+      {
+        status: "failed",
+        window: null,
+        currentThrough: null,
+        error: "Retry available. No attempts remain.",
+      },
+      "Calendar sync failed.",
+    ],
+  ] satisfies Array<[NonNullable<ListPlansResult["active"]>["calendar"], string]>)(
+    "renders calendar %j",
+    (calendar, copy) => {
+      render(
+        <PlanLibrary
+          library={{
+            calendarConnected: false,
+            creation: null,
+            active: { ...active, calendar },
+            closed,
+            changes: [],
+          }}
+          readDetails={vi.fn()}
+          readFinalDetails={vi.fn()}
+        />,
+      );
+      const card = screen.getByRole("region", { name: "Active Plan" });
+      expect(
+        within(card).getByRole(calendar.status === "failed" ? "alert" : "status"),
+      ).toHaveTextContent(copy);
+      const retry = within(card).queryByRole("button", { name: "Retry calendar" });
+      if (calendar.status === "failed" && calendar.error.endsWith("Retry available.")) {
+        expect(retry).toBeVisible();
+        fireEvent.click(within(card).getByRole("button", { name: "Retry calendar" }));
+        expect(useEnduragentStore.getState().planLibraryActions?.refresh).toHaveBeenCalledOnce();
+      } else expect(retry).toBeNull();
+      for (const card of screen.getAllByRole("region", { name: "Closed Plan" })) {
+        expect(card).not.toHaveTextContent("Calendar");
+      }
+    },
+  );
+
   it("shows the stale creation notice on the library", () => {
     const notice =
       "This creation is no longer unfinished. Open the Plan library for its current result.";
     useEnduragentStore.setState({
       chat: { ...EMPTY_CHAT_SURFACE, notice },
-      planLibrary: { status: "ready", value: { creation: null, active, closed, changes: [] } },
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation: null, active, closed, changes: [] },
+      },
     });
     render(<PlanView />);
     expect(screen.getByText(notice, { exact: true })).toBeVisible();
@@ -258,6 +351,7 @@ describe("Plan library", () => {
     "renders creation=$hasCreation active=$hasActive closed=$hasClosed in library order",
     ({ hasCreation, hasActive, hasClosed }) => {
       const library: ListPlansResult = {
+        calendarConnected: false,
         creation: hasCreation ? creation : null,
         active: hasActive ? active : null,
         closed: hasClosed ? closed : [],
@@ -332,7 +426,7 @@ describe("Plan library", () => {
     render(
       <PlanLibrary
         readFinalDetails={vi.fn()}
-        library={{ creation, active, closed, changes: [] }}
+        library={{ calendarConnected: false, creation, active, closed, changes: [] }}
         readDetails={readDetails}
       />,
     );
@@ -357,7 +451,7 @@ describe("Plan library", () => {
     const view = render(
       <PlanLibrary
         readFinalDetails={vi.fn()}
-        library={{ creation, active: null, closed: [], changes: [] }}
+        library={{ calendarConnected: false, creation, active: null, closed: [], changes: [] }}
         readDetails={vi.fn()}
       />,
     );
@@ -366,6 +460,7 @@ describe("Plan library", () => {
       <PlanLibrary
         readFinalDetails={vi.fn()}
         library={{
+          calendarConnected: false,
           creation: { ...creation, draft: planCreationDraft() },
           active: null,
           closed: [],
@@ -380,7 +475,13 @@ describe("Plan library", () => {
 
   it("preserves readable cards with an explicit retry on failure", () => {
     const refresh = vi.fn();
-    const library: ListPlansResult = { creation: null, active, closed, changes: [] };
+    const library: ListPlansResult = {
+      calendarConnected: false,
+      creation: null,
+      active,
+      closed,
+      changes: [],
+    };
     useEnduragentStore.setState({
       planLibrary: { status: "ready", value: library },
       planningReadActions: {
@@ -408,6 +509,7 @@ describe("Plan library", () => {
       store.setState({ activeView: entry === "relaunch" ? "plan" : "chat" });
       const listPlans = vi.fn(
         async (): Promise<ListPlansResult> => ({
+          calendarConnected: false,
           creation,
           active,
           closed,
@@ -495,10 +597,356 @@ describe("Plan library refresh subscription", () => {
     return { refresh, unsubscribe };
   }
 
+  it("polls in-progress calendar work every four seconds and stops after twenty refreshes", async () => {
+    vi.useFakeTimers();
+    useEnduragentStore.setState({
+      activeView: "plan",
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation, active, closed, changes: [] },
+      },
+    });
+    const refresh = vi.fn(async () => {
+      useEnduragentStore.getState().setPlanLibrary({
+        status: "ready",
+        value: {
+          calendarConnected: false,
+          creation,
+          active: { ...active, calendar: { ...active.calendar, status: "running" } },
+          closed,
+          changes: [],
+        },
+      });
+    });
+    const unsubscribe = subscribePlanLibraryRefresh(
+      { refresh, start: refresh, dispose: vi.fn(), openFromChat: vi.fn(), backToChat: vi.fn() },
+      { setTimeout, clearTimeout },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(refresh).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refresh).toHaveBeenCalledExactlyOnceWith(true, expect.any(Function));
+      await vi.advanceTimersByTimeAsync(4_000 * 30);
+      expect(refresh).toHaveBeenCalledTimes(20);
+      expect(vi.getTimerCount()).toBe(0);
+      useEnduragentStore.getState().setActiveView("chat");
+      useEnduragentStore.getState().setActiveView("plan");
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(refresh).toHaveBeenCalledTimes(22);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["leave", "settle", "unsubscribe"])("cancels calendar polling on %s", async (end) => {
+    vi.useFakeTimers();
+    useEnduragentStore.setState({
+      activeView: "plan",
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation, active, closed, changes: [] },
+      },
+    });
+    const { refresh, unsubscribe } = watchRefresh();
+    try {
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(refresh).toHaveBeenCalledOnce();
+      if (end === "leave") useEnduragentStore.getState().setActiveView("chat");
+      else if (end === "settle")
+        useEnduragentStore.getState().setPlanLibrary({
+          status: "ready",
+          value: {
+            calendarConnected: false,
+            creation,
+            active: {
+              ...active,
+              calendar: {
+                status: "verified",
+                window: null,
+                currentThrough: "1998-09-13",
+                error: null,
+              },
+            },
+            closed,
+            changes: [],
+          },
+        });
+      else unsubscribe();
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it("polls failed retry snapshots through running to verified", async () => {
+    vi.useFakeTimers();
+    const failed: ListPlansResult = {
+      calendarConnected: true,
+      creation: null,
+      closed: [],
+      changes: [],
+      active: {
+        ...active,
+        calendar: {
+          status: "failed",
+          window: null,
+          currentThrough: null,
+          error: "Retry available.",
+        },
+      },
+    };
+    const running: ListPlansResult = {
+      ...failed,
+      active: { ...active, calendar: { ...active.calendar, status: "running" } },
+    };
+    const verified: ListPlansResult = {
+      ...failed,
+      active: {
+        ...active,
+        calendar: { status: "verified", window: null, currentThrough: "1998-09-13", error: null },
+      },
+    };
+    useEnduragentStore.setState({
+      activeView: "plan",
+      planLibrary: { status: "ready", value: failed },
+    });
+    const listPlans = vi
+      .fn<() => Promise<ListPlansResult>>()
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(running)
+      .mockResolvedValue(verified);
+    const controller = createPlanController({
+      listPlans,
+      read: async () => ({
+        schemaVersion: 1,
+        status: "no-plan",
+        asOfDateKey: 19980907,
+        plan: null,
+      }),
+      renderLibrary: (value) => useEnduragentStore.getState().setPlanLibrary(value),
+      render: vi.fn(),
+      navigate: vi.fn(),
+      focus: vi.fn(),
+    });
+    const actions = useEnduragentStore.getState().planLibraryActions;
+    if (!actions) throw new Error("Missing library actions");
+    useEnduragentStore.setState({
+      planLibraryActions: { ...actions, refresh: () => controller.refresh() },
+    });
+    const unsubscribe = subscribePlanLibraryRefresh(controller);
+    try {
+      render(<PlanLibrary library={failed} readDetails={vi.fn()} readFinalDetails={vi.fn()} />);
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: "Retry calendar" })),
+      );
+      expect(useEnduragentStore.getState().planLibrary.value?.active?.calendar.status).toBe(
+        "failed",
+      );
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(useEnduragentStore.getState().planLibrary.value?.active?.calendar.status).toBe(
+        "running",
+      );
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(useEnduragentStore.getState().planLibrary.value?.active?.calendar.status).toBe(
+        "verified",
+      );
+      await vi.advanceTimersByTimeAsync(80_000);
+      expect(listPlans).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      unsubscribe();
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps polling a retryable failure that follows a running snapshot until it verifies", async () => {
+    vi.useFakeTimers();
+    const running: ListPlansResult = {
+      calendarConnected: true,
+      creation: null,
+      closed: [],
+      changes: [],
+      active: {
+        ...active,
+        calendar: { status: "running", window: null, currentThrough: null, error: null },
+      },
+    };
+    const failed: ListPlansResult = {
+      ...running,
+      active: {
+        ...active,
+        calendar: {
+          status: "failed",
+          window: null,
+          currentThrough: null,
+          error: "Calendar sync failed. Retry available.",
+        },
+      },
+    };
+    const verified: ListPlansResult = {
+      ...running,
+      active: {
+        ...active,
+        calendar: { status: "verified", window: null, currentThrough: "1998-09-13", error: null },
+      },
+    };
+    useEnduragentStore.setState({
+      activeView: "plan",
+      planLibrary: { status: "ready", value: running },
+    });
+    const listPlans = vi
+      .fn<() => Promise<ListPlansResult>>()
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValue(verified);
+    const controller = createPlanController({
+      listPlans,
+      read: async () => ({
+        schemaVersion: 1,
+        status: "no-plan",
+        asOfDateKey: 19980907,
+        plan: null,
+      }),
+      renderLibrary: (value) => useEnduragentStore.getState().setPlanLibrary(value),
+      render: vi.fn(),
+      navigate: vi.fn(),
+      focus: vi.fn(),
+    });
+    const unsubscribe = subscribePlanLibraryRefresh(controller);
+    try {
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(useEnduragentStore.getState().planLibrary.value?.active?.calendar.status).toBe(
+        "failed",
+      );
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(useEnduragentStore.getState().planLibrary.value?.active?.calendar.status).toBe(
+        "verified",
+      );
+      await vi.advanceTimersByTimeAsync(80_000);
+      expect(listPlans).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      unsubscribe();
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("limits a retry that keeps returning failed to twenty polling refreshes", async () => {
+    vi.useFakeTimers();
+    useEnduragentStore.setState({
+      activeView: "plan",
+      planLibrary: {
+        status: "ready",
+        value: {
+          calendarConnected: false,
+          creation: null,
+          closed: [],
+          changes: [],
+          active: {
+            ...active,
+            calendar: {
+              status: "failed",
+              window: null,
+              currentThrough: null,
+              error: "Retry available.",
+            },
+          },
+        },
+      },
+    });
+    const { refresh, unsubscribe } = watchRefresh();
+    try {
+      requestPlanCalendarRetry(active.planId);
+      await vi.advanceTimersByTimeAsync(4_000 * 30);
+      expect(refresh).toHaveBeenCalledTimes(20);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      unsubscribe();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["leave", "settle", "unsubscribe", "dispose"])(
+    "cancels a queued polling request on %s",
+    async (end) => {
+      vi.useFakeTimers();
+      const library: ListPlansResult = {
+        calendarConnected: false,
+        creation: null,
+        active,
+        closed: [],
+        changes: [],
+      };
+      useEnduragentStore.setState({
+        activeView: "plan",
+        planLibrary: { status: "ready", value: library },
+      });
+      let resolveLibrary: (value: ListPlansResult) => void = () => {};
+      const delayed = new Promise<ListPlansResult>((resolve) => {
+        resolveLibrary = resolve;
+      });
+      const listPlans = vi.fn(() => delayed);
+      const controller = createPlanController({
+        listPlans,
+        read: async () => ({
+          schemaVersion: 1,
+          status: "no-plan",
+          asOfDateKey: 19980907,
+          plan: null,
+        }),
+        renderLibrary: (value) => useEnduragentStore.getState().setPlanLibrary(value),
+        render: vi.fn(),
+        navigate: vi.fn(),
+        focus: vi.fn(),
+      });
+      const unsubscribe = subscribePlanLibraryRefresh(controller);
+      const initial = controller.refresh();
+      try {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(listPlans).toHaveBeenCalledOnce();
+        if (end === "leave") useEnduragentStore.getState().setActiveView("chat");
+        if (end === "unsubscribe") unsubscribe();
+        if (end === "dispose") controller.dispose();
+        resolveLibrary(
+          end === "settle"
+            ? {
+                ...library,
+                active: {
+                  ...active,
+                  calendar: {
+                    status: "verified",
+                    window: null,
+                    currentThrough: "1998-09-13",
+                    error: null,
+                  },
+                },
+              }
+            : library,
+        );
+        await initial;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(listPlans).toHaveBeenCalledOnce();
+      } finally {
+        unsubscribe();
+        controller.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("does not reread when Chat hydrates the creation already in the library", () => {
     useEnduragentStore.setState({
       chat: { ...EMPTY_CHAT_SURFACE, planCreation: null },
-      planLibrary: { status: "ready", value: { creation, active, closed, changes: [] } },
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation, active, closed, changes: [] },
+      },
     });
     const { refresh, unsubscribe } = watchRefresh();
     try {
@@ -536,7 +984,10 @@ describe("Plan library refresh subscription", () => {
   ])("refreshes once when creation identity changes to $creationId version $version", (next) => {
     useEnduragentStore.setState({
       chat: { ...EMPTY_CHAT_SURFACE, planCreation: creation, planCreationLoaded: true },
-      planLibrary: { status: "ready", value: { creation, active, closed, changes: [] } },
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation, active, closed, changes: [] },
+      },
     });
     const { refresh, unsubscribe } = watchRefresh();
     try {
@@ -552,7 +1003,10 @@ describe("Plan library refresh subscription", () => {
   it("ignores active Plan hydration and clones but refreshes once for a different Plan id", () => {
     const model = planReadModel({ lifecycle: "active", planId: active.planId });
     useEnduragentStore.setState({
-      planLibrary: { status: "ready", value: { creation, active, closed, changes: [] } },
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation, active, closed, changes: [] },
+      },
     });
     const { refresh, unsubscribe } = watchRefresh();
     try {
@@ -618,13 +1072,13 @@ describe("Plan library refresh subscription", () => {
         },
       });
       expect(refresh).toHaveBeenCalledExactlyOnceWith(false);
-      result.resolve({ creation, active, closed, changes: [] });
+      result.resolve({ calendarConnected: false, creation, active, closed, changes: [] });
       await started;
       await Promise.all(refresh.mock.results.map((call) => call.value));
       expect(listPlans).toHaveBeenCalledOnce();
       expect(store.getState().planLibrary).toEqual({
         status: "ready",
-        value: { creation, active, closed, changes: [] },
+        value: { calendarConnected: false, creation, active, closed, changes: [] },
       });
     } finally {
       unsubscribe();
@@ -669,7 +1123,13 @@ describe("Plan creation title", () => {
       render(
         <PlanLibrary
           readFinalDetails={vi.fn()}
-          library={{ creation: answered, active: null, closed: [], changes: [] }}
+          library={{
+            calendarConnected: false,
+            creation: answered,
+            active: null,
+            closed: [],
+            changes: [],
+          }}
           readDetails={vi.fn()}
         />,
       );
@@ -712,7 +1172,10 @@ it("keeps Plan history below the library while a creation occupies the header", 
   useEnduragentStore.setState({
     plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state: model }, lastReady: model },
     planActions,
-    planLibrary: { status: "ready", value: { creation, active, closed: [], changes: [] } },
+    planLibrary: {
+      status: "ready",
+      value: { calendarConnected: false, creation, active, closed: [], changes: [] },
+    },
   });
   render(<PlanView />);
   const library = screen.getByRole("region", { name: "Plan library" });
@@ -729,7 +1192,7 @@ describe("Stop Plan", () => {
     const readFinalDetails = vi.fn();
     render(
       <PlanLibrary
-        library={{ creation: null, active, closed, changes: [] }}
+        library={{ calendarConnected: false, creation: null, active, closed, changes: [] }}
         readDetails={vi.fn()}
         readFinalDetails={readFinalDetails}
       />,
@@ -851,6 +1314,7 @@ describe("Stop Plan", () => {
           planLibrary: {
             status: "ready",
             value: {
+              calendarConnected: false,
               creation: null,
               active: null,
               closed: [{ ...history.plan, status: "closed" }],
@@ -860,7 +1324,10 @@ describe("Stop Plan", () => {
         });
       });
       useEnduragentStore.setState({
-        planLibrary: { status: "ready", value: { creation: null, active, closed, changes: [] } },
+        planLibrary: {
+          status: "ready",
+          value: { calendarConnected: false, creation: null, active, closed, changes: [] },
+        },
       });
       render(<PlanView />);
       fireEvent.click(screen.getByRole("button", { name: "Stop Plan" }));
@@ -894,7 +1361,7 @@ describe("Stop Plan", () => {
     const listPlans = vi
       .fn()
       .mockReturnValueOnce(initial)
-      .mockResolvedValue({ creation: null, active: null, closed });
+      .mockResolvedValue({ calendarConnected: false, creation: null, active: null, closed });
     const controller = createPlanController({
       listPlans,
       read: async () => ({
@@ -912,7 +1379,7 @@ describe("Stop Plan", () => {
     try {
       const started = controller.start();
       store.getState().setActiveView("plan");
-      finishRead({ creation: null, active, closed, changes: [] });
+      finishRead({ calendarConnected: false, creation: null, active, closed, changes: [] });
       await started;
       await vi.waitFor(() => expect(listPlans).toHaveBeenCalledTimes(2));
       expect(store.getState().planLibrary.value?.active).toBeNull();
