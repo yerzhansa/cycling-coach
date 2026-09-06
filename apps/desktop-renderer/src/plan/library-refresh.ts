@@ -21,13 +21,11 @@ export function subscribePlanLibraryRefresh(controller: PlanController): () => v
         creation?.version !== library.creation?.version);
     const activePlanNeedsRefresh =
       activePlanId !== previousActivePlanId && activePlanId !== (library?.active?.planId ?? null);
-    if (
-      (state.activeView === "plan" && previousState.activeView !== "plan") ||
-      creationNeedsRefresh ||
-      activePlanNeedsRefresh
-    )
+    const opened = state.activeView === "plan" && previousState.activeView !== "plan";
+    if (opened || creationNeedsRefresh || activePlanNeedsRefresh)
       void controller.refresh(
-        (creationNeedsRefresh && previousState.chat.planCreationLoaded) ||
+        opened ||
+          (creationNeedsRefresh && previousState.chat.planCreationLoaded) ||
           (activePlanNeedsRefresh && previousPlan !== null),
       );
   });

@@ -31,6 +31,7 @@ import {
   type PlanFtpProjection,
   type PlanFtpSourceValue,
   type PlanHistoryEntry,
+  type PlanHistoryResult,
   type PlanPlanningRequestContext,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
@@ -54,6 +55,7 @@ import { CoachDecisionPanel } from "../chat/CoachDecisionPanel";
 import { Composer, type ComposerHandle } from "../chat/Composer";
 import { ConversationTranscript } from "../chat/Transcript";
 import { PlanLibrary } from "./PlanLibrary";
+import { PlanFinalDetails } from "./PlanFinalDetails";
 import { Page } from "../shared/Page";
 import { WorkoutArchiveExportControl } from "../training/TrainingExportControls";
 
@@ -4584,8 +4586,40 @@ function ReadyProjection(): ReactElement {
 }
 
 export function PlanView(): ReactElement {
+  const [finalDetails, setFinalDetails] = useState<
+    | { status: "library" }
+    | { status: "loading"; planId: string; justClosed: boolean }
+    | { status: "ready"; history: PlanHistoryResult; justClosed: boolean }
+    | { status: "unavailable"; planId: string; justClosed: boolean }
+  >({ status: "library" });
+  const historyRequest = useRef(0);
+  useEffect(
+    () => () => {
+      historyRequest.current += 1;
+    },
+    [],
+  );
   const library = useEnduragentStore((state) => state.planLibrary);
   const libraryActions = useEnduragentStore((state) => state.planLibraryActions);
+  const readFinalDetails = (planId: string, justClosed = false): void => {
+    if (libraryActions === null) return;
+    const request = ++historyRequest.current;
+    setFinalDetails({ status: "loading", planId, justClosed });
+    void libraryActions.readPlanHistory(planId).then(
+      (history) => {
+        if (request === historyRequest.current)
+          setFinalDetails({ status: "ready", history, justClosed });
+      },
+      () => {
+        if (request === historyRequest.current)
+          setFinalDetails({ status: "unavailable", planId, justClosed });
+      },
+    );
+  };
+  const backToLibrary = (): void => {
+    historyRequest.current += 1;
+    setFinalDetails({ status: "library" });
+  };
   const planningActions = useEnduragentStore((state) => state.planningReadActions);
   const creationFocus = useEnduragentStore((state) => state.chat.planCreationFocusRequest);
   const details = useRef<HTMLDivElement>(null);
@@ -4626,9 +4660,59 @@ export function PlanView(): ReactElement {
           : undefined;
 
   useEffect(() => {
-    if (returnFocusId === null) return;
+    if (returnFocusId === null || finalDetails.status !== "library") return;
     requestAnimationFrame(() => document.getElementById(returnFocusId)?.focus());
-  }, [model?.scenarioId, returnFocusId]);
+  }, [model?.scenarioId, returnFocusId, finalDetails.status]);
+
+  if (finalDetails.status !== "library") {
+    const notice = finalDetails.justClosed
+      ? finalDetails.status === "ready" && finalDetails.history?.cleanup === "complete"
+        ? "Plan closed. Cleanup complete."
+        : "Plan closed. Calendar cleanup pending."
+      : null;
+    return (
+      <Page title="Plan" className="plan-view" busy={finalDetails.status === "loading"}>
+        {finalDetails.status === "ready" && finalDetails.history !== null ? (
+          <PlanFinalDetails
+            history={finalDetails.history}
+            notice={notice}
+            backToLibrary={backToLibrary}
+          />
+        ) : (
+          <div className="grid gap-inset">
+            {notice === null ? null : (
+              <p role="status" className="m-0 text-sm text-ink-2">
+                {notice}
+              </p>
+            )}
+            {finalDetails.status === "loading" ? (
+              <p role="status" className="m-0 text-sm text-ink-2">
+                Loading final Plan details…
+              </p>
+            ) : null}
+            {finalDetails.status === "unavailable" ? (
+              <>
+                <p role="alert" className="m-0 text-sm text-danger">
+                  Final Plan details could not load. Try again.
+                </p>
+                <Button
+                  variant="outline"
+                  onClick={() => readFinalDetails(finalDetails.planId, finalDetails.justClosed)}
+                >
+                  Try again
+                </Button>
+              </>
+            ) : null}
+            <div>
+              <Button variant="outline" onClick={backToLibrary}>
+                Back to library
+              </Button>
+            </div>
+          </div>
+        )}
+      </Page>
+    );
+  }
 
   return (
     <Page
@@ -4688,6 +4772,7 @@ export function PlanView(): ReactElement {
         {library.value !== null && !coachWorkspace && !historyPage ? (
           <PlanLibrary
             library={library.value}
+            readFinalDetails={readFinalDetails}
             readDetails={() => {
               details.current?.scrollIntoView({ block: "start", behavior: "instant" });
               details.current?.focus({ preventScroll: true });

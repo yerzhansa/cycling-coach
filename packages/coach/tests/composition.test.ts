@@ -1361,6 +1361,53 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it.each([false, true])(
+    "retries Plan completion after initial refresh fails with deferInitialRefresh=%s",
+    async (deferInitialRefresh) => {
+      const home = await freshHome();
+      const context = fakeContext(home);
+      const trace: string[] = [];
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(trace),
+          createRuntime: () => runtime(trace),
+          createBackend: () => backend(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+        },
+        context,
+        { apiKey: "", athleteId: "" },
+        undefined,
+        { ENDURAGENT_HOME: home.root },
+        deferInitialRefresh,
+      );
+      const failure = new Error("synthetic Plan completion storage failure");
+      const read = vi.spyOn(context.store, "get").mockRejectedValueOnce(failure);
+      try {
+        await expect(lifecycle.startInitialRefresh()).rejects.toBe(failure);
+        expect(read).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining("WHERE planning_plan.status='active'"),
+        );
+        const windowsAfterFailure = trace.filter((entry) => entry === "run-window").length;
+
+        await expect(lifecycle.startInitialRefresh()).resolves.toBeUndefined();
+        expect(
+          read.mock.calls.filter(([sql]) => sql.includes("WHERE planning_plan.status='active'")),
+        ).toHaveLength(2);
+        expect(trace.filter((entry) => entry === "run-window")).toHaveLength(
+          windowsAfterFailure + (deferInitialRefresh ? 1 : 0),
+        );
+      } finally {
+        await lifecycle.close();
+      }
+    },
+  );
+
   it("defers the daemon refresh, tracks one start, and schedules retries after capture failure", async () => {
     const home = await freshHome();
     const failure = new Error("synthetic persistence failure");

@@ -14,7 +14,12 @@ import { createArchiveViewAdapter } from "./state/adapters/archive";
 import { createChatViewAdapter } from "./state/adapters/chat";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding";
-import { createPlanViewAdapter, listPlans } from "./state/adapters/plan";
+import {
+  closePlan,
+  createPlanViewAdapter,
+  listPlans,
+  readPlanHistory,
+} from "./state/adapters/plan";
 import { createRideImportAdapter } from "./state/adapters/ride-import";
 import {
   createAthleteSettingsAdapter,
@@ -148,7 +153,17 @@ export function bootRenderer(): Disposer {
   });
   const planController = createPlanController({
     listPlans: () => listPlans(clients),
-    renderLibrary: (next) => store.getState().setPlanLibrary(next),
+    renderLibrary: (next) => {
+      const previous = store.getState().planLibrary;
+      store.getState().setPlanLibrary(next);
+      if (
+        previous.value !== null &&
+        next.status === "ready" &&
+        (previous.value.active?.planId ?? null) !== (next.value.active?.planId ?? null)
+      ) {
+        planAdapter.reload();
+      }
+    },
     read: () => window.enduragentAuth.getPlanningReadModel(),
     render: (next) => store.getState().setPlanSurface(next),
     navigate: (view) => store.getState().setActiveView(view),
@@ -229,6 +244,12 @@ export function bootRenderer(): Disposer {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
   });
   store.getState().bindPlanLibraryActions({
+    closePlan: (input) => closePlan(clients, input),
+    readPlanHistory: (planId) => readPlanHistory(clients, planId),
+    refresh: () => {
+      planAdapter.reload();
+      return planController.refresh(true);
+    },
     startCreation: () => {
       chatController.resumeCreation(store.getState().planLibrary.value?.creation ?? null);
       store.getState().setActiveView("chat");
