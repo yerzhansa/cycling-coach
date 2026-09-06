@@ -157,7 +157,7 @@ export function bootRenderer(): Disposer {
       const previous = store.getState().planLibrary;
       store.getState().setPlanLibrary(next);
       if (
-        previous.status === "ready" &&
+        previous.value !== null &&
         next.status === "ready" &&
         (previous.value.active?.planId ?? null) !== (next.value.active?.planId ?? null)
       ) {
