@@ -389,9 +389,16 @@ describe("Plan Change repository", () => {
     expect(await store.get("SELECT * FROM plan_workout WHERE id=?", [id("31")])).toEqual(before);
   });
 
-  it.each(["changed", "removed"] as const)(
-    "rejects a drifted %s Draft Workout before materialization without any writes",
-    async (operation) => {
+  it.each(
+    (["changed", "removed"] as const).flatMap((operation) =>
+      (["structure", "name", "duration", "name-and-duration", "date"] as const).map((field) => ({
+        operation,
+        field,
+      })),
+    ),
+  )(
+    "rejects $field drift on a $operation Draft Workout before materialization without any writes",
+    async ({ operation, field }) => {
       await activate();
       const changedWorkout = { ...removedWorkout, minutes: 90 };
       await repository.preview({
@@ -418,10 +425,29 @@ describe("Plan Change repository", () => {
                 },
         }),
       });
-      await store.run("UPDATE plan_workout SET structure_json=? WHERE id=?", [
-        JSON.stringify({ ...removedWorkout, minutes: 100 }),
-        id("32"),
-      ]);
+      const edits = {
+        structure: {
+          sql: "UPDATE plan_workout SET structure_json=? WHERE id=?",
+          values: [JSON.stringify({ ...removedWorkout, minutes: 100 }), id("32")],
+        },
+        name: {
+          sql: "UPDATE plan_workout SET name=? WHERE id=?",
+          values: ["Athlete accepted edit", id("32")],
+        },
+        duration: {
+          sql: "UPDATE plan_workout SET duration_s=? WHERE id=?",
+          values: [5400, id("32")],
+        },
+        "name-and-duration": {
+          sql: "UPDATE plan_workout SET name=?,duration_s=? WHERE id=?",
+          values: ["Athlete accepted edit", 5400, id("32")],
+        },
+        date: {
+          sql: "UPDATE plan_workout SET date_key=? WHERE id=?",
+          values: [19980103, id("32")],
+        },
+      };
+      await store.run(edits[field].sql, edits[field].values);
       const before = await dumpStore(store);
       const materialize = vi.fn(applyInput().materialize);
       await expect(repository.apply({ ...applyInput(), materialize })).resolves.toEqual({

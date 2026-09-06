@@ -233,6 +233,40 @@ describe("Plan Change operations", () => {
     ).toHaveLength(2);
   });
 
+  it("preserves provider notes on retained Workouts while applying affected Workouts", async () => {
+    const test = await activatedPlan();
+    const preview = await test.preview({ kind: "weekday-unavailable", day: 4 });
+    const diffIds = new Set(preview.change.diff.map((row) => row.workoutId));
+    const retained = test.draft.weeks
+      .flatMap((week) => week.workouts)
+      .find((workout) => workout.date !== null && !diffIds.has(workout.id));
+    if (retained === undefined) throw new Error("Expected a retained Workout");
+    await test.store.run(
+      "UPDATE plan_workout SET structure_json=? WHERE plan_id=? AND json_extract(structure_json,'$.id')=?",
+      [canonicalJson({ ...retained, description: "Provider notes" }), test.planId, retained.id],
+    );
+    const before = await test.workouts();
+    const affected = before.filter((row) =>
+      preview.change.diff.some((change) => row.structure_json === canonicalJson(change.before)),
+    );
+    expect(affected).toHaveLength(diffIds.size);
+    expect(affected.length).toBeGreaterThan(0);
+    expect(preview.change.diff.every((row) => row.after === null)).toBe(true);
+    await expect(
+      test.changes["plan_change.apply"]({
+        commandId: "apply-provider-notes",
+        planId: test.planId,
+        changeId: preview.change.changeId,
+        expectedVersion: 1,
+        decision: "apply",
+      }),
+    ).resolves.toMatchObject({ status: "applied", revisionNumber: 2, version: 2 });
+    const after = await test.workouts();
+    expect(JSON.stringify(after)).toBe(
+      JSON.stringify(before.filter((row) => !affected.some((changed) => changed.id === row.id))),
+    );
+  });
+
   it("materializes changed durations and canonical Draft structures", async () => {
     const test = await activatedPlan();
     const preview = await test.preview();

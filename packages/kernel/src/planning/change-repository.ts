@@ -3,6 +3,7 @@ import { canonicalJson } from "../archive/canonical.js";
 import { createPlanningCommandLedger, fail, PlanCreationStoreError } from "./command-ledger.js";
 import type { PlanCreationCommandStamp, PlanningCommandName } from "./command-ledger.js";
 import type { PlanCreationStore } from "./creation-repository.js";
+import { dateKeyFromText } from "./date-keys.js";
 import { createPlanRepository, validatePlanWorkoutRecord } from "./repository.js";
 import type { PlanWorkoutRecord } from "./repository.js";
 
@@ -132,12 +133,22 @@ const ChangeCommandRowSchema = z.object({
 const SnapshotSchema = z.object({
   weeks: z.array(
     z.object({
-      workouts: z.array(z.object({ id: z.string(), date: z.string().nullable() }).passthrough()),
+      workouts: z.array(
+        z
+          .object({
+            id: z.string(),
+            date: z.string().nullable(),
+            name: z.string(),
+            minutes: z.number(),
+          })
+          .passthrough(),
+      ),
     }),
   ),
 });
+const DraftIdSchema = z.object({ id: z.string() }).passthrough();
 const draftId = (workout: PlanWorkoutRecord) =>
-  z.object({ id: z.string() }).parse(JSON.parse(workout.structureJson)).id;
+  DraftIdSchema.parse(JSON.parse(workout.structureJson)).id;
 
 export function createPlanChangeRepository(
   store: PlanCreationStore,
@@ -232,7 +243,11 @@ export function createPlanChangeRepository(
       if (
         row === undefined
           ? workout.date !== null
-          : canonicalJson(JSON.parse(row.structureJson)) !== canonicalJson(workout)
+          : workout.date === null ||
+            row.name !== workout.name ||
+            row.durationS !== workout.minutes * 60 ||
+            row.dateKey !== dateKeyFromText(workout.date) ||
+            canonicalJson(JSON.parse(row.structureJson)) !== canonicalJson(workout)
       )
         return false;
     }

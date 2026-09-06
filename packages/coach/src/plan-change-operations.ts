@@ -3,7 +3,6 @@ import {
   PlanChangeApplyResultSchema,
   PlanChangePreviewRpcParamsSchema,
   PlanChangePreviewResultSchema,
-  PlanChangeWorkoutSchema,
   PlanCreationDraftSchema,
   type PlanChangeIntent,
   type PlanChangeOperations,
@@ -18,6 +17,9 @@ import {
 import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import { applyScheduleIntent } from "@enduragent/sport-cycling";
+import { z } from "zod";
+
+const DraftIdSchema = z.object({ id: z.string() }).passthrough();
 
 const titles = {
   "weekday-duration": "Limit weekday duration",
@@ -114,7 +116,7 @@ export function createPlanChangeOperations(input: {
           const draft = PlanCreationDraftSchema.parse(JSON.parse(snapshotJson));
           const currentByDraftId = new Map(
             currentWorkouts.map((workout) => [
-              PlanChangeWorkoutSchema.parse(JSON.parse(workout.structureJson)).id,
+              DraftIdSchema.parse(JSON.parse(workout.structureJson)).id,
               workout,
             ]),
           );
@@ -147,7 +149,7 @@ export function createPlanChangeOperations(input: {
               .filter(
                 (workout) =>
                   diffIds.has(
-                    PlanChangeWorkoutSchema.parse(JSON.parse(workout.structureJson)).id,
+                    DraftIdSchema.parse(JSON.parse(workout.structureJson)).id,
                   ) && !retained.has(workout.id),
               )
               .map((workout) => workout.id),
