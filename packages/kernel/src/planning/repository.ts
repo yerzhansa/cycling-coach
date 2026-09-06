@@ -48,6 +48,7 @@ export interface PlanWorkoutRecord {
 
 export interface PlanSummaryRecord {
   readonly planId: string;
+  readonly version: number;
   readonly name: string;
   readonly startDateKey: number;
   readonly totalWeeks: number;
@@ -302,6 +303,7 @@ function planSummaryFromRow(row: Row): PlanSummaryRecord {
   }
   return Object.freeze({
     planId: text(row, "plan_id"),
+    version: integer(row, "version"),
     name: text(row, "name"),
     startDateKey: integer(row, "start_date_key"),
     totalWeeks: integer(row, "total_weeks"),
@@ -416,7 +418,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
     async listPlans() {
       const rows = await store.all(
-        `SELECT planning_plan.plan_id, plan.name, plan.start_date_key, plan.total_weeks,
+        `SELECT planning_plan.plan_id, planning_plan.version, plan.name, plan.start_date_key, plan.total_weeks,
                 planning_plan.status, planning_plan.close_reason, planning_plan.closed_at_ms,
                 planning_plan.activated_at_ms, plan_revision.source_id AS creation_id
          FROM planning_plan

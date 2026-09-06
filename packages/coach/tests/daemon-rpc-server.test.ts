@@ -210,6 +210,8 @@ const operations: CoachOperations & PlanningReadOperations & PlanCreationOperati
     nextCursor: null,
   }),
   "plan.list": async () => ({ creation: null, active: null, closed: [] }),
+  "plan.close": async () => ({ status: "rejected", reason: "no-active-plan" }),
+  "plan.history": async () => null,
   getPlanningReadModel: async () => ({
     schemaVersion: 1,
     status: "no-plan",
@@ -853,6 +855,14 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
           calls.push("plan.list");
           return { creation: null, active: null, closed: [] };
         },
+        "plan.close": async () => {
+          calls.push("plan.close");
+          return { status: "rejected", reason: "no-active-plan" };
+        },
+        "plan.history": async () => {
+          calls.push("plan.history");
+          return null;
+        },
         getPlanningReadModel: async () => {
           calls.push("getPlanningReadModel");
           return { schemaVersion: 1, status: "no-plan", asOfDateKey: 20260826, plan: null };
@@ -945,6 +955,12 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       { id: 41, method: "getPlanningReadModel", params: {} },
       { id: 42, method: "plan.list", params: {} },
       {
+        id: 43,
+        method: "plan.close",
+        params: { commandId: "close-1", planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV", expectedVersion: 1 },
+      },
+      { id: 44, method: "plan.history", params: { planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV" } },
+      {
         id: 5,
         method: "getActivityAnalysis",
         params: { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
@@ -982,6 +998,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "getAthleteState",
       "getPlanningReadModel",
       "plan.list",
+      "plan.close",
+      "plan.history",
       "getActivityAnalysis",
       "exportTrainingFile",
     ]);
@@ -2401,6 +2419,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       activatedAt: "1998-09-07",
     };
     const listPlans = vi.fn(async () => ({ creation: startedCard, active: null, closed: [] }));
+    const closePlan = vi.fn<PlanCreationOperations["plan.close"]>(async () => ({
+      status: "closed",
+      planId: activationResult.planId,
+      closedAt: 904_953_600_000,
+      cleanupJobId: "01J00000000000000000000002",
+    }));
+    const readHistory = vi.fn(async () => null);
     const activatePlanCreation = vi.fn<PlanCreationOperations["plan_creation.activate"]>(
       async () => activationResult,
     );
@@ -2409,6 +2434,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       operations: {
         ...operations,
         "plan.list": listPlans,
+        "plan.close": closePlan,
+        "plan.history": readHistory,
         "plan_creation.start": startPlanCreation,
         "plan_creation.answer": answerPlanCreation,
         "plan_creation.preview": previewPlanCreation,
@@ -2435,6 +2462,12 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const previewParams = { commandId: "preview-1", creationId, expectedVersion: 2 };
     const discardParams = { commandId: "discard-1", creationId, expectedVersion: 2 };
     const activateParams = { commandId: "activate-1", creationId, expectedVersion: 2 };
+    const closeParams = {
+      commandId: "close-1",
+      planId: activationResult.planId,
+      expectedVersion: 1,
+    };
+    const historyParams = { planId: activationResult.planId };
     for (const { result, ...request } of [
       {
         id: "start",
@@ -2472,6 +2505,23 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         params: {},
         result: { creation: startedCard, active: null, closed: [] },
       },
+      {
+        id: "close",
+        method: "plan.close",
+        params: closeParams,
+        result: {
+          status: "closed",
+          planId: activationResult.planId,
+          closedAt: 904_953_600_000,
+          cleanupJobId: "01J00000000000000000000002",
+        },
+      },
+      {
+        id: "history",
+        method: "plan.history",
+        params: historyParams,
+        result: null,
+      },
     ]) {
       renderer.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
       expect(parseCoachRpcEnvelope(await renderer.frames.next())).toEqual({
@@ -2486,6 +2536,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(discardPlanCreation).toHaveBeenCalledWith(discardParams);
     expect(activatePlanCreation).toHaveBeenCalledWith(activateParams);
     expect(listPlans).toHaveBeenCalledWith({});
+    expect(closePlan).toHaveBeenCalledWith(closeParams);
+    expect(readHistory).toHaveBeenCalledWith(historyParams);
 
     for (const request of [
       {
@@ -2517,6 +2569,21 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         id: "invalid-list",
         method: "plan.list",
         params: { extra: true },
+      },
+      {
+        id: "invalid-close",
+        method: "plan.close",
+        params: { ...closeParams, closeActor: "system:plan-completion" },
+      },
+      {
+        id: "invalid-completion",
+        method: "plan.close",
+        params: { ...closeParams, closeReason: "completed" },
+      },
+      {
+        id: "invalid-history",
+        method: "plan.history",
+        params: { ...historyParams, extra: true },
       },
     ]) {
       renderer.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));

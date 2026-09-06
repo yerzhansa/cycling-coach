@@ -123,6 +123,8 @@ import {
 import {
   GetPlanningReadModelRpcParamsSchema,
   GetPlanningReadModelRpcResultSchema,
+  PlanHistoryParamsSchema,
+  PlanHistoryResultSchema,
   ListPlansParamsSchema,
   ListPlansResultSchema,
   type PlanningReadOperations,
@@ -143,6 +145,8 @@ import {
   type PlanningRequestOperations,
 } from "./planning-request.js";
 import {
+  PlanCloseRpcParamsSchema,
+  PlanCloseResultSchema,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationActivateRpcResultSchema,
   PlanCreationAnswerRpcParamsSchema,
@@ -276,6 +280,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "getAthleteState",
   "getPlanningReadModel",
   "plan.list",
+  "plan.close",
+  "plan.history",
   "getActivityAnalysis",
   "exportTrainingFile",
   "importFiles",
@@ -1574,6 +1580,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
     .object({
       jsonrpc: z.literal("2.0"),
       id: JsonRpcIdSchema,
+      method: z.literal("plan.close"),
+      params: PlanCloseRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("plan.history"),
+      params: PlanHistoryParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
       method: z.literal("getActivityAnalysis"),
       params: ActivityAnalysisRequestSchema,
     })
@@ -2214,6 +2236,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "plan.list",
     requestSchema: ListPlansParamsSchema,
     responseSchema: ListPlansResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan.close": {
+    wireName: "plan.close",
+    requestSchema: PlanCloseRpcParamsSchema,
+    responseSchema: PlanCloseResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan.history": {
+    wireName: "plan.history",
+    requestSchema: PlanHistoryParamsSchema,
+    responseSchema: PlanHistoryResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getActivityAnalysis: {

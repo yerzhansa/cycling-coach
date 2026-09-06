@@ -126,6 +126,12 @@ const rpcDeadlineCases = [
   ["getPlanningReadModel", {}, 30_000],
   ["plan.list", {}, 30_000],
   [
+    "plan.close",
+    { commandId: "close-1", planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV", expectedVersion: 1 },
+    30_000,
+  ],
+  ["plan.history", { planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV" }, 30_000],
+  [
     "getActivityAnalysis",
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
     90_000,
@@ -1031,6 +1037,8 @@ describe("RPC receive and observers", () => {
           wellness: {},
         },
         "plan.list": { creation: null, active: null, closed: [] },
+        "plan.close": { status: "rejected", reason: "no-active-plan" },
+        "plan.history": null,
         getPlanningReadModel: {
           schemaVersion: 1,
           status: "no-plan",

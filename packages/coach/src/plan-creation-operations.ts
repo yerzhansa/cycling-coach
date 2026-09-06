@@ -1,5 +1,13 @@
 import { z } from "zod";
 import {
+  PlanCloseRpcParamsSchema,
+  PlanCloseResultSchema,
+  PlanHistoryParamsSchema,
+  PlanHistoryResultSchema,
+  type PlanCloseRpcParams,
+  type PlanCloseResult,
+  type PlanHistoryParams,
+  type PlanHistoryResult,
   ListPlansParamsSchema,
   ListPlansResultSchema,
   type ListPlansParams,
@@ -22,6 +30,7 @@ import { buildCreationDraft } from "@enduragent/sport-cycling";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
   addCivilDays,
+  createPlanLifecycleRepository,
   createPlanRepository,
   dateKeyFromText,
   inclusiveCivilDays,
@@ -30,6 +39,7 @@ import {
   PlanCreationStoreError,
   type PlanCreationRepository,
   type PlanCreationSnapshot,
+  type PlanSummaryRecord,
 } from "@enduragent/kernel/planning";
 import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
@@ -62,6 +72,8 @@ export function expectedPlanCreationAnswerKind(
 
 export interface PlanCreationHost extends PlanCreationOperations {
   "plan.list"(request: ListPlansParams): Promise<ListPlansResult>;
+  "plan.close"(request: PlanCloseRpcParams): Promise<PlanCloseResult>;
+  "plan.history"(request: PlanHistoryParams): Promise<PlanHistoryResult>;
   readCard(): Promise<PlanCreationCardModel | null>;
 }
 
@@ -85,10 +97,17 @@ export function createPlanCreationOperations(input: {
   eventCandidates: GoalEventCandidateSource;
   baselineEvidence?: BaselineEvidenceSource;
   today?: () => string;
+  todayDateKey?: () => number;
+  now?: () => number;
 }): PlanCreationHost {
   const plans = createPlanRepository(input.store);
+  const lifecycle = createPlanLifecycleRepository(input.store, {
+    newId: () => input.identity.newUlid(),
+  });
   const baselineEvidence = input.baselineEvidence ?? defaultBaselineEvidence;
   const today = input.today ?? (() => new Date().toISOString().slice(0, 10));
+  const todayDateKey = input.todayDateKey ?? (() => dateKeyFromText(today()));
+  const now = input.now ?? Date.now;
   const stamp = async (commandId: string, digest: string) => {
     const clock = input.identity.hlcStamp();
     return {
@@ -149,30 +168,43 @@ export function createPlanCreationOperations(input: {
     const snapshot = await input.repository.readUnfinished();
     return snapshot === undefined ? null : project(snapshot);
   };
+  const dateText = (dateKey: number): string => {
+    const digits = String(dateKey).padStart(8, "0");
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  };
+  const timestampDate = (value: number | null): string | null =>
+    value === null ? null : new Date(value).toISOString().slice(0, 10);
+  const summarizePlan = (plan: PlanSummaryRecord) => ({
+    planId: plan.planId,
+    version: plan.version,
+    name: plan.name,
+    start: dateText(plan.startDateKey),
+    end: dateText(addCivilDays(plan.startDateKey, plan.totalWeeks * 7 - 1)),
+    weeks: plan.totalWeeks,
+    status: plan.status,
+    closeReason: plan.closeReason,
+    closedAt: timestampDate(plan.closedAtMs),
+    activatedAt: timestampDate(plan.activatedAtMs),
+    creationId: plan.creationId,
+  });
   return {
     async "plan.list"(request) {
       ListPlansParamsSchema.parse(request);
       return input.store.transaction(async () => {
+        await createPlanLifecycleRepository(
+          {
+            exec: (sql) => input.store.exec(sql),
+            get: (sql, params) => input.store.get(sql, params),
+            all: (sql, params) => input.store.all(sql, params),
+            run: (sql, params) => input.store.run(sql, params),
+            close: () => input.store.close(),
+            transaction: async (run) => run(),
+          },
+          { newId: () => input.identity.newUlid() },
+        ).completeExpired({ todayDateKey: todayDateKey(), nowMs: now() });
         const creation = await input.repository.readUnfinished();
         const records = await plans.listPlans();
-        const dateText = (dateKey: number): string => {
-          const digits = String(dateKey).padStart(8, "0");
-          return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
-        };
-        const timestampDate = (value: number | null): string | null =>
-          value === null ? null : new Date(value).toISOString().slice(0, 10);
-        const summaries = records.map((plan) => ({
-          planId: plan.planId,
-          name: plan.name,
-          start: dateText(plan.startDateKey),
-          end: dateText(addCivilDays(plan.startDateKey, plan.totalWeeks * 7 - 1)),
-          weeks: plan.totalWeeks,
-          status: plan.status,
-          closeReason: plan.closeReason,
-          closedAt: timestampDate(plan.closedAtMs),
-          activatedAt: timestampDate(plan.activatedAtMs),
-          creationId: plan.creationId,
-        }));
+        const summaries = records.map(summarizePlan);
         return ListPlansResultSchema.parse({
           creation:
             creation === undefined ? null : projectPlanCreationCard(creation, { today: today() }),
@@ -180,6 +212,32 @@ export function createPlanCreationOperations(input: {
           closed: summaries.filter((plan) => plan.status === "closed"),
         });
       });
+    },
+    async "plan.close"(request) {
+      const parsed = PlanCloseRpcParamsSchema.parse(request);
+      const command = await stamp(parsed.commandId, await requestDigest(input.crypto, parsed));
+      return PlanCloseResultSchema.parse(
+        await lifecycle.close({
+          command,
+          planId: parsed.planId,
+          expectedVersion: parsed.expectedVersion,
+          closedAtMs: now(),
+          todayDateKey: todayDateKey(),
+          cleanupJobId: input.identity.newUlid(),
+        }),
+      );
+    },
+    async "plan.history"(request) {
+      const parsed = PlanHistoryParamsSchema.parse(request);
+      const detail = await lifecycle.readClosedDetail(parsed.planId);
+      return PlanHistoryResultSchema.parse(
+        detail === null
+          ? null
+          : {
+              ...detail,
+              plan: summarizePlan(detail.plan),
+            },
+      );
     },
     async "plan_creation.start"(request) {
       const parsed = PlanCreationStartRpcParamsSchema.parse(request);

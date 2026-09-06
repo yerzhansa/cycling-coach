@@ -872,6 +872,8 @@ async function previewHarness() {
     crypto: globalThis.crypto,
     eventCandidates: { read: async () => [candidateSource] },
     today: () => currentToday,
+    todayDateKey: () => Number(currentToday.replaceAll("-", "")),
+    now: () => Date.parse(`${currentToday}T12:00:00Z`),
   });
   const started = await host["plan_creation.start"]({ commandId: "start" });
   if (started.status !== "started") throw new Error("Expected creation");
@@ -909,6 +911,9 @@ async function previewHarness() {
     ready,
     answer,
     card: () => card,
+    setToday: (value: string) => {
+      currentToday = value;
+    },
     advanceDay: () => {
       currentToday = "1998-09-03";
     },
@@ -1138,6 +1143,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
       await released;
       return creation;
     });
+    test.setToday("1998-01-01");
     const before = test.host["plan.list"]({});
     await entered;
     expect(transaction).toHaveBeenCalledTimes(1);
@@ -1158,6 +1164,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
       creation: null,
       active: {
         planId: activated.planId,
+        version: 1,
         name: "Improve fitness",
         start: test.draft.start,
         end: test.draft.end,
@@ -1170,6 +1177,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
       },
       closed: [{
         planId: incumbentId,
+        version: 2,
         name: "Earlier Plan",
         start: "1997-12-22",
         end: "1998-01-18",
@@ -1181,6 +1189,91 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
         creationId: null,
       }],
     });
+  });
+
+  it("exposes the active version for closure and rejects a stale version", async () => {
+    const test = await review();
+    const activated = await test.host["plan_creation.activate"](test.request);
+    const { active } = await test.host["plan.list"]({});
+    expect(active).toMatchObject({ planId: activated.planId, version: 1 });
+    if (active === null) throw new Error("Expected an active Plan");
+
+    await expect(
+      test.host["plan.close"]({
+        commandId: "stop-stale",
+        planId: active.planId,
+        expectedVersion: active.version + 1,
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "stale-version" });
+    await expect(
+      test.host["plan.close"]({
+        commandId: "stop-current",
+        planId: active.planId,
+        expectedVersion: active.version,
+      }),
+    ).resolves.toMatchObject({ status: "closed", planId: active.planId });
+    await expect(test.host["plan.list"]({})).resolves.toMatchObject({
+      active: null,
+      closed: [{ planId: active.planId, version: active.version + 1 }],
+    });
+  });
+
+  it("closes offline, replays the command, and reads the final snapshot", async () => {
+    const test = await review("flexible");
+    const activated = await test.host["plan_creation.activate"](test.request);
+    await expect(test.host["plan.history"]({ planId: activated.planId })).resolves.toBeNull();
+    const request = { commandId: "stop", planId: activated.planId, expectedVersion: 1 };
+    const result = await test.host["plan.close"](request);
+    expect(result).toMatchObject({ status: "closed", planId: activated.planId });
+    await expect(test.host["plan.close"](request)).resolves.toEqual(result);
+    await expect(test.host["plan.close"]({ ...request, expectedVersion: 2 })).resolves.toEqual({ status: "rejected", reason: "command-conflict" });
+    const detail = await test.host["plan.history"]({ planId: activated.planId });
+    expect(detail).toMatchObject({
+      plan: { planId: activated.planId, status: "closed", closeReason: "stopped" },
+      closeActor: "athlete",
+      revision: { revisionNumber: 1, snapshot: test.draft },
+      cleanup: "pending",
+    });
+    expect(detail?.revision.snapshot.weeks.flatMap((week) => week.workouts)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ date: null })]),
+    );
+    await expect(test.host["plan.list"]({})).resolves.toMatchObject({
+      active: null,
+      closed: [detail?.plan],
+    });
+    await expect(test.host["plan.history"]({ planId: id("999") })).resolves.toBeNull();
+  });
+
+  it("returns closure rejection reasons without changing an active Plan", async () => {
+    const test = await review();
+    const activated = await test.host["plan_creation.activate"](test.request);
+    await expect(
+      test.host["plan.close"]({ commandId: "stale", planId: activated.planId, expectedVersion: 2 }),
+    ).resolves.toEqual({ status: "rejected", reason: "stale-version" });
+    await expect(
+      test.host["plan.close"]({ commandId: "missing", planId: id("999"), expectedVersion: 1 }),
+    ).resolves.toEqual({ status: "rejected", reason: "no-active-plan" });
+    expect((await test.host["plan.list"]({})).active?.planId).toBe(activated.planId);
+  });
+
+  it("completes an expired Plan before listing and retains final history", async () => {
+    const test = await review();
+    const activated = await test.host["plan_creation.activate"](test.request);
+    test.setToday(test.draft.end);
+    expect((await test.host["plan.list"]({})).active?.planId).toBe(activated.planId);
+    test.setToday("1998-10-01");
+    await expect(test.host["plan.list"]({})).resolves.toMatchObject({
+      active: null,
+      closed: [{ planId: activated.planId, closeReason: "completed" }],
+    });
+    await expect(test.host["plan.history"]({ planId: activated.planId })).resolves.toMatchObject({
+      closeActor: "system:plan-completion",
+      cleanup: "pending",
+      revision: { snapshot: test.draft },
+    });
+    expect(
+      await test.store.all("SELECT * FROM planning_command WHERE command_name = 'plan.close'"),
+    ).toEqual([]);
   });
 
   it("activates dated Workouts, removes the Chat card, and exposes the Plan to readers", async () => {

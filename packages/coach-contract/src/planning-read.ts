@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlanCreationCardModelSchema } from "./plan-creation.js";
+import { PlanCreationCardModelSchema, PlanCreationDraftSchema } from "./plan-creation.js";
 
 export const PlanDateKeySchema = z.number().int().min(1_000_101).max(99_991_231);
 
@@ -93,30 +93,55 @@ export type GetPlanningReadModelRpcParams = z.infer<typeof GetPlanningReadModelR
 export const GetPlanningReadModelRpcResultSchema = PlanningReadModelSchema;
 export type GetPlanningReadModelRpcResult = z.infer<typeof GetPlanningReadModelRpcResultSchema>;
 
-export const PlanSummarySchema = z.object({
-  planId: z.string().min(1),
-  name: z.string().min(1),
-  start: z.iso.date(),
-  end: z.iso.date(),
-  weeks: z.number().int().positive(),
-  status: z.enum(["active", "closed"]),
-  closeReason: z.enum(["stopped", "completed", "legacy-unclassified"]).nullable(),
-  closedAt: z.iso.date().nullable(),
-  activatedAt: z.iso.date().nullable(),
-  creationId: z.string().min(1).nullable(),
-}).strict();
+export const PlanSummarySchema = z
+  .object({
+    planId: z.string().min(1),
+    version: z.number().int().positive(),
+    name: z.string().min(1),
+    start: z.iso.date(),
+    end: z.iso.date(),
+    weeks: z.number().int().positive(),
+    status: z.enum(["active", "closed"]),
+    closeReason: z.enum(["stopped", "completed", "legacy-unclassified"]).nullable(),
+    closedAt: z.iso.date().nullable(),
+    activatedAt: z.iso.date().nullable(),
+    creationId: z.string().min(1).nullable(),
+  })
+  .strict();
 export type PlanSummary = z.infer<typeof PlanSummarySchema>;
 
 export const ListPlansParamsSchema = z.object({}).strict();
 export type ListPlansParams = z.infer<typeof ListPlansParamsSchema>;
-export const ListPlansResultSchema = z.object({
-  creation: PlanCreationCardModelSchema.nullable(),
-  active: PlanSummarySchema.extend({ status: z.literal("active") }).nullable(),
-  closed: z.array(PlanSummarySchema.extend({ status: z.literal("closed") })),
-}).strict();
+export const ListPlansResultSchema = z
+  .object({
+    creation: PlanCreationCardModelSchema.nullable(),
+    active: PlanSummarySchema.extend({ status: z.literal("active") }).nullable(),
+    closed: z.array(PlanSummarySchema.extend({ status: z.literal("closed") })),
+  })
+  .strict();
 export type ListPlansResult = z.infer<typeof ListPlansResultSchema>;
 
+export const PlanHistoryParamsSchema = z.object({ planId: z.string().min(1) }).strict();
+export type PlanHistoryParams = z.infer<typeof PlanHistoryParamsSchema>;
+export const PlanHistoryResultSchema = z
+  .object({
+    plan: PlanSummarySchema,
+    closeActor: z.string().min(1).max(128).nullable(),
+    revision: z
+      .object({
+        revisionNumber: z.number().int().positive(),
+        fingerprint: z.string().min(1),
+        snapshot: PlanCreationDraftSchema,
+      })
+      .strict(),
+    cleanup: z.enum(["none", "pending", "complete", "failed"]),
+  })
+  .strict()
+  .nullable();
+export type PlanHistoryResult = z.infer<typeof PlanHistoryResultSchema>;
+
 export interface PlanningReadOperations {
+  "plan.history"?(request: PlanHistoryParams): Promise<PlanHistoryResult>;
   "plan.list"?(request: ListPlansParams): Promise<ListPlansResult>;
   getPlanningReadModel?(
     request: GetPlanningReadModelRpcParams,

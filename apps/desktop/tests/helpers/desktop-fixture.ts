@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { ListPlansResultSchema } from "@enduragent/coach-contract";
+import {
+  ListPlansResultSchema,
+  PlanCloseResultSchema,
+  PlanHistoryResultSchema,
+} from "@enduragent/coach-contract";
 import type {
   CoachEngine,
   CoachOperations,
@@ -564,6 +568,12 @@ export async function launchDesktopFixture(input: {
     },
     async "plan.list"(request) {
       return ListPlansResultSchema.parse(finalFrame(await invoke("plan.list", request)));
+    },
+    async "plan.close"(request) {
+      return PlanCloseResultSchema.parse(finalFrame(await invoke("plan.close", request)));
+    },
+    async "plan.history"(request) {
+      return PlanHistoryResultSchema.parse(finalFrame(await invoke("plan.history", request)));
     },
     async "plan_creation.start"(request) {
       return finalFrame(await invoke("plan_creation.start", request)) as Awaited<

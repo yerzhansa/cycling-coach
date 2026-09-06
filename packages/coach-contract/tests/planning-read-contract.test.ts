@@ -28,7 +28,11 @@ describe("Planning read contract", () => {
       name: "Tempo",
       durationSeconds: 3600,
       origin: "coach" as const,
-      navigation: { destination: "plan" as const, focus: "workout" as const, entityId: "workout-1" },
+      navigation: {
+        destination: "plan" as const,
+        focus: "workout" as const,
+        entityId: "workout-1",
+      },
     };
     const value = {
       schemaVersion: 1,
@@ -66,6 +70,7 @@ describe("Plan library contract", () => {
     closeReason: null,
     closedAt: null,
     activatedAt: "1998-12-20",
+    version: 1,
     creationId: "creation-active",
   };
 
@@ -77,21 +82,24 @@ describe("Plan library contract", () => {
     expect(ListPlansResultSchema.safeParse({ ...empty, extra: true }).success).toBe(false);
   });
 
-  it.each(["stopped", "completed", "legacy-unclassified"])("accepts %s closed history", (closeReason) => {
-    const closed = {
-      ...active,
-      planId: "plan-closed",
-      status: "closed",
-      closeReason,
-      closedAt: "1999-01-18",
-      activatedAt: null,
-      creationId: null,
-    };
-    const library = { creation: null, active, closed: [closed] };
-    expect(ListPlansResultSchema.parse(library)).toEqual(library);
-    expect(ListPlansResultSchema.safeParse({ ...library, active: closed }).success).toBe(false);
-    expect(ListPlansResultSchema.safeParse({ ...library, closed: [active] }).success).toBe(false);
-  });
+  it.each(["stopped", "completed", "legacy-unclassified"])(
+    "accepts %s closed history",
+    (closeReason) => {
+      const closed = {
+        ...active,
+        planId: "plan-closed",
+        status: "closed",
+        closeReason,
+        closedAt: "1999-01-18",
+        activatedAt: null,
+        creationId: null,
+      };
+      const library = { creation: null, active, closed: [closed] };
+      expect(ListPlansResultSchema.parse(library)).toEqual(library);
+      expect(ListPlansResultSchema.safeParse({ ...library, active: closed }).success).toBe(false);
+      expect(ListPlansResultSchema.safeParse({ ...library, closed: [active] }).success).toBe(false);
+    },
+  );
 
   it.each([
     { start: 19981221 },
@@ -102,6 +110,7 @@ describe("Plan library contract", () => {
     { status: "draft" },
     { closeReason: "unknown" },
     { creationId: "" },
+    { version: 0 },
     { calendarStatus: "healthy" },
   ])("rejects invalid summary fields %j", (fields) => {
     expect(PlanSummarySchema.safeParse({ ...active, ...fields }).success).toBe(false);
