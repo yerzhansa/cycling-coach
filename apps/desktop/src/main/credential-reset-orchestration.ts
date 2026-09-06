@@ -43,6 +43,7 @@ export interface CreateDesktopCredentialResetOptions {
   readonly lifecycleSnapshot: () => DesktopCredentialResetLifecycleSnapshot | undefined;
   readonly managedModelCredentials: ReadonlySet<string>;
   readonly resetTelegramRuntime: () => Promise<boolean>;
+  readonly resetLegacyOAuthProfiles: () => Promise<void>;
   readonly credentialRoot: string;
   readonly telegramRoot: string;
   readonly serializeEnvelopeMutation: SerializeCredentialEnvelopeMutation;
@@ -104,6 +105,7 @@ export function createDesktopCredentialReset(
           telegramRoot: options.telegramRoot,
           serializeEnvelopeMutation: options.serializeEnvelopeMutation,
           deleteKey: options.deleteKeyForCredentialReset,
+          resetLegacyOAuthProfiles: options.resetLegacyOAuthProfiles,
         });
         if (reset.status !== "reset") {
           return { status: "refused", reason: "storage-failed" };

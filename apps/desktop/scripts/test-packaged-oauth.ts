@@ -344,11 +344,14 @@ try {
     login !== null && typeof login === "object" && "status" in login && login.status === "stored",
     "Synthetic production login was not stored",
   );
+  provider.rejectNextModel();
+  const modelsBeforeExpiredLogin = count("model");
   assert.equal((await turn("expired-login")).text, "Synthetic packaged coach response.");
+  assert.equal(count("model") - modelsBeforeExpiredLogin, 2);
   assert.equal(count("authorize"), 1);
   assert.equal(count("refresh"), 1);
   report.checks.push(
-    "real browser state/PKCE callback and token exchange; expired login refreshed before actual coach request",
+    "real browser state/PKCE callback and token exchange; server-rejected expired login refreshed and retried once",
   );
   await verifyPrivacy();
   provider.rejectNextModel();

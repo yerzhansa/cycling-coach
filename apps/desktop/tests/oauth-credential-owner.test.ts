@@ -10,6 +10,7 @@ import {
   recoverAndSaveStoredProfile,
   compareAndSaveStoredProfile,
   DESKTOP_OAUTH_OWNERSHIP_FILE,
+  resetDesktopOAuthProfiles,
   type CodexCredentials,
 } from "@enduragent/core";
 import { syntheticOAuthOwner } from "./helpers/oauth-owner.js";
@@ -68,6 +69,7 @@ async function fixture(overrides: Parameters<typeof syntheticOAuthOwner>[1] = {}
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
@@ -236,6 +238,19 @@ describe("desktop OAuth credential ownership", () => {
     },
   );
 
+  it("uses a server-valid access token when the local clock is two hours ahead", async () => {
+    const serverNow = 946_684_800_000;
+    vi.spyOn(Date, "now").mockReturnValue(serverNow + 2 * 60 * 60 * 1000);
+    const refreshToken = vi.fn(async () => {
+      throw new Error("synthetic offline refresh");
+    });
+    const f = await fixture({ refreshToken });
+    await f.owner.writeProfile({ ...synthetic(), expires: serverNow + 60 * 60 * 1000 });
+
+    await expect(f.restart().getAccessToken("openai-codex")).resolves.toBe(synthetic().access);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
   it("serializes refreshes and cannot resurrect a deleted credential", async () => {
     let release!: () => void;
     let started!: () => void;
@@ -302,6 +317,49 @@ describe("desktop OAuth credential ownership", () => {
     await refresh;
     await expect(reset).resolves.toEqual({ status: "reset", keyCleanupPending: false });
     await expect(f.restart().hasProfile("openai-codex")).resolves.toBe(false);
+  });
+
+  it.each([
+    '{"synthetic-refresh":"malformed',
+    JSON.stringify({
+      "openai-codex": { type: "oauth", ...synthetic() },
+      "selected-custom": { type: "oauth", ...synthetic("custom") },
+      other: { marker: "preserved" },
+      broken: null,
+    }),
+  ])("recovers malformed legacy data only through complete reset: %s", async (legacy) => {
+    const f = await fixture({ selectedProfile: "selected-custom" });
+    await writeFile(f.profilesPath, legacy, { mode: 0o600 });
+    const historicalBackup = `${f.profilesPath}.corrupt`;
+    await writeFile(historicalBackup, "historical-synthetic-backup", { mode: 0o600 });
+    await expect(f.owner.recoveryRequired()).resolves.toBe(true);
+    await expect(f.owner.writeProfile(synthetic("fresh"))).rejects.toThrow();
+    expect(await readFile(f.profilesPath, "utf8")).toBe(legacy);
+
+    await expect(
+      resetEncryptedCredentialStorage({
+        credentialRoot: f.root,
+        telegramRoot: join(f.directory, "telegram-channel-v1"),
+        serializeEnvelopeMutation: f.options.serializeEnvelopeMutation,
+        resetLegacyOAuthProfiles: () =>
+          resetDesktopOAuthProfiles(f.profilesPath, ["openai-codex", "selected-custom"]),
+        deleteKey: async () => ({ status: "deleted" }),
+      }),
+    ).resolves.toEqual({ status: "reset", keyCleanupPending: false });
+
+    await expect(f.restart().recoveryRequired()).resolves.toBe(false);
+    await expect(f.restart().hasProfile("selected-custom")).resolves.toBe(false);
+    await f.restart().writeProfile(synthetic("fresh"));
+    await expect(f.restart().getAccessToken("openai-codex")).resolves.toBe(
+      synthetic("fresh").access,
+    );
+    expect(JSON.parse(await readFile(f.profilesPath, "utf8"))).toEqual(
+      legacy.includes('"other"') ? { other: { marker: "preserved" } } : {},
+    );
+    expect(await readFile(historicalBackup, "utf8")).toBe("historical-synthetic-backup");
+    expect((await readdir(f.configDir)).sort()).toEqual(
+      [DESKTOP_OAUTH_OWNERSHIP_FILE, "auth-profiles.json", "auth-profiles.json.corrupt"].sort(),
+    );
   });
 
   it("does not create plaintext quarantine copies for malformed legacy data", async () => {

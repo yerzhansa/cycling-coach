@@ -30,7 +30,8 @@ describe("CI cost contract", () => {
     expect(check).toContain("pnpm exec vitest run --shard=2/2");
     expect(check).toContain("run: pnpm s8a");
     expect(check).toContain("Pack and smoke cycling-coach");
-    expect(check).toContain("xvfb-run -a pnpm --filter @enduragent/desktop test:e2e");
+    expect(check).not.toContain("Test Desktop E2E on Linux");
+    expect(check).not.toContain("xvfb-run");
     expect(ci).not.toContain("test_shards:");
     expect(ci).not.toMatch(/^  s8a:/mu);
   });
@@ -51,6 +52,9 @@ describe("CI cost contract", () => {
     expect(native).toContain("Test Desktop E2E on macOS");
     expect(native).toContain("test:e2e");
     expect(native).toContain("desktop-e2e-macos-artifacts");
+    expect(native).toContain(
+      "run: pnpm --filter @enduragent/desktop package:telegram-acceptance:prepared",
+    );
     expect(native).toContain("Test macOS Keychain secrets");
     expect(native).toContain("node_version=\"$(node -p 'process.version')\"");
     expect(native).toContain("node ../../node_modules/vitest/vitest.mjs run tests/secrets");
@@ -59,6 +63,22 @@ describe("CI cost contract", () => {
     expect(secretsStatus).toContain("runs-on: ubuntu-latest");
     expect(ci).not.toContain("desktop-integration-macos:");
     expect(ci).not.toContain("desktop-e2e-macos:");
+  });
+
+  it("gates browser installation and screenshot checks with the verified preview scope", () => {
+    const scope = job(ci, "desktop-scope");
+    const native = job(ci, "desktop-packaged-native");
+    expect(scope).toContain("previews: ${{ steps.scope.outputs.previews }}");
+    expect(scope).toContain("run: node tools/ui-verification/preview-scope.ts");
+    expect(scope).toContain(
+      "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}",
+    );
+    expect(native).toContain(
+      "name: Install pinned UI preview browser\n        if: needs.desktop-scope.outputs.previews == 'true'",
+    );
+    expect(native).toContain(
+      "name: Verify production component previews\n        if: needs.desktop-scope.outputs.previews == 'true'",
+    );
   });
 
   it("scopes Windows packaging and leaves synthetic contracts on Linux", () => {

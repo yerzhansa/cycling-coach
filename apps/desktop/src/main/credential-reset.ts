@@ -29,6 +29,7 @@ export type EncryptedCredentialResetResult =
 export interface ResetEncryptedCredentialStorageOptions extends CredentialEnvelopeRoots {
   readonly serializeEnvelopeMutation: SerializeCredentialEnvelopeMutation;
   readonly deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
+  readonly resetLegacyOAuthProfiles?: () => Promise<void>;
   readonly removeFile?: typeof rm;
   readonly syncCredentialDirectory?: (root: string) => Promise<void>;
   readonly platform?: NodeJS.Platform;
@@ -44,6 +45,7 @@ export function resetEncryptedCredentialStorage(
       platform === "win32" ? undefined : (options.syncCredentialDirectory ?? syncDirectory);
     try {
       let bindings = await bindCredentialEnvelopeRoots(options, platform);
+      await options.resetLegacyOAuthProfiles?.();
       for (const target of credentialEnvelopeTargets(options)) {
         const binding = credentialRootBindingForVault(bindings, target.vault);
         if (binding.state === "missing") continue;

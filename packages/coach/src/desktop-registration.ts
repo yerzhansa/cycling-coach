@@ -44,6 +44,9 @@ export async function readDesktopRegistration(
       registration: await dependencies.serviceRegistrationState(),
     };
   }
+  if (input.platform !== "darwin") {
+    return { source: "app-supervised", registration: "absent" };
+  }
   const status = await dependencies.readServiceStatus({
     home: input.home,
     executablePath: input.executablePath,

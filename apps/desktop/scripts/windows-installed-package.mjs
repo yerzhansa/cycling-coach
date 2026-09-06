@@ -33,6 +33,7 @@ export const WINDOWS_INSTALLED_LIMITS = Object.freeze({
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalDesktopRoot = resolve(scriptDirectory, "..");
 const packagedSelfTest = join(scriptDirectory, "verify-windows-packaged-self-test.mjs");
+const nativeOAuthAcceptance = join(scriptDirectory, "test-windows-native-oauth.ts");
 const nativeEvidenceScript = join(scriptDirectory, "windows-installed-evidence.ps1");
 
 function checked(condition, message) {
@@ -728,6 +729,21 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
           ),
           "installed packaged self-test",
         );
+        const nativeOAuth = requireSuccessful(
+          await run(
+            process.execPath,
+            ["--import", "tsx", nativeOAuthAcceptance, "--executable", installed.executable],
+            240_000,
+            { cwd: desktopRoot },
+          ),
+          "installed native OAuth acceptance",
+        );
+        const nativeOAuthResult = JSON.parse(nativeOAuth.stdout);
+        checked(
+          nativeOAuthResult.ok === true && nativeOAuthResult.nativeDpapiVerified === true,
+          "native OAuth acceptance did not prove DPAPI",
+        );
+        process.stdout.write(`${JSON.stringify(nativeOAuthResult)}\n`);
       },
       async () => {
         if (!installAttempted) return;

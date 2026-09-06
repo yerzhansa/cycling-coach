@@ -1,4 +1,5 @@
 import "./keychain-binding-probe-deprecation.js";
+import { resetDesktopOAuthProfiles } from "@enduragent/core";
 import {
   createDesktopOAuthCredentialOwner,
   readDesktopOAuthProfileName,
@@ -1097,6 +1098,11 @@ async function runDesktop(): Promise<void> {
         lifecycleSnapshot: () => daemonLifecycle?.snapshot(),
         managedModelCredentials,
         resetTelegramRuntime: () => telegramCoordinator.resetRuntimeForCredentialReset(),
+        resetLegacyOAuthProfiles: async () =>
+          resetDesktopOAuthProfiles(join(configDir, "auth-profiles.json"), [
+            CHATGPT_PROFILE_NAME,
+            await readDesktopOAuthProfileName(configDir),
+          ]),
         credentialRoot,
         telegramRoot: telegramCredentialRoot,
         serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
@@ -1419,19 +1425,9 @@ async function runDesktop(): Promise<void> {
           ? "../../resources/tray.ico"
           : "../../resources/trayTemplate.png",
       ),
-      trayPopoverUrl: rendererSource.trayPopoverUrl,
-      trayPreloadPath: resolve(mainDirectory, "../preload/tray.cjs"),
       platform: process.platform,
       loginItemExecutablePath: process.execPath,
       persistLoginPreference: (enabled) => backgroundAtLoginPreference.set(enabled),
-      telegramStatus: async () => {
-        const snapshot = await telegramCoordinator.status();
-        const warning = await telegramPower!.warning();
-        return {
-          channelState: snapshot.channel.state,
-          gapWarning: warning.state === "possible-message-loss",
-        };
-      },
       reportFailure(operation) {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
       },

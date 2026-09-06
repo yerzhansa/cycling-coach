@@ -56,7 +56,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - name: Validate protected-main source preparation
@@ -83,7 +83,7 @@ jobs:
           ref: ${{ needs.parse-tag.outputs.commit }}
           persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -102,7 +102,7 @@ jobs:
           ref: ${{ needs.parse-tag.outputs.commit }}
           persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -136,7 +136,7 @@ jobs:
           path: .release-control
           persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -253,7 +253,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -313,7 +313,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - name: Reserve a single stage attempt
@@ -338,15 +338,13 @@ jobs:
       REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
       RELEASE_PACKAGE: cycling-coach
       PUBLISHER_NODE: node
-      PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
-      RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -365,6 +363,9 @@ jobs:
       - name: Restore the exact prepared archives
         run: node tools/npm-release.ts restore "$RUNNER_TEMP/npm-release"
       - name: Stage exact archive for human approval
+        env:
+          PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
+          RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
         run: node tools/npm-release.ts stage "$RUNNER_TEMP/npm-release"
       - name: Retain accepted or uncertain stage outcome
         if: always()
@@ -400,7 +401,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - name: Reserve a single stage attempt
@@ -425,15 +426,13 @@ jobs:
       REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
       RELEASE_PACKAGE: enduragent
       PUBLISHER_NODE: node
-      PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
-      RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -452,6 +451,9 @@ jobs:
       - name: Restore the exact prepared archives
         run: node tools/npm-release.ts restore "$RUNNER_TEMP/npm-release"
       - name: Stage exact archive for human approval
+        env:
+          PUBLISHER_NPM: ${{ runner.temp }}/publisher/package/bin/npm-cli.js
+          RECEIPT_PATH: ${{ runner.temp }}/receipt/receipt.json
         run: node tools/npm-release.ts stage "$RUNNER_TEMP/npm-release"
       - name: Retain accepted or uncertain stage outcome
         if: always()
@@ -481,7 +483,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
@@ -504,7 +506,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
       - name: Publish verified package release notes

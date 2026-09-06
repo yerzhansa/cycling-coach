@@ -79,6 +79,7 @@ function harness(
     events.push("telegram-reset");
     return true;
   });
+  const resetLegacyOAuthProfiles = vi.fn(async () => {});
   const deleteKeyForCredentialReset = vi.fn(async (): Promise<KeychainKeyDeletion> => {
     events.push("key-delete");
     return { status: "deleted" };
@@ -114,6 +115,7 @@ function harness(
     telegramRoot: "/synthetic/telegram",
     serializeEnvelopeMutation,
     deleteKeyForCredentialReset,
+    resetLegacyOAuthProfiles,
     credentialRuntimeState,
     onRuntimeStateChange,
     resetEncryptedCredentialStorage,
@@ -126,6 +128,7 @@ function harness(
     clearCredential,
     resetTelegramRuntime,
     deleteKeyForCredentialReset,
+    resetLegacyOAuthProfiles,
     serializeEnvelopeMutation,
     resetEncryptedCredentialStorage,
     credentialRuntimeState,
@@ -352,6 +355,9 @@ describe("desktop credential reset orchestration", () => {
     expect(
       subject.resetEncryptedCredentialStorage.mock.calls[0]![0].serializeEnvelopeMutation,
     ).toBe(subject.serializeEnvelopeMutation);
+    expect(subject.resetEncryptedCredentialStorage.mock.calls[0]![0].resetLegacyOAuthProfiles).toBe(
+      subject.resetLegacyOAuthProfiles,
+    );
     expect(subject.deleteKeyForCredentialReset).toHaveBeenCalledWith(subject.proof);
   });
 

@@ -295,6 +295,35 @@ export async function compareAndSaveStoredProfile(
   });
 }
 
+function validateDesktopOwnershipMarker(marker: string): void {
+  const metadata = lstatSync(marker);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new DesktopOwnedOAuthHomeError();
+  const ownership: unknown = JSON.parse(readFileSync(marker, "utf8"));
+  if (!isStoredProfile(ownership) || ownership.schemaVersion !== 1 || ownership.owner !== "desktop")
+    throw new DesktopOwnedOAuthHomeError();
+}
+
+export async function resetDesktopOAuthProfiles(
+  profilesPath: string,
+  names: readonly string[],
+): Promise<void> {
+  mkdirSync(dirname(profilesPath), { recursive: true, mode: 0o700 });
+  await withInterprocessFileLock(lockPathFor(profilesPath), () => {
+    const marker = join(dirname(profilesPath), DESKTOP_OAUTH_OWNERSHIP_FILE);
+    if (desktopOwnershipMarkerPresent(profilesPath)) validateDesktopOwnershipMarker(marker);
+    const recovered = readProfilesForRecovery(profilesPath);
+    try {
+      for (const name of names) delete recovered.profiles[name];
+      writeProfiles(profilesPath, recovered.profiles);
+      syncProfileDirectory(profilesPath);
+      atomicWriteFileSync(marker, JSON.stringify({ schemaVersion: 1, owner: "desktop" }));
+      syncProfileDirectory(marker);
+    } finally {
+      recovered.malformedBytes?.fill(0);
+    }
+  });
+}
+
 export async function migrateDesktopOAuthProfiles(
   profilesPath: string,
   names: readonly string[],
@@ -307,15 +336,7 @@ export async function migrateDesktopOAuthProfiles(
   await withInterprocessFileLock(lockPathFor(profilesPath), async () => {
     const marker = join(dirname(profilesPath), DESKTOP_OAUTH_OWNERSHIP_FILE);
     if (desktopOwnershipMarkerPresent(profilesPath)) {
-      const metadata = lstatSync(marker);
-      if (!metadata.isFile() || metadata.isSymbolicLink()) throw new DesktopOwnedOAuthHomeError();
-      const ownership: unknown = JSON.parse(readFileSync(marker, "utf8"));
-      if (
-        !isStoredProfile(ownership) ||
-        ownership.schemaVersion !== 1 ||
-        ownership.owner !== "desktop"
-      )
-        throw new DesktopOwnedOAuthHomeError();
+      validateDesktopOwnershipMarker(marker);
       await persistAndVerify({}, true);
       return;
     }

@@ -198,6 +198,7 @@ export {
   DesktopOwnedOAuthHomeError,
   DESKTOP_OAUTH_OWNERSHIP_FILE,
   migrateDesktopOAuthProfiles,
+  resetDesktopOAuthProfiles,
   compareAndSaveStoredProfile,
   deleteStoredProfile,
   loadStoredProfileSnapshot,

@@ -69,7 +69,6 @@ interface Options {
   readonly observeEnvelopeRemoved: (proof: CredentialEnvelopeLockProof) => Promise<void>;
   readonly refreshToken?: typeof refreshCodexToken;
   readonly replaceEnvelope?: typeof durableAtomicReplace;
-  readonly now?: () => number;
   readonly platform?: NodeJS.Platform;
 }
 
@@ -346,8 +345,7 @@ export function createDesktopOAuthCredentialOwner(options: Options): DesktopOAut
         const current = profileAt(envelope, name);
         if (envelope === undefined || current === undefined) throw unavailable();
         const profile = current.profile;
-        if (profile.expires > (options.now ?? Date.now)() && profile.access !== rejectedAccessToken)
-          return profile.access;
+        if (profile.access !== rejectedAccessToken) return profile.access;
         const refreshed = await refreshToken(profile.refresh, signal);
         signal?.throwIfAborted();
         const latest = profileAt(await read(), name);
