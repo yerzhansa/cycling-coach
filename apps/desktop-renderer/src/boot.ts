@@ -153,7 +153,17 @@ export function bootRenderer(): Disposer {
   });
   const planController = createPlanController({
     listPlans: () => listPlans(clients),
-    renderLibrary: (next) => store.getState().setPlanLibrary(next),
+    renderLibrary: (next) => {
+      const previous = store.getState().planLibrary;
+      store.getState().setPlanLibrary(next);
+      if (
+        previous.status === "ready" &&
+        next.status === "ready" &&
+        (previous.value.active?.planId ?? null) !== (next.value.active?.planId ?? null)
+      ) {
+        planAdapter.reload();
+      }
+    },
     read: () => window.enduragentAuth.getPlanningReadModel(),
     render: (next) => store.getState().setPlanSurface(next),
     navigate: (view) => store.getState().setActiveView(view),
@@ -236,7 +246,10 @@ export function bootRenderer(): Disposer {
   store.getState().bindPlanLibraryActions({
     closePlan: (input) => closePlan(clients, input),
     readPlanHistory: (planId) => readPlanHistory(clients, planId),
-    refresh: () => planController.refresh(true),
+    refresh: () => {
+      planAdapter.reload();
+      return planController.refresh(true);
+    },
     startCreation: () => {
       chatController.resumeCreation(store.getState().planLibrary.value?.creation ?? null);
       store.getState().setActiveView("chat");

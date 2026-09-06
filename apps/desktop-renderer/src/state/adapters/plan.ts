@@ -138,6 +138,7 @@ export interface PlanViewAdapter {
   closeEndedConversation(): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
+  reload(): void;
   retry(): void;
   dispose(): void;
 }
@@ -1426,6 +1427,9 @@ export function createPlanViewAdapter(input: {
     returnToCoach() {
       if (active !== null) return;
       lastCommand = null;
+      void refresh(false);
+    },
+    reload() {
       void refresh(false);
     },
     retry() {

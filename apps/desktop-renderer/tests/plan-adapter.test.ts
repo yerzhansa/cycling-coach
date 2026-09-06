@@ -2044,6 +2044,19 @@ describe("Plan view adapter", () => {
     expect(subject.disposeProgress).toHaveBeenCalledOnce();
     expect(subject.surface.hydration).toEqual({ status: "loading" });
   });
+
+  it("reloads the Plan state on demand", async () => {
+    const subject = harness();
+    subject.adapter.start();
+    await settle();
+    expect(subject.getPlanState).toHaveBeenCalledTimes(1);
+
+    subject.adapter.reload();
+    await settle();
+
+    expect(subject.getPlanState).toHaveBeenCalledTimes(2);
+    expect(subject.surface.hydration.status).toBe("ready");
+  });
 });
 
 describe("Plan library RPC adapters", () => {

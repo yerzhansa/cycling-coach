@@ -197,6 +197,7 @@ async function assertClosedLibrary(scenario: Scenario, reason: "Stopped" | "Comp
     closed.getByText(`1 Jan 1998 to 28 Jan 1998 · 4 weeks · ${reason}`, { exact: true }),
   ).toBeVisible();
   await expect(library.getByRole("button", { name: "Stop Plan", exact: true })).toHaveCount(0);
+  await expect(scenario.page.getByText(/^Plan active/)).toHaveCount(0);
   await closed.getByRole("button", { name: "Read final details", exact: true }).click();
   await assertFinalDetails(scenario, reason);
 }
