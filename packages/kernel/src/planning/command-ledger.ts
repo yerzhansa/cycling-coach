@@ -36,7 +36,9 @@ export type PlanningCommandName =
   | "plan_creation.discard"
   | "plan_creation.preview"
   | "plan_creation.activate"
-  | "plan.close";
+  | "plan.close"
+  | "plan_change.preview"
+  | "plan_change.apply";
 
 export const fail = (): never => {
   throw new PlanCreationStoreError("corrupt-record");
@@ -61,7 +63,10 @@ export function createPlanningCommandLedger(store: SqlStore) {
   const recordCommand = (
     name: PlanningCommandName,
     command: PlanCreationCommandStamp,
-    aggregateRefs: { readonly creationId: string } | { readonly planId: string },
+    aggregateRefs:
+      | { readonly creationId: string }
+      | { readonly planId: string }
+      | { readonly planId: string; readonly planChangeId: string },
     result: unknown,
   ) =>
     store.run(

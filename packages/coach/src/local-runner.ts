@@ -1,6 +1,7 @@
 import type {
   CoachEngine,
   CoachOperations,
+  PlanChangeOperations,
   PlanCreationOperations,
   PlanningReadOperations,
   PlanningRequestOperations,
@@ -19,7 +20,8 @@ export interface LocalCoachLifecycle {
   readonly operations: CoachOperations &
     PlanningReadOperations &
     PlanningRequestOperations &
-    PlanCreationOperations;
+    PlanCreationOperations &
+    PlanChangeOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   readonly listener: WriterProtocolListener;

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  PlanChangeModelSchema,
   PlanCloseRpcParamsSchema,
   PlanCloseResultSchema,
   PlanHistoryParamsSchema,
@@ -30,6 +31,7 @@ import { buildCreationDraft } from "@enduragent/sport-cycling";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
   addCivilDays,
+  createPlanChangeRepository,
   createPlanLifecycleRepository,
   createPlanRepository,
   dateKeyFromText,
@@ -191,24 +193,43 @@ export function createPlanCreationOperations(input: {
     async "plan.list"(request) {
       ListPlansParamsSchema.parse(request);
       return input.store.transaction(async () => {
-        await createPlanLifecycleRepository(
-          {
-            exec: (sql) => input.store.exec(sql),
-            get: (sql, params) => input.store.get(sql, params),
-            all: (sql, params) => input.store.all(sql, params),
-            run: (sql, params) => input.store.run(sql, params),
-            close: () => input.store.close(),
-            transaction: async (run) => run(),
+        const transactionStore = {
+          exec: (sql: string) => input.store.exec(sql),
+          get: input.store.get.bind(input.store),
+          all: input.store.all.bind(input.store),
+          run: input.store.run.bind(input.store),
+          close: () => input.store.close(),
+          transaction: async <T>(run: () => Promise<T>): Promise<T> => run(),
+        };
+        await createPlanLifecycleRepository(transactionStore, {
+          newId: () => input.identity.newUlid(),
+        }).completeExpired({ todayDateKey: todayDateKey(), nowMs: now() });
+        const planChanges = createPlanChangeRepository(transactionStore, {
+          newId: () => input.identity.newUlid(),
+          sha256: async (text) => {
+            const digest = await input.crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(text),
+            );
+            return [...new Uint8Array(digest)]
+              .map((byte) => byte.toString(16).padStart(2, "0"))
+              .join("");
           },
-          { newId: () => input.identity.newUlid() },
-        ).completeExpired({ todayDateKey: todayDateKey(), nowMs: now() });
+        });
         const creation = await input.repository.readUnfinished();
         const records = await plans.listPlans();
         const summaries = records.map(summarizePlan);
+        const active = summaries.find((plan) => plan.status === "active") ?? null;
         return ListPlansResultSchema.parse({
           creation:
             creation === undefined ? null : projectPlanCreationCard(creation, { today: today() }),
-          active: summaries.find((plan) => plan.status === "active") ?? null,
+          active,
+          changes:
+            active === null
+              ? []
+              : (await planChanges.listChanges(active.planId)).map((change) =>
+                  PlanChangeModelSchema.parse(change),
+                ),
           closed: summaries.filter((plan) => plan.status === "closed"),
         });
       });

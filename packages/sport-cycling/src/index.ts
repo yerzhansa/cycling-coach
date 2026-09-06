@@ -61,4 +61,10 @@ export {
 } from "./reference/index.js";
 
 export { buildCreationDraft } from "./creation-draft-builder.js";
-export type { CreationDraftInput, CreationDraft, CreationDraftResult } from "./creation-draft-builder.js";
+export { applyScheduleIntent } from "./plan-change.js";
+export type { ScheduleIntent, ScheduleChangeDiff, ScheduleChangeTotals } from "./plan-change.js";
+export type {
+  CreationDraftInput,
+  CreationDraft,
+  CreationDraftResult,
+} from "./creation-draft-builder.js";

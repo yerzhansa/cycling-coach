@@ -37,6 +37,7 @@ import {
   type CoachOperations,
   type PlanningReadOperations,
   type PlanCreationOperations,
+  type PlanChangeOperations,
   type PlanningRequestOperations,
   type CoachRpcMethodName,
   type CoachSelfTestOperations,
@@ -303,6 +304,7 @@ export interface CoachRpcServerInput {
     PlanningReadOperations &
     PlanningRequestOperations &
     PlanCreationOperations &
+    PlanChangeOperations &
     PlanningOperations;
   readonly spend: SpendRpcHandlers;
   readonly selfTestOperations: CoachSelfTestOperations;
@@ -530,6 +532,8 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getPlanningReadModel",
   "plan.list",
   "plan.close",
+  "plan_change.preview",
+  "plan_change.apply",
   "plan.history",
   "getActivityAnalysis",
   "importFiles",
@@ -1375,6 +1379,32 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 throw new TypeError("Plan closure operation is unavailable.");
               }
               result = await input.operations["plan.close"](request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan_change.preview":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY["plan_change.preview"].requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations["plan_change.preview"] === undefined) {
+                throw new TypeError("Plan Change preview operation is unavailable.");
+              }
+              result = await input.operations["plan_change.preview"](request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan_change.apply":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY["plan_change.apply"].requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations["plan_change.apply"] === undefined) {
+                throw new TypeError("Plan Change apply operation is unavailable.");
+              }
+              result = await input.operations["plan_change.apply"](request);
             } catch (error) {
               invocationFailure = { error };
             }
