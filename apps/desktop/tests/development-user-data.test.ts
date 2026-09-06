@@ -38,6 +38,16 @@ describe("isolated development user data binding", () => {
     expect(setPath).toHaveBeenCalledWith("userData", path);
   });
 
+  it("binds an unpackaged Linux app to the authorized disposable profile", () => {
+    expect(
+      decideDevelopmentUserDataBinding({
+        platform: "linux",
+        isPackaged: false,
+        environment: authorizedEnvironment,
+      }),
+    ).toEqual({ kind: "bind", path });
+  });
+
   it("does nothing when the isolated launcher did not request a profile", () => {
     const setPath = vi.fn();
     expect(
@@ -55,7 +65,7 @@ describe("isolated development user data binding", () => {
 
   it.each([
     ["a packaged app", { isPackaged: true }],
-    ["a non-macOS app", { platform: "linux" as const }],
+    ["a Windows app", { platform: "win32" as const }],
     [
       "a persistent credential context",
       {

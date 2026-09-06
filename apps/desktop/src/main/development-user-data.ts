@@ -32,7 +32,7 @@ export function decideDevelopmentUserDataBinding(
   const path = input.environment[DEVELOPMENT_USER_DATA_ENV];
   if (path === undefined) return Object.freeze({ kind: "no-op" });
   if (
-    input.platform !== "darwin" ||
+    (input.platform !== "darwin" && input.platform !== "linux") ||
     input.isPackaged ||
     input.environment.ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND !== "memory" ||
     input.environment.ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT !== "1" ||

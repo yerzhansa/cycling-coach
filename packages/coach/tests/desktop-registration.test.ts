@@ -64,10 +64,9 @@ describe("desktop registration", () => {
     expect(serviceRegistrationState).not.toHaveBeenCalled();
   });
 
-  it("keeps other platforms on the existing launchd observation path", async () => {
-    const failure = new UnsupportedLaunchdPlatformError();
+  it("classifies Linux as absent without invoking any launchd-shaped observer", async () => {
     const readServiceStatus = vi.fn(async () => {
-      throw failure;
+      throw new UnsupportedLaunchdPlatformError();
     });
 
     await expect(
@@ -75,7 +74,21 @@ describe("desktop registration", () => {
         { platform: "linux", home, executablePath: "/tmp/enduragent" },
         { readServiceStatus },
       ),
-    ).rejects.toBe(failure);
-    expect(readServiceStatus).toHaveBeenCalledOnce();
+    ).resolves.toEqual({ source: "app-supervised", registration: "absent" });
+    expect(readServiceStatus).not.toHaveBeenCalled();
+  });
+
+  it("honors an explicit registration override on Linux", async () => {
+    const readServiceStatus = vi.fn(async () => status);
+    const serviceRegistrationState = vi.fn(async () => "unknown" as const);
+
+    await expect(
+      readDesktopRegistration(
+        { platform: "linux", home, executablePath: "/tmp/enduragent" },
+        { readServiceStatus, serviceRegistrationState },
+      ),
+    ).resolves.toEqual({ source: "override", registration: "unknown" });
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(serviceRegistrationState).toHaveBeenCalledOnce();
   });
 });
