@@ -91,6 +91,7 @@ import {
   importLegacyCurrentPlan,
 } from "@enduragent/kernel-node/planning";
 import {
+  createLegacyWriterFence,
   createPlanDraftBuildRepository,
   createPlanIntakeRepository,
 } from "@enduragent/kernel/planning";
@@ -899,14 +900,17 @@ export async function createLocalCoachComposition(
     now,
   });
   const planningRepository = createLegacyPlanRepository(input.context.store);
-  await importLegacyCurrentPlan({
-    home: input.home,
-    store: input.context.store,
-    identity: planningIdentity,
-    importDateKey: planningDateKey(),
-    importTimestampMs: now(),
-    logger: { warn: () => logger.warn("legacy_plan_import_skipped") },
-  });
+  const legacyWriterFence = createLegacyWriterFence(input.context.store);
+  if (!(await legacyWriterFence.fenced())) {
+    await importLegacyCurrentPlan({
+      home: input.home,
+      store: input.context.store,
+      identity: planningIdentity,
+      importDateKey: planningDateKey(),
+      importTimestampMs: now(),
+      logger: { warn: () => logger.warn("legacy_plan_import_skipped") },
+    });
+  }
   const persistPlan = await createLegacyPlanRowWriter({
     repository: planningRepository,
     identity: planningIdentity,
@@ -1309,6 +1313,10 @@ export async function createLocalCoachComposition(
       const memory = new Memory(input.home.root, timezone, {
         platform: dependencies.platform,
         persistPlan,
+        planWriteGate: async () =>
+          (await legacyWriterFence.fenced())
+            ? "This Plan is managed in Chat. Change or stop it from Chat or the Plan library."
+            : null,
       });
       const conversationStore = createConversationStore(
         input.home.root,
