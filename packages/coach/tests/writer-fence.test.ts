@@ -202,6 +202,91 @@ function commands(planId: string): ExecutePlanTransitionRpcParams[] {
 }
 
 describe("legacy writer fence", () => {
+  it.each(["in-progress", "review"] as const)(
+    "rejects with %s creation without engine reads or store writes",
+    async (status) => {
+      const test = await fixture(status);
+      await test.openConversation();
+      const getChatQueue = vi.spyOn(test.engine, "getChatQueue");
+      const getCoachDecision = vi.spyOn(test.engine, "getCoachDecision");
+      const before = await dumpStore(test.store);
+
+      await expect(
+        test.operations.executePlanTransition?.({
+          transitionId: "PL-T01",
+          commandId: "fenced-legacy-start",
+          sourceConversationId: null,
+        }),
+      ).resolves.toMatchObject({
+        status: "rejected",
+        error: { code: "conflict", message: MESSAGE },
+        state: { projection: "coach" },
+      });
+
+      expect(getChatQueue).not.toHaveBeenCalled();
+      expect(getCoachDecision).not.toHaveBeenCalled();
+      expect(await dumpStore(test.store)).toBe(before);
+    },
+  );
+
+  it("retains natural completion while target ownership remains active", async () => {
+    const test = await fixture("active");
+    if (test.planId === null) throw new Error("Expected active Plan");
+    const planId = test.planId;
+    const plans = createPlanRepository(test.store);
+    const plan = await plans.read(planId);
+    if (plan === undefined) throw new Error("Expected Plan record");
+    await plans.replace(
+      {
+        ...plan,
+        name: "Gran Fondo Plan",
+        primaryGoal: "Finish",
+        startDateKey: 19980713,
+        targetDateKey: 19981004,
+        kind: "full_plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+      },
+      [],
+    );
+    let todayDateKey = 19981004;
+    const operations = createPlanningOperations(
+      { context: test.context, engine: test.engine, identity: test.identity },
+      { plans, todayDateKey: () => todayDateKey },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T29",
+        commandId: "natural-too-early",
+        planId,
+        asOf: "1998-10-04",
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(plans.read(planId)).resolves.toMatchObject({ status: "active" });
+
+    todayDateKey = 19981005;
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T29",
+        commandId: "natural-completion",
+        planId,
+        asOf: "1998-10-05",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { lifecycle: "ended", projection: "ended", scenarioId: "PL-S094" },
+    });
+    await expect(plans.read(planId)).resolves.toMatchObject({ status: "ended" });
+    await expect(createLegacyWriterFence(test.store).read()).resolves.toMatchObject({
+      activePlanId: planId,
+    });
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { lifecycle: "ended", projection: "ended" },
+    });
+  });
+
   it.each(["in-progress", "review", "active"] as const)(
     "reads %s ownership without writes",
     async (status) => {

@@ -1913,7 +1913,9 @@ export function createPlanningOperations(
     if (fence.activePlanId !== null) {
       const activePlan = await plans.read(fence.activePlanId);
       if (activePlan === undefined) throw new TypeError("An active Plan requires a Plan record.");
-      return readActive(activePlan, 0, overrides);
+      if (activePlan.status === "active" && overrides.endedScenario === undefined) {
+        return readActive(activePlan, 0, overrides);
+      }
     }
     const conversation = await conversations.readLatestOpenConversation();
     if (conversation === undefined) {
@@ -1933,11 +1935,15 @@ export function createPlanningOperations(
     const [turns, draft, queue, decision, ftp] = await Promise.all([
       conversations.readTurns(conversation.id),
       conversations.readLatestDraftRevision(conversation.id),
-      input.engine.getChatQueue?.({ chatId }).catch(() => EMPTY_QUEUE) ?? EMPTY_QUEUE,
-      input.engine
-        .getCoachDecision({ chatId })
-        .then((result) => result.decision)
-        .catch(() => null),
+      overrides.readOnly
+        ? EMPTY_QUEUE
+        : (input.engine.getChatQueue?.({ chatId }).catch(() => EMPTY_QUEUE) ?? EMPTY_QUEUE),
+      overrides.readOnly
+        ? null
+        : input.engine
+            .getCoachDecision({ chatId })
+            .then((result) => result.decision)
+            .catch(() => null),
       dependencies.ftp?.read(),
     ]);
     const projectedPlanId = draft?.planId ?? conversation.planId;
