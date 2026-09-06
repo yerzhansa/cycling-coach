@@ -1,6 +1,4 @@
-import "./theme/fonts.css";
-import "./theme/tokens.css";
-import "./theme/tailwind.css";
+import "./theme/application.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { bootRenderer, type Disposer } from "./boot";

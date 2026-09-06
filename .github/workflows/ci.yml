@@ -18,18 +18,39 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       native: ${{ steps.scope.outputs.native }}
-      previews: ${{ steps.scope.outputs.previews }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 24
       - id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: node tools/ui-verification/preview-scope.ts
+        run: |
+          native=false
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            native=true
+          elif ! git diff --quiet "$BASE_SHA" HEAD -- \
+            apps/desktop \
+            apps/desktop-renderer \
+            tools/ui-verification \
+            packages/coach \
+            packages/coach-cli \
+            packages/coach-client \
+            packages/coach-contract \
+            packages/core \
+            packages/engine \
+            packages/kernel \
+            packages/kernel-node \
+            packages/sport-cycling \
+            packages/sync-intervals-icu \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            tsconfig.check.json \
+            .github/workflows/ci.yml; then
+            native=true
+          fi
+          printf 'native=%s\n' "$native" >> "$GITHUB_OUTPUT"
 
   check:
     needs: desktop-scope
@@ -159,7 +180,7 @@ jobs:
   desktop-packaged-native:
     needs: desktop-scope
     if: needs.desktop-scope.outputs.native == 'true'
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 30
     env:
       CI: macos
@@ -180,12 +201,8 @@ jobs:
         run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
       - name: Test Desktop E2E on macOS
         run: pnpm --filter @enduragent/desktop test:e2e
-      - name: Install pinned UI preview browser
-        if: needs.desktop-scope.outputs.previews == 'true'
-        run: pnpm --filter @enduragent/desktop exec playwright install chromium
-      - name: Verify production component previews
-        if: needs.desktop-scope.outputs.previews == 'true'
-        run: pnpm check:ui-previews
+      - name: Verify native application UI states
+        run: pnpm check:ui-states
       - name: Upload Desktop E2E artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
