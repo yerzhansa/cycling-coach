@@ -6,6 +6,11 @@ import { bootTheme, useEnduragentStore } from "./state/store";
 
 bootTheme();
 
+const disposeOpenSettings = window.enduragentAuth.onOpenSettings(() => {
+  useEnduragentStore.getState().setActiveView("settings");
+});
+window.addEventListener("beforeunload", disposeOpenSettings, { once: true });
+
 const container = document.querySelector("#root");
 if (!(container instanceof HTMLElement)) {
   throw new TypeError("Desktop shell host is invalid: #root");
