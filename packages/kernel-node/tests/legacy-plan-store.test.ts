@@ -3,10 +3,17 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PlanningDateError, createPlanRepository } from "@enduragent/kernel/planning";
-import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
+import { engineConfigFromConfig, type Config } from "@enduragent/core";
+import {
+  PlanningDateError,
+  createPlanCreationRepository,
+  createPlanRepository,
+} from "@enduragent/kernel/planning";
+import { dumpStore, runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { createLocalCoachComposition } from "../../coach/src/composition.js";
 import { createAuthoredIdentity, type AthleteHome } from "../src/home/index.js";
+import { inertWriterProtocolListener } from "../src/lock/index.js";
 import {
   LEGACY_PLAN_IMPORT_MARKER,
   createLegacyPlanRowWriter,
@@ -54,6 +61,105 @@ describe("legacy current Plan import and dual-write adapter", () => {
   afterEach(async () => {
     await store.close();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  async function startCompositionUntilReferenceBootstrap() {
+    const config: Config = {
+      dataSource: "store",
+      llm: { provider: "anthropic", model: "synthetic", apiKey: "" },
+      intervals: { apiKey: "", athleteId: "synthetic" },
+      telegram: { botToken: "" },
+      session: {
+        historyTokenBudgetRatio: 0.3,
+        idleMinutes: 0,
+        dailyResetHour: 4,
+        resetArchiveRetentionDays: 0,
+        timezone: "UTC",
+      },
+      contextWindowTokens: 1000,
+      dataDir: home.root,
+    };
+    const bootstrapReached = new Error("Reference bootstrap reached");
+    const bootstrap = vi.fn(async () => {
+      throw bootstrapReached;
+    });
+    await expect(createLocalCoachComposition({
+      env: { ENDURAGENT_HOME: home.root },
+      home,
+      context: { home, store, listener: inertWriterProtocolListener },
+      config,
+      engineConfig: engineConfigFromConfig(config),
+    }, {
+      bootstrap,
+      now: () => Date.UTC(1998, 6, 7, 12),
+    })).rejects.toBe(bootstrapReached);
+    expect(bootstrap).toHaveBeenCalledOnce();
+  }
+
+  it.each(["active-plan", "unfinished-creation"])(
+    "skips the startup legacy import with an %s and leaves its marker untouched",
+    async (owner) => {
+      if (owner === "unfinished-creation") {
+        await createPlanCreationRepository(store).start({
+          creationId: "00000000000000000000000001",
+          seed: { schemaVersion: 1, eventCandidates: [] },
+          command: {
+            commandId: "start-creation",
+            requestDigest: "a".repeat(64),
+            nowMs: 900,
+            deviceId: "synthetic-device",
+            hlcPhysicalMs: 900,
+            hlcCounter: 0,
+          },
+        });
+      } else {
+        await createPlanRepository(store).replace({
+          id: "00000000000000000000000002",
+          originId: null,
+          name: "Chat Plan",
+          primaryGoal: "Ride consistently",
+          startDateKey: 19980706,
+          targetDateKey: 19980830,
+          status: "active",
+          kind: "short_race_preparation",
+          totalWeeks: 8,
+          weekStartDay: 1,
+          structureJson: "{}",
+          createdAtMs: 900,
+          updatedAtMs: 900,
+          deviceId: "synthetic-device",
+          hlcPhysicalMs: 900,
+          hlcCounter: 0,
+        }, []);
+        await store.run(`INSERT INTO planning_plan (
+          plan_id,status,version,current_revision_number,activated_at_ms,updated_at_ms,
+          device_id,hlc_physical_ms,hlc_counter
+        ) VALUES (?, 'active', 1, 1, 900, 900, 'synthetic-device', 900, 0)`, [
+          "00000000000000000000000002",
+        ]);
+      }
+      const sourcePath = join(root, "plans", "current-plan.json");
+      const sourceBytes = JSON.stringify(legacyPlan());
+      await writeFile(sourcePath, sourceBytes);
+      const before = await dumpStore(store);
+
+      await startCompositionUntilReferenceBootstrap();
+
+      expect(await dumpStore(store)).toEqual(before);
+      expect(await readFile(sourcePath, "utf8")).toBe(sourceBytes);
+      await expect(readFile(join(home.configDir, LEGACY_PLAN_IMPORT_MARKER)))
+        .rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("imports the legacy Plan at startup when no Chat Plan or unfinished creation exists", async () => {
+    await writeFile(join(root, "plans", "current-plan.json"), JSON.stringify(legacyPlan()));
+
+    await startCompositionUntilReferenceBootstrap();
+
+    expect(await createPlanRepository(store).count()).toBe(1);
+    await expect(readFile(join(home.configDir, LEGACY_PLAN_IMPORT_MARKER), "utf8"))
+      .resolves.toBe("completed\n");
   });
 
   it("imports the real Draft shape once without modifying its source", async () => {

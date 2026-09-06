@@ -98,6 +98,7 @@ type RenameOutcome = "renamed" | "noop" | "merged";
 export interface MemoryOptions {
   readonly platform?: NodeJS.Platform;
   readonly persistPlan?: (plan: unknown) => Promise<void>;
+  readonly planWriteGate?: () => Promise<string | null>;
 }
 
 /**
@@ -131,6 +132,7 @@ export class Memory implements MemoryStore {
   private provenance: ProvenanceMetadata;
   private readonly platform: NodeJS.Platform;
   private readonly persistPlan: ((plan: unknown) => Promise<void>) | undefined;
+  private readonly planWriteGate: (() => Promise<string | null>) | undefined;
   private readonly writeProvenance = new AsyncLocalStorage<SourceProvenance>();
 
   constructor(dataDir: string, tz: string = "UTC", options: MemoryOptions = {}) {
@@ -139,6 +141,7 @@ export class Memory implements MemoryStore {
     this.tz = tz;
     this.platform = options.platform ?? process.platform;
     this.persistPlan = options.persistPlan;
+    this.planWriteGate = options.planWriteGate;
     mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.plansDir, { recursive: true, mode: 0o700 });
     this.provenance = new ProvenanceMetadata(this.memoryDir, { platform: this.platform });
@@ -460,19 +463,26 @@ export class Memory implements MemoryStore {
     source: MemoryWriteSource = "unattributed",
     provenance?: SourceProvenance,
   ): void | Promise<void> {
-    const path = join(this.plansDir, "current-plan.json");
-    const newBody = JSON.stringify(plan, null, 2);
-    this.provenance.write("plan", newBody, this.resolvedWriteProvenance(provenance));
-    appendJournalEntry(this.memoryDir, {
-      ts: new Date().toISOString(),
-      op: "save-plan",
-      section: null,
-      oldBody: existsSync(path) ? readFileSync(path, "utf-8") : null,
-      newBody,
-      source,
+    const write = () => {
+      const path = join(this.plansDir, "current-plan.json");
+      const newBody = JSON.stringify(plan, null, 2);
+      this.provenance.write("plan", newBody, this.resolvedWriteProvenance(provenance));
+      appendJournalEntry(this.memoryDir, {
+        ts: new Date().toISOString(),
+        op: "save-plan",
+        section: null,
+        oldBody: existsSync(path) ? readFileSync(path, "utf-8") : null,
+        newBody,
+        source,
+      });
+      atomicWriteFileSync(path, newBody, { platform: this.platform });
+      return this.persistPlan?.(plan);
+    };
+    if (!this.planWriteGate) return write();
+    return this.planWriteGate().then((message) => {
+      if (message !== null) throw new Error(message);
+      return write();
     });
-    atomicWriteFileSync(path, newBody, { platform: this.platform });
-    return this.persistPlan?.(plan);
   }
 
   loadPlan(): unknown | null {
