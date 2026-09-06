@@ -94,6 +94,66 @@ export type GetPlanningReadModelRpcParams = z.infer<typeof GetPlanningReadModelR
 export const GetPlanningReadModelRpcResultSchema = PlanningReadModelSchema;
 export type GetPlanningReadModelRpcResult = z.infer<typeof GetPlanningReadModelRpcResultSchema>;
 
+const PlanCalendarWindowSchema = z
+  .object({ start: z.iso.date(), end: z.iso.date() })
+  .strict()
+  .nullable();
+
+const PlanCalendarBaseSchema = z
+  .object({
+    window: PlanCalendarWindowSchema,
+    currentThrough: z.iso.date().nullable(),
+    error: z.string().nullable(),
+  })
+  .strict();
+
+export const PlanCalendarStatusSchema = z
+  .discriminatedUnion("status", [
+    PlanCalendarBaseSchema.extend({ status: z.literal("not-connected"), error: z.null() }),
+    PlanCalendarBaseSchema.extend({ status: z.literal("pending"), error: z.null() }),
+    PlanCalendarBaseSchema.extend({ status: z.literal("running") }),
+    PlanCalendarBaseSchema.extend({ status: z.literal("verified"), currentThrough: z.iso.date() }),
+    PlanCalendarBaseSchema.extend({ status: z.literal("failed"), error: z.string() }),
+  ])
+  .superRefine((value, context) => {
+    if (value.status !== "failed" && value.error !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "Only a failed calendar can have an error",
+      });
+    }
+    if (value.window !== null && value.window.start > value.window.end) {
+      context.addIssue({
+        code: "custom",
+        path: ["window", "end"],
+        message: "Window end must be on or after its start",
+      });
+    }
+    if (value.status === "verified") {
+      if (value.window === null) {
+        context.addIssue({
+          code: "custom",
+          path: ["window"],
+          message: "Verified calendar requires a window",
+        });
+      } else if (value.currentThrough !== value.window.end) {
+        context.addIssue({
+          code: "custom",
+          path: ["currentThrough"],
+          message: "Verified calendar must be current through the window end",
+        });
+      }
+    } else if (value.currentThrough !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["currentThrough"],
+        message: "Only a verified calendar can have a current-through date",
+      });
+    }
+  });
+export type PlanCalendarStatus = z.infer<typeof PlanCalendarStatusSchema>;
+
 export const PlanSummarySchema = z
   .object({
     planId: z.string().min(1),
@@ -107,6 +167,7 @@ export const PlanSummarySchema = z
     closedAt: z.iso.date().nullable(),
     activatedAt: z.iso.date().nullable(),
     creationId: z.string().min(1).nullable(),
+    calendar: PlanCalendarStatusSchema,
   })
   .strict();
 export type PlanSummary = z.infer<typeof PlanSummarySchema>;

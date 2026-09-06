@@ -160,6 +160,7 @@ function library(planId: string, pending = false): ListPlansResult {
       closeReason: null,
       closedAt: null,
       activatedAt: "1998-09-07",
+      calendar: { status: "pending", window: null, currentThrough: null, error: null },
       creationId: null,
     },
     closed: [],

@@ -5,6 +5,7 @@ import {
   PlanCloseResultSchema,
   PlanHistoryParamsSchema,
   PlanHistoryResultSchema,
+  type PlanCalendarStatus,
   type PlanCloseRpcParams,
   type PlanCloseResult,
   type PlanHistoryParams,
@@ -33,6 +34,7 @@ import {
   addCivilDays,
   createPlanChangeRepository,
   createPlanLifecycleRepository,
+  createPlanReconciliationRepository,
   createPlanRepository,
   dateKeyFromText,
   inclusiveCivilDays,
@@ -42,6 +44,7 @@ import {
   type PlanCreationRepository,
   type PlanCreationSnapshot,
   type PlanSummaryRecord,
+  type PlanReconciliationJobRecord,
 } from "@enduragent/kernel/planning";
 import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
@@ -98,6 +101,7 @@ export function createPlanCreationOperations(input: {
   crypto: Crypto;
   eventCandidates: GoalEventCandidateSource;
   baselineEvidence?: BaselineEvidenceSource;
+  calendarConnected?: () => boolean;
   today?: () => string;
   todayDateKey?: () => number;
   now?: () => number;
@@ -110,6 +114,7 @@ export function createPlanCreationOperations(input: {
   const today = input.today ?? (() => new Date().toISOString().slice(0, 10));
   const todayDateKey = input.todayDateKey ?? (() => dateKeyFromText(today()));
   const now = input.now ?? Date.now;
+  const calendarConnected = input.calendarConnected ?? (() => false);
   const stamp = async (commandId: string, digest: string) => {
     const clock = input.identity.hlcStamp();
     return {
@@ -176,6 +181,39 @@ export function createPlanCreationOperations(input: {
   };
   const timestampDate = (value: number | null): string | null =>
     value === null ? null : new Date(value).toISOString().slice(0, 10);
+  const summarizeCalendar = (job: PlanReconciliationJobRecord | undefined): PlanCalendarStatus => {
+    const window =
+      job === undefined
+        ? null
+        : {
+            start: dateText(job.windowStartDateKey),
+            end: dateText(job.windowEndDateKey),
+          };
+    if (job?.status === "verified") {
+      return {
+        status: "verified",
+        window,
+        currentThrough: dateText(job.windowEndDateKey),
+        error: null,
+      };
+    }
+    if (!calendarConnected()) {
+      return { status: "not-connected", window, currentThrough: null, error: null };
+    }
+    if (job === undefined || job.status === "pending") {
+      return { status: "pending", window, currentThrough: null, error: null };
+    }
+    if (job.status === "failed") {
+      const error = job.kind === "mirror" ? "Calendar sync failed." : "Calendar cleanup failed.";
+      return {
+        status: "failed",
+        window,
+        currentThrough: null,
+        error: job.failureCount >= 5 ? error : `${error} Retry available.`,
+      };
+    }
+    return { status: "running", window, currentThrough: null, error: null };
+  };
   const summarizePlan = (plan: PlanSummaryRecord) => ({
     planId: plan.planId,
     version: plan.version,
@@ -218,7 +256,18 @@ export function createPlanCreationOperations(input: {
         });
         const creation = await input.repository.readUnfinished();
         const records = await plans.listPlans();
-        const summaries = records.map(summarizePlan);
+        const reconciliation = createPlanReconciliationRepository(transactionStore);
+        const summaries = await Promise.all(
+          records.map(async (plan) => ({
+            ...summarizePlan(plan),
+            calendar: summarizeCalendar(
+              await reconciliation.readLatestJobByWindow(
+                plan.planId,
+                plan.status === "active" ? "mirror" : "cleanup",
+              ),
+            ),
+          })),
+        );
         const active = summaries.find((plan) => plan.status === "active") ?? null;
         return ListPlansResultSchema.parse({
           creation:
@@ -250,15 +299,34 @@ export function createPlanCreationOperations(input: {
     },
     async "plan.history"(request) {
       const parsed = PlanHistoryParamsSchema.parse(request);
-      const detail = await lifecycle.readClosedDetail(parsed.planId);
-      return PlanHistoryResultSchema.parse(
-        detail === null
-          ? null
-          : {
-              ...detail,
-              plan: summarizePlan(detail.plan),
-            },
-      );
+      return input.store.transaction(async () => {
+        const transactionStore = {
+          exec: (sql: string) => input.store.exec(sql),
+          get: input.store.get.bind(input.store),
+          all: input.store.all.bind(input.store),
+          run: input.store.run.bind(input.store),
+          close: () => input.store.close(),
+          transaction: async <T>(run: () => Promise<T>): Promise<T> => run(),
+        };
+        const detail = await createPlanLifecycleRepository(transactionStore, {
+          newId: () => input.identity.newUlid(),
+        }).readClosedDetail(parsed.planId);
+        return PlanHistoryResultSchema.parse(
+          detail === null
+            ? null
+            : {
+                ...detail,
+                plan: {
+                  ...summarizePlan(detail.plan),
+                  calendar: summarizeCalendar(
+                    await createPlanReconciliationRepository(
+                      transactionStore,
+                    ).readLatestJobByWindow(detail.plan.planId, "cleanup"),
+                  ),
+                },
+              },
+        );
+      });
     },
     async "plan_creation.start"(request) {
       const parsed = PlanCreationStartRpcParamsSchema.parse(request);
@@ -456,6 +524,9 @@ export function createPlanCreationOperations(input: {
         creationId: parsed.creationId,
         expectedVersion: parsed.expectedVersion,
         activatedAt: today(),
+        todayDateKey: todayDateKey(),
+        mirrorJobId: input.identity.newUlid(),
+        cleanupJobId: input.identity.newUlid(),
         revisionId: input.identity.newUlid(),
         materialize(snapshot) {
           if (snapshot.currentDraft === null || resolvePlanCreationDraftAnswers(snapshot) === null)

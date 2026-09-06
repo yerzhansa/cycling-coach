@@ -3,7 +3,7 @@ import { canonicalJson } from "../archive/canonical.js";
 import { createPlanningCommandLedger, fail, PlanCreationStoreError } from "./command-ledger.js";
 import type { PlanCreationCommandStamp, PlanningCommandName } from "./command-ledger.js";
 import type { PlanCreationStore } from "./creation-repository.js";
-import { dateKeyFromText } from "./date-keys.js";
+import { addCivilDays, dateKeyFromText } from "./date-keys.js";
 import { createPlanRepository, validatePlanWorkoutRecord } from "./repository.js";
 import type { PlanWorkoutRecord } from "./repository.js";
 
@@ -96,6 +96,8 @@ export interface ApplyPlanChangeInput {
   readonly expectedVersion: number;
   readonly decision: "apply" | "cancel";
   readonly nowMs: number;
+  readonly todayDateKey: number;
+  readonly mirrorJobId: string;
   readonly materialize: (
     afterSnapshotJson: string,
     currentWorkouts: readonly PlanWorkoutRecord[],
@@ -468,6 +470,45 @@ export function createPlanChangeRepository(
               input.command.hlcCounter,
               input.planId,
             ],
+          );
+          const windowEnd = addCivilDays(input.todayDateKey, 6);
+          await store.run(
+            `INSERT INTO plan_reconciliation_job (
+            id,plan_id,kind,status,window_start_date_key,window_end_date_key,
+            attempt_count,failure_count,resumed_count,last_resumed_attempt,last_error_code,
+            created_at_ms,updated_at_ms,completed_at_ms
+            ) VALUES (?,?,'mirror','pending',?,?,0,0,0,NULL,NULL,?,?,NULL)
+            ON CONFLICT(plan_id,kind,window_start_date_key,window_end_date_key) DO NOTHING`,
+            [
+              input.mirrorJobId,
+              input.planId,
+              input.todayDateKey,
+              windowEnd,
+              input.nowMs,
+              input.nowMs,
+            ],
+          );
+          const job = z.object({ id: UlidSchema }).parse(
+            await store.get(
+              `SELECT id FROM plan_reconciliation_job
+              WHERE plan_id=? AND kind='mirror' AND window_start_date_key=? AND window_end_date_key=?`,
+              [input.planId, input.todayDateKey, windowEnd],
+            ),
+          );
+          await store.run(
+            `DELETE FROM plan_reconciliation_item
+            WHERE job_id=? AND (operation='delete' OR (operation='create' AND (
+              plan_workout_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM plan_workout WHERE id=plan_workout_id
+                  AND origin='coach' AND date_key BETWEEN ? AND ?
+              )
+            )))`,
+            [job.id, input.todayDateKey, windowEnd],
+          );
+          await store.run(
+            `UPDATE plan_reconciliation_job SET status='pending',last_error_code=NULL,
+            completed_at_ms=NULL,updated_at_ms=? WHERE id=?`,
+            [input.nowMs, job.id],
           );
           result = {
             status: "applied",

@@ -39,6 +39,9 @@ const activationInput = (key = "1") => {
     creationId: id(key),
     expectedVersion: 2,
     activatedAt: "1998-01-01",
+    todayDateKey: 19980101,
+    mirrorJobId: id(`5${key}`),
+    cleanupJobId: id(`6${key}`),
     revisionId: id(`2${key}`),
     materialize: () => ({
       plan: {
@@ -140,6 +143,24 @@ describe("Plan Creation activation repository", () => {
     expect(await store.all("SELECT id,status FROM plan")).toEqual([
       { id: id("11"), status: "active" },
     ]);
+    expect(await store.all("SELECT * FROM plan_reconciliation_job")).toEqual([
+      {
+        id: input.mirrorJobId,
+        plan_id: id("11"),
+        kind: "mirror",
+        status: "pending",
+        window_start_date_key: 19980101,
+        window_end_date_key: 19980107,
+        attempt_count: 0,
+        failure_count: 0,
+        resumed_count: 0,
+        last_resumed_attempt: null,
+        last_error_code: null,
+        created_at_ms: input.command.nowMs,
+        updated_at_ms: input.command.nowMs,
+        completed_at_ms: null,
+      },
+    ]);
     expect(await store.all("SELECT date_key,origin,structure_json FROM plan_workout")).toEqual([
       { date_key: 19980101, origin: "coach", structure_json: JSON.stringify(datedWorkout) },
     ]);
@@ -187,10 +208,42 @@ describe("Plan Creation activation repository", () => {
       { id: first.planId, status: "ended" },
       { id: second.planId, status: "active" },
     ]);
+    expect(
+      await store.all(
+        "SELECT id,plan_id,kind,status,window_start_date_key,window_end_date_key FROM plan_reconciliation_job ORDER BY id",
+      ),
+    ).toEqual([
+      {
+        id: id("51"),
+        plan_id: first.planId,
+        kind: "mirror",
+        status: "pending",
+        window_start_date_key: 19980101,
+        window_end_date_key: 19980107,
+      },
+      {
+        id: id("52"),
+        plan_id: second.planId,
+        kind: "mirror",
+        status: "pending",
+        window_start_date_key: 19980101,
+        window_end_date_key: 19980107,
+      },
+      {
+        id: id("62"),
+        plan_id: first.planId,
+        kind: "cleanup",
+        status: "pending",
+        window_start_date_key: 19980102,
+        window_end_date_key: 19980114,
+      },
+    ]);
     const before = await dumpStore(store);
     await expect(
       createPlanCreationRepository(store).activate({
         ...activationInput(),
+        mirrorJobId: id("91"),
+        cleanupJobId: id("92"),
         materialize: () => {
           throw new Error("Replay must not materialize again");
         },
@@ -204,6 +257,26 @@ describe("Plan Creation activation repository", () => {
       }),
     ).rejects.toMatchObject({ code: "command-conflict" });
     expect(await dumpStore(store)).toBe(before);
+  });
+
+  it("uses civil-day windows and keeps cleanup nonempty after the incumbent's final day", async () => {
+    await review();
+    await repository.activate(activationInput());
+    await review("2");
+    await repository.activate({
+      ...activationInput("2"),
+      activatedAt: "1998-01-31",
+      todayDateKey: 19980131,
+    });
+    expect(
+      await store.all(
+        "SELECT kind,window_start_date_key,window_end_date_key FROM plan_reconciliation_job WHERE id IN (?,?) ORDER BY id",
+        [id("52"), id("62")],
+      ),
+    ).toEqual([
+      { kind: "mirror", window_start_date_key: 19980131, window_end_date_key: 19980206 },
+      { kind: "cleanup", window_start_date_key: 19980201, window_end_date_key: 19980201 },
+    ]);
   });
 
   it.each(["missing", "stale", "version", "empty", "fingerprint"])(
@@ -277,6 +350,15 @@ describe("Plan Creation activation repository", () => {
           expect(await store.get("SELECT status FROM plan_creation WHERE id=?", [id("2")])).toEqual(
             { status: "activated" },
           );
+          expect(
+            await store.all(
+              "SELECT id,plan_id,kind,status FROM plan_reconciliation_job WHERE id IN (?,?) ORDER BY id",
+              [id("52"), id("62")],
+            ),
+          ).toEqual([
+            { id: id("52"), plan_id: id("12"), kind: "mirror", status: "pending" },
+            { id: id("62"), plan_id: id("11"), kind: "cleanup", status: "pending" },
+          ]);
           closureObserved = true;
           throw new Error("Synthetic activation ledger failure");
         }

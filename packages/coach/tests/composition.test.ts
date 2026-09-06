@@ -1,3 +1,4 @@
+import * as calendarDrain from "../src/plan-calendar-drain.js";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, unlinkSync } from "node:fs";
@@ -528,6 +529,67 @@ afterEach(async () => {
 });
 
 describe("local coach composition", () => {
+  it("kicks after startup and successful refreshes and waits for calendar idle before closing", async () => {
+    const home = await freshHome();
+    let release: () => void = () => {};
+    const completion = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const kick = vi.fn(() => completion);
+    const idle = vi.fn(() => completion);
+    vi.spyOn(calendarDrain, "createPlanCalendarDrain").mockReturnValue({ kick, idle });
+    const storeRuntime = runtime();
+    const close = vi.spyOn(storeRuntime, "close");
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => storeRuntime,
+      createBackend: () => backend(),
+      createResolver: missingResolver,
+    });
+
+    await lifecycle.startInitialRefresh();
+    expect(kick).toHaveBeenCalledTimes(1);
+    await storeRuntime.runWindow();
+    expect(kick).toHaveBeenCalledTimes(2);
+    expect(kick.mock.calls).toEqual([[], []]);
+    const list = lifecycle.operations["plan.list"];
+    if (list === undefined) throw new Error("Expected plan.list");
+    await list({});
+    expect(kick).toHaveBeenLastCalledWith();
+    expect(kick).toHaveBeenCalledTimes(3);
+    await storeRuntime.runWindow();
+    expect(kick).toHaveBeenLastCalledWith();
+    expect(kick).toHaveBeenCalledTimes(4);
+    const closing = lifecycle.close();
+    await vi.waitFor(() => expect(idle).toHaveBeenCalledOnce());
+    expect(close).not.toHaveBeenCalled();
+    release();
+    await closing;
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("builds and completes startup without a calendar connection or stored rows", async () => {
+    const home = await freshHome();
+    const context = fakeContext(home);
+    const get = vi.spyOn(context.store, "get");
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        createResolver: missingResolver,
+      },
+      context,
+      { apiKey: "", athleteId: "0" },
+    );
+
+    await expect(lifecycle.startInitialRefresh()).resolves.toBeUndefined();
+    expect(get).toHaveBeenCalled();
+    expect(get.mock.results.every((result) => result.type === "return")).toBe(true);
+    await expect(lifecycle.close()).resolves.toBeUndefined();
+  });
+
   it("uses trusted channel identity to require Telegram confirmation without changing Desktop execution", async () => {
     const home = await freshHome();
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);

@@ -16,6 +16,7 @@ export {
   type PlanCreationCommandStamp,
 } from "./command-ledger.js";
 import { canonicalJson } from "../archive/canonical.js";
+import { addCivilDays } from "./date-keys.js";
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
 import { z } from "zod";
@@ -133,6 +134,9 @@ export type PlanCreationActivationResult = z.infer<typeof PlanCreationActivation
 
 export interface ActivatePlanCreationInput extends DiscardPlanCreationInput {
   readonly activatedAt: string;
+  readonly todayDateKey: number;
+  readonly mirrorJobId: string;
+  readonly cleanupJobId: string;
   readonly revisionId: string;
   readonly materialize: (snapshot: PlanCreationSnapshot) => {
     readonly plan: PlanRecord;
@@ -421,7 +425,17 @@ WHERE id=? AND status IN ('in-progress','review') AND version=?`,
         return { outcome: "recorded", snapshot };
       });
     },
-    async activate({ command, creationId, expectedVersion, activatedAt, revisionId, materialize }) {
+    async activate({
+      command,
+      creationId,
+      expectedVersion,
+      activatedAt,
+      todayDateKey,
+      mirrorJobId,
+      cleanupJobId,
+      revisionId,
+      materialize,
+    }) {
       return store.transaction(async () => {
         const prior = await hasReplay("plan_creation.activate", command);
         if (prior !== undefined) {
@@ -525,6 +539,46 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
               workout.hlcPhysicalMs,
               workout.hlcCounter,
             ],
+          );
+        }
+        await store.run(
+          `INSERT INTO plan_reconciliation_job (
+id,plan_id,kind,status,window_start_date_key,window_end_date_key,
+attempt_count,failure_count,resumed_count,last_resumed_attempt,last_error_code,
+created_at_ms,updated_at_ms,completed_at_ms
+) VALUES (?,?,'mirror','pending',?,?,0,0,0,NULL,NULL,?,?,NULL)
+ON CONFLICT(plan_id,kind,window_start_date_key,window_end_date_key) DO NOTHING`,
+          [
+            mirrorJobId,
+            plan.id,
+            todayDateKey,
+            addCivilDays(todayDateKey, 6),
+            command.nowMs,
+            command.nowMs,
+          ],
+        );
+        if (closedPlanId !== null) {
+          const closedPlan = await store.get(
+            "SELECT start_date_key,total_weeks FROM plan WHERE id=?",
+            [closedPlanId],
+          );
+          if (closedPlan === undefined) return fail();
+          const windowStart = addCivilDays(todayDateKey, 1);
+          const windowEnd = Math.max(
+            windowStart,
+            addCivilDays(
+              integer(closedPlan, "start_date_key"),
+              integer(closedPlan, "total_weeks") * 7 - 1,
+            ),
+          );
+          await store.run(
+            `INSERT INTO plan_reconciliation_job (
+id,plan_id,kind,status,window_start_date_key,window_end_date_key,
+attempt_count,failure_count,resumed_count,last_resumed_attempt,last_error_code,
+created_at_ms,updated_at_ms,completed_at_ms
+) VALUES (?,?,'cleanup','pending',?,?,0,0,0,NULL,NULL,?,?,NULL)
+ON CONFLICT(plan_id,kind,window_start_date_key,window_end_date_key) DO NOTHING`,
+            [cleanupJobId, closedPlanId, windowStart, windowEnd, command.nowMs, command.nowMs],
           );
         }
         await store.run(

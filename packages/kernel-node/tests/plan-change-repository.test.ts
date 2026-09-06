@@ -5,6 +5,7 @@ import {
   createPlanChangeRepository,
   createPlanCreationRepository,
   createPlanLifecycleRepository,
+  createPlanReconciliationRepository,
   type PlanCreationCommandStamp,
 } from "@enduragent/kernel/planning";
 import {
@@ -121,6 +122,9 @@ describe("Plan Change repository", () => {
       creationId: id("1"),
       expectedVersion: 2,
       activatedAt: "1998-01-01",
+      todayDateKey: 19980101,
+      mirrorJobId: id("4"),
+      cleanupJobId: id("5"),
       revisionId: id("3"),
       materialize: () => ({
         plan: {
@@ -172,6 +176,8 @@ describe("Plan Change repository", () => {
     expectedVersion: 1,
     decision,
     nowMs: nowMs + 30,
+    todayDateKey: 19980102,
+    mirrorJobId: id("6"),
     materialize: (
       snapshotJson: string,
       current: Parameters<Parameters<typeof repository.apply>[0]["materialize"]>[1],
@@ -370,6 +376,204 @@ describe("Plan Change repository", () => {
     expect(JSON.parse(builder.mock.calls[0]?.[0] ?? "null")).toEqual(after);
   });
 
+  it("enqueues a pending mirror job for a fresh seven-day window on apply", async () => {
+    await activate();
+    await repository.preview(previewInput());
+    const jobs = await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id");
+    await expect(repository.apply(applyInput())).resolves.toMatchObject({ status: "applied" });
+    expect(
+      await store.all("SELECT * FROM plan_reconciliation_job WHERE id<>? ORDER BY id", [id("6")]),
+    ).toEqual(jobs);
+    expect(await store.get("SELECT * FROM plan_reconciliation_job WHERE id=?", [id("6")])).toEqual({
+      id: id("6"),
+      plan_id: planId,
+      kind: "mirror",
+      status: "pending",
+      window_start_date_key: 19980102,
+      window_end_date_key: 19980108,
+      attempt_count: 0,
+      failure_count: 0,
+      resumed_count: 0,
+      last_resumed_attempt: null,
+      last_error_code: null,
+      created_at_ms: nowMs + 30,
+      updated_at_ms: nowMs + 30,
+      completed_at_ms: null,
+    });
+  });
+
+  it("reopens a verified same-window mirror while preserving counters and retained items", async () => {
+    await activate();
+    const reconciliation = createPlanReconciliationRepository(store);
+    await reconciliation.prepareItem({
+      id: id("7"),
+      jobId: id("4"),
+      planWorkoutId: id("31"),
+      operation: "create",
+      dateKey: 19980101,
+      externalId: `cycling-coach:plan:${planId}:${id("31")}`,
+      expectedJson: JSON.stringify(keptWorkout),
+      createdAtMs: nowMs + 4,
+    });
+    await reconciliation.beginAttempt(id("4"), nowMs + 5);
+    await reconciliation.failJob(id("4"), "calendar-list-failed", nowMs + 6);
+    await reconciliation.beginAttempt(id("4"), nowMs + 7);
+    await reconciliation.beginAttempt(id("4"), nowMs + 8);
+    await reconciliation.startItem(id("7"), nowMs + 9);
+    await reconciliation.verifyItem(id("7"), 42, nowMs + 10);
+    const verified = await reconciliation.verifyJob(id("4"), nowMs + 11);
+    const items = await reconciliation.readItems(id("4"));
+    await repository.preview(previewInput(12));
+    await expect(
+      repository.apply({ ...applyInput(), changeId: id("92"), todayDateKey: 19980101 }),
+    ).resolves.toMatchObject({ status: "applied" });
+    expect(await reconciliation.readJob(id("4"))).toEqual({
+      ...verified,
+      status: "pending",
+      lastErrorCode: null,
+      completedAtMs: null,
+      updatedAtMs: nowMs + 30,
+    });
+    expect(await reconciliation.readItems(id("4"))).toEqual(items);
+    expect(await store.all("SELECT id FROM plan_reconciliation_job")).toEqual([{ id: id("4") }]);
+  });
+
+  it("clears delete items when a Workout moves outside and back inside the reopened window", async () => {
+    await activate();
+    await store.run("UPDATE plan SET total_weeks=2,target_date_key=19980114 WHERE id=?", [planId]);
+    const reconciliation = createPlanReconciliationRepository(store);
+    const movedWorkout = { ...removedWorkout, date: "1998-01-09" };
+    const movedSnapshot = {
+      ...draft,
+      weeks: [{ number: 1, minutes: 180, workouts: [keptWorkout, movedWorkout, poolWorkout] }],
+    };
+    const retainedCreate = await reconciliation.prepareItem({
+      id: id("7"),
+      jobId: id("4"),
+      planWorkoutId: id("31"),
+      operation: "create",
+      dateKey: 19980101,
+      externalId: `cycling-coach:plan:${planId}:${id("31")}`,
+      expectedJson: JSON.stringify(keptWorkout),
+      createdAtMs: nowMs + 4,
+    });
+    const movedCreate = await reconciliation.prepareItem({
+      ...retainedCreate,
+      id: id("8"),
+      planWorkoutId: id("32"),
+      dateKey: 19980102,
+      externalId: `cycling-coach:plan:${planId}:${id("32")}`,
+      expectedJson: JSON.stringify(removedWorkout),
+    });
+    const retainedDelete = await reconciliation.prepareItem({
+      ...retainedCreate,
+      id: id("9"),
+      planWorkoutId: null,
+      operation: "delete",
+      externalId: "synthetic-old-event",
+    });
+    await reconciliation.createOrGetJob({
+      id: id("10"),
+      planId,
+      kind: "mirror",
+      windowStartDateKey: 19971231,
+      windowEndDateKey: 19980106,
+      createdAtMs: nowMs + 4,
+    });
+    const otherWindowCreate = await reconciliation.prepareItem({
+      ...movedCreate,
+      id: id("12"),
+      jobId: id("10"),
+    });
+    await reconciliation.beginAttempt(id("4"), nowMs + 5);
+    await reconciliation.verifyItem(retainedCreate.id, 41, nowMs + 6);
+    await reconciliation.verifyItem(movedCreate.id, 42, nowMs + 6);
+    await reconciliation.verifyItem(retainedDelete.id, null, nowMs + 6);
+    await reconciliation.verifyJob(id("4"), nowMs + 7);
+    const retainedItems = (await reconciliation.readItems(id("4"))).filter(
+      (item) => item.id === retainedCreate.id,
+    );
+    await repository.preview({
+      ...previewInput(),
+      build: () => ({
+        afterSnapshotJson: JSON.stringify(movedSnapshot),
+        envelope: {
+          ...envelope,
+          diff: [{ workoutId: "removed", before: removedWorkout, after: movedWorkout }],
+          totals: { before: envelope.totals.before, after: envelope.totals.before },
+        },
+      }),
+    });
+    await expect(
+      repository.apply({
+        ...applyInput(),
+        todayDateKey: 19980101,
+        materialize: (_snapshotJson, current) => {
+          const moved = current.find((workout) => workout.id === id("32"));
+          if (moved === undefined) throw new Error("Expected moved Workout");
+          return {
+            insert: [],
+            delete: [],
+            update: [{ ...moved, dateKey: 19980109, structureJson: JSON.stringify(movedWorkout) }],
+          };
+        },
+      }),
+    ).resolves.toMatchObject({ status: "applied" });
+    expect(await reconciliation.readItems(id("4"))).toEqual(retainedItems);
+    expect(await reconciliation.readItems(id("10"))).toEqual([otherWindowCreate]);
+    expect(await reconciliation.readJob(id("4"))).toMatchObject({ status: "pending" });
+    expect(await store.get("SELECT date_key FROM plan_workout WHERE id=?", [id("32")])).toEqual({
+      date_key: 19980109,
+    });
+    await reconciliation.prepareItem({
+      ...movedCreate,
+      id: id("13"),
+      operation: "delete",
+      planWorkoutId: null,
+      createdAtMs: nowMs + 31,
+    });
+    await repository.preview({
+      ...previewInput(40),
+      expectedVersion: 2,
+      build: () => ({
+        afterSnapshotJson: JSON.stringify(draft),
+        envelope: {
+          ...envelope,
+          diff: [{ workoutId: "removed", before: movedWorkout, after: removedWorkout }],
+          totals: { before: envelope.totals.before, after: envelope.totals.before },
+        },
+      }),
+    });
+    await expect(
+      repository.apply({
+        ...applyInput(),
+        command: stamp("restore", 50),
+        changeId: id("120"),
+        expectedVersion: 2,
+        nowMs: nowMs + 50,
+        todayDateKey: 19980101,
+        materialize: (_snapshotJson, current) => {
+          const moved = current.find((workout) => workout.id === id("32"));
+          if (moved === undefined) throw new Error("Expected moved Workout");
+          return {
+            insert: [],
+            delete: [],
+            update: [
+              { ...moved, dateKey: 19980102, structureJson: JSON.stringify(removedWorkout) },
+            ],
+          };
+        },
+      }),
+    ).resolves.toMatchObject({ status: "applied" });
+    expect(await reconciliation.readItems(id("4"))).toEqual(retainedItems);
+    expect(retainedItems).toHaveLength(1);
+    expect(retainedItems[0]?.operation).toBe("create");
+    expect(await reconciliation.readItems(id("10"))).toEqual([otherWindowCreate]);
+    expect(await store.get("SELECT date_key FROM plan_workout WHERE id=?", [id("32")])).toEqual({
+      date_key: 19980102,
+    });
+  });
+
   it("preserves an unchanged Workout's full row after an athlete edit", async () => {
     await activate();
     await repository.preview(previewInput());
@@ -484,11 +688,20 @@ describe("Plan Change repository", () => {
       const input = applyInput(decision);
       const result = await repository.apply(input);
       const before = await dumpStore(store);
+      const jobs = await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id");
       const materialize = vi.fn(input.materialize);
-      expect(JSON.stringify(await repository.apply({ ...input, materialize }))).toBe(
-        JSON.stringify(result),
-      );
+      expect(
+        JSON.stringify(
+          await repository.apply({
+            ...input,
+            mirrorJobId: id("8"),
+            todayDateKey: 19980103,
+            materialize,
+          }),
+        ),
+      ).toBe(JSON.stringify(result));
       expect(materialize).not.toHaveBeenCalled();
+      expect(await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id")).toEqual(jobs);
       await expect(
         repository.apply({
           ...input,
@@ -506,6 +719,7 @@ describe("Plan Change repository", () => {
     const workouts = await store.all("SELECT * FROM plan_workout");
     const revisions = await store.all("SELECT * FROM plan_revision");
     const plan = await store.all("SELECT * FROM planning_plan");
+    const jobs = await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id");
     const materialize = vi.fn(applyInput().materialize);
     await expect(repository.apply({ ...applyInput("cancel"), materialize })).resolves.toEqual({
       status: "cancelled",
@@ -516,6 +730,7 @@ describe("Plan Change repository", () => {
     expect(await store.all("SELECT * FROM plan_workout")).toEqual(workouts);
     expect(await store.all("SELECT * FROM plan_revision")).toEqual(revisions);
     expect(await store.all("SELECT * FROM planning_plan")).toEqual(plan);
+    expect(await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id")).toEqual(jobs);
     expect(await store.get("SELECT diff_json FROM plan_change")).toEqual(original);
     await expect(repository.listChanges(planId)).resolves.toMatchObject([
       { status: "cancelled", resultRevisionNumber: null, supersededBy: null },

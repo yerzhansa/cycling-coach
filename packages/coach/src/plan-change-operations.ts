@@ -112,6 +112,8 @@ export function createPlanChangeOperations(input: {
         expectedVersion: parsed.expectedVersion,
         decision: parsed.decision,
         nowMs: input.now(),
+        todayDateKey: input.todayDateKey(),
+        mirrorJobId: input.identity.newUlid(),
         materialize(snapshotJson, currentWorkouts, diffIds) {
           const draft = PlanCreationDraftSchema.parse(JSON.parse(snapshotJson));
           const currentByDraftId = new Map(

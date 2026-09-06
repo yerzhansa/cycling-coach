@@ -70,6 +70,7 @@ describe("Plan library contract", () => {
     closeReason: null,
     closedAt: null,
     activatedAt: "1998-12-20",
+    calendar: { status: "pending", window: null, currentThrough: null, error: null },
     version: 1,
     creationId: "creation-active",
   };
@@ -92,6 +93,7 @@ describe("Plan library contract", () => {
         closeReason,
         closedAt: "1999-01-18",
         activatedAt: null,
+        calendar: { status: "pending", window: null, currentThrough: null, error: null },
         creationId: null,
       };
       const library = { creation: null, active, closed: [closed], changes: [] };
@@ -100,6 +102,94 @@ describe("Plan library contract", () => {
       expect(ListPlansResultSchema.safeParse({ ...library, closed: [active] }).success).toBe(false);
     },
   );
+
+  it("accepts the calendar shape and enforces status requirements", () => {
+    const calendar = {
+      status: "verified",
+      window: { start: "1998-12-21", end: "1998-12-27" },
+      currentThrough: "1998-12-27",
+      error: null,
+    };
+    expect(PlanSummarySchema.parse({ ...active, calendar }).calendar).toEqual(calendar);
+    for (const invalid of [
+      { ...calendar, currentThrough: null },
+      { status: "verified", window: calendar.window, error: null },
+      { ...calendar, status: "unknown" },
+      { ...calendar, status: "failed", error: null },
+      { ...calendar, status: "pending", error: "failure" },
+      { ...calendar, status: "not-connected", error: "failure" },
+      { ...calendar, extra: true },
+      { ...calendar, window: { ...calendar.window, extra: true } },
+      { ...calendar, window: { start: "1998-02-30", end: "1998-12-27" } },
+    ])
+      expect(PlanSummarySchema.safeParse({ ...active, calendar: invalid }).success).toBe(false);
+    const { calendar: omitted, ...withoutCalendar } = active;
+    expect(omitted).toBeDefined();
+    expect(PlanSummarySchema.safeParse(withoutCalendar).success).toBe(false);
+  });
+
+  it.each([
+    [
+      "verified with an error",
+      {
+        status: "verified",
+        window: { start: "1998-12-21", end: "1998-12-27" },
+        currentThrough: "1998-12-27",
+        error: "Calendar sync failed. Retry available.",
+      },
+    ],
+    [
+      "running with an error",
+      {
+        status: "running",
+        window: { start: "1998-12-21", end: "1998-12-27" },
+        currentThrough: null,
+        error: "Calendar sync failed. Retry available.",
+      },
+    ],
+    [
+      "verified without a window",
+      { status: "verified", window: null, currentThrough: "1998-12-27", error: null },
+    ],
+    [
+      "current through beyond the window",
+      {
+        status: "verified",
+        window: { start: "1998-12-21", end: "1998-12-27" },
+        currentThrough: "1998-12-28",
+        error: null,
+      },
+    ],
+    [
+      "current through before the window end",
+      {
+        status: "verified",
+        window: { start: "1998-12-21", end: "1998-12-27" },
+        currentThrough: "1998-12-26",
+        error: null,
+      },
+    ],
+    [
+      "reversed window",
+      {
+        status: "pending",
+        window: { start: "1998-12-27", end: "1998-12-21" },
+        currentThrough: null,
+        error: null,
+      },
+    ],
+    ...["pending", "running", "failed", "not-connected"].map((status): [string, unknown] => [
+      `${status} with a current-through date`,
+      {
+        status,
+        window: { start: "1998-12-21", end: "1998-12-27" },
+        currentThrough: "1998-12-27",
+        error: status === "failed" ? "Calendar sync failed. Retry available." : null,
+      },
+    ]),
+  ])("rejects %s", (_name: string, calendar: unknown) => {
+    expect(PlanSummarySchema.safeParse({ ...active, calendar }).success).toBe(false);
+  });
 
   it.each([
     { start: 19981221 },
@@ -111,7 +201,6 @@ describe("Plan library contract", () => {
     { closeReason: "unknown" },
     { creationId: "" },
     { version: 0 },
-    { calendarStatus: "healthy" },
   ])("rejects invalid summary fields %j", (fields) => {
     expect(PlanSummarySchema.safeParse({ ...active, ...fields }).success).toBe(false);
   });
