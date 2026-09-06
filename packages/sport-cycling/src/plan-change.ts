@@ -59,10 +59,11 @@ export function applyScheduleIntent<Draft extends CreationDraft>({
   const after = structuredClone(draft);
   for (const week of after.weeks) {
     if (intent.kind === "weekly-duration") {
+      const budgetMinutes = Math.floor(intent.hours * 60);
       let used = totalMinutes(week.workouts);
       for (const workout of [...week.workouts].reverse()) {
-        if (!mutable(workout, todayDateKey) || used <= intent.hours * 60) continue;
-        const remaining = workout.minutes - (used - intent.hours * 60);
+        if (!mutable(workout, todayDateKey) || used <= budgetMinutes) continue;
+        const remaining = workout.minutes - (used - budgetMinutes);
         const minutes = remaining < 15 ? 0 : remaining;
         used -= workout.minutes - minutes;
         workout.minutes = minutes;

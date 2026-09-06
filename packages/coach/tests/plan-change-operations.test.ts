@@ -6,7 +6,7 @@ import {
 } from "@enduragent/coach-contract";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import { createPlanCreationRepository } from "@enduragent/kernel/planning";
-import { runMigrations } from "@enduragent/kernel/store";
+import { dumpStore, runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { createPlanCreationOperations } from "../src/plan-creation-operations.js";
@@ -205,7 +205,7 @@ describe("Plan Change operations", () => {
           ).id,
         ),
     );
-    expect(after.map((row) => row.id)).toEqual(retained.map((row) => row.id));
+    expect(after).toEqual(retained);
     expect(after.map((row) => row.structure_json)).toEqual(
       retained.map((row) => row.structure_json),
     );
@@ -259,6 +259,33 @@ describe("Plan Change operations", () => {
       });
       expect(draft.minutes).toBeLessThanOrEqual(30);
     }
+  });
+
+  it("rejects an athlete edit to a changed Workout without writes through plan_change.apply", async () => {
+    const test = await activatedPlan();
+    const preview = await test.preview();
+    const [changed] = preview.change.diff;
+    if (changed?.before === null || changed?.before === undefined)
+      throw new Error("Expected a changed Workout");
+    await test.store.run(
+      "UPDATE plan_workout SET structure_json=? WHERE plan_id=? AND json_extract(structure_json,'$.id')=?",
+      [
+        canonicalJson({ ...changed.before, minutes: changed.before.minutes + 5 }),
+        test.planId,
+        changed.workoutId,
+      ],
+    );
+    const before = await dumpStore(test.store);
+    await expect(
+      test.changes["plan_change.apply"]({
+        commandId: "apply-drifted",
+        planId: test.planId,
+        changeId: preview.change.changeId,
+        expectedVersion: 1,
+        decision: "apply",
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "stale-version" });
+    expect(await dumpStore(test.store)).toBe(before);
   });
 
   it("cancels and replays without changing revision or Workouts", async () => {

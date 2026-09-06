@@ -8,13 +8,15 @@ export const PlanChangeIntentSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("weekday-duration"),
       day: WeekdaySchema,
-      minutes: z.number().positive(),
+      minutes: z.number().int().positive(),
     })
     .strict(),
   z.object({ kind: z.literal("weekday-unavailable"), day: WeekdaySchema }).strict(),
   z.object({ kind: z.literal("hard-weekday"), day: WeekdaySchema }).strict(),
-  z.object({ kind: z.literal("weekly-duration"), hours: z.number().positive() }).strict(),
-  z.object({ kind: z.literal("longest-workout"), minutes: z.number().positive() }).strict(),
+  z
+    .object({ kind: z.literal("weekly-duration"), hours: z.number().positive().multipleOf(0.25) })
+    .strict(),
+  z.object({ kind: z.literal("longest-workout"), minutes: z.number().int().positive() }).strict(),
 ]);
 export type PlanChangeIntent = z.infer<typeof PlanChangeIntentSchema>;
 

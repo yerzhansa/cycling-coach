@@ -190,7 +190,7 @@ describe("Plan Change repository", () => {
             structureJson: JSON.stringify(addedWorkout),
           },
         ],
-        update: [kept],
+        update: [],
         delete: [id("32")],
       };
     },
@@ -370,6 +370,86 @@ describe("Plan Change repository", () => {
     expect(JSON.parse(builder.mock.calls[0]?.[0] ?? "null")).toEqual(after);
   });
 
+  it("preserves an unchanged Workout's full row after an athlete edit", async () => {
+    await activate();
+    await repository.preview(previewInput());
+    await store.run(
+      "UPDATE plan_workout SET name=?,duration_s=?,structure_json=?,origin=?,hlc_counter=? WHERE id=?",
+      [
+        "Athlete's ride",
+        4500,
+        JSON.stringify({ ...keptWorkout, minutes: 75 }),
+        "athlete",
+        7,
+        id("31"),
+      ],
+    );
+    const before = await store.get("SELECT * FROM plan_workout WHERE id=?", [id("31")]);
+    await expect(repository.apply(applyInput())).resolves.toMatchObject({ status: "applied" });
+    expect(await store.get("SELECT * FROM plan_workout WHERE id=?", [id("31")])).toEqual(before);
+  });
+
+  it.each(["changed", "removed"] as const)(
+    "rejects a drifted %s Draft Workout before materialization without any writes",
+    async (operation) => {
+      await activate();
+      const changedWorkout = { ...removedWorkout, minutes: 90 };
+      await repository.preview({
+        ...previewInput(),
+        build: () => ({
+          afterSnapshotJson: JSON.stringify(
+            operation === "removed"
+              ? after
+              : {
+                  ...draft,
+                  weeks: [
+                    { ...draft.weeks[0], workouts: [keptWorkout, changedWorkout, poolWorkout] },
+                  ],
+                },
+          ),
+          envelope:
+            operation === "removed"
+              ? envelope
+              : {
+                  ...envelope,
+                  diff: [
+                    { workoutId: removedWorkout.id, before: removedWorkout, after: changedWorkout },
+                  ],
+                },
+        }),
+      });
+      await store.run("UPDATE plan_workout SET structure_json=? WHERE id=?", [
+        JSON.stringify({ ...removedWorkout, minutes: 100 }),
+        id("32"),
+      ]);
+      const before = await dumpStore(store);
+      const materialize = vi.fn(applyInput().materialize);
+      await expect(repository.apply({ ...applyInput(), materialize })).resolves.toEqual({
+        status: "rejected",
+        reason: "stale-version",
+      });
+      expect(materialize).not.toHaveBeenCalled();
+      expect(await dumpStore(store)).toBe(before);
+    },
+  );
+
+  it("rejects a host mutation outside the Change diff without writes", async () => {
+    await activate();
+    await repository.preview(previewInput());
+    const before = await dumpStore(store);
+    const input = applyInput();
+    await expect(
+      repository.apply({
+        ...input,
+        materialize: (snapshotJson, current) => ({
+          ...input.materialize(snapshotJson, current),
+          update: current.filter((row) => row.id === id("31")),
+        }),
+      }),
+    ).rejects.toThrow();
+    expect(await dumpStore(store)).toBe(before);
+  });
+
   it.each(["apply", "cancel"] as const)(
     "replays %s without invoking materialization again",
     async (decision) => {
@@ -486,7 +566,7 @@ describe("Plan Change repository", () => {
         ...input,
         materialize: (snapshotJson, current) => {
           const changes = input.materialize(snapshotJson, current);
-          const [kept] = changes.update;
+          const kept = current.find((row) => row.id === id("31"));
           if (kept === undefined) throw new Error("Expected kept Workout");
           return {
             insert: [...changes.insert, { ...kept, id: id("34") }],

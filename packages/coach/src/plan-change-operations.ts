@@ -110,7 +110,7 @@ export function createPlanChangeOperations(input: {
         expectedVersion: parsed.expectedVersion,
         decision: parsed.decision,
         nowMs: input.now(),
-        materialize(snapshotJson, currentWorkouts) {
+        materialize(snapshotJson, currentWorkouts, diffIds) {
           const draft = PlanCreationDraftSchema.parse(JSON.parse(snapshotJson));
           const currentByDraftId = new Map(
             currentWorkouts.map((workout) => [
@@ -122,7 +122,7 @@ export function createPlanChangeOperations(input: {
           const update: PlanWorkoutRecord[] = [];
           const retained = new Set<string>();
           for (const workout of draft.weeks.flatMap((week) => week.workouts)) {
-            if (workout.date === null) continue;
+            if (workout.date === null || !diffIds.has(workout.id)) continue;
             const current = currentByDraftId.get(workout.id);
             const row: PlanWorkoutRecord = {
               id: current?.id ?? input.identity.newUlid(),
@@ -144,7 +144,12 @@ export function createPlanChangeOperations(input: {
             insert,
             update,
             delete: currentWorkouts
-              .filter((workout) => !retained.has(workout.id))
+              .filter(
+                (workout) =>
+                  diffIds.has(
+                    PlanChangeWorkoutSchema.parse(JSON.parse(workout.structureJson)).id,
+                  ) && !retained.has(workout.id),
+              )
               .map((workout) => workout.id),
           };
         },

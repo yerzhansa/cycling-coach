@@ -98,6 +98,7 @@ export interface ApplyPlanChangeInput {
   readonly materialize: (
     afterSnapshotJson: string,
     currentWorkouts: readonly PlanWorkoutRecord[],
+    diffIds: ReadonlySet<string>,
   ) => PlanChangeWorkoutMutations;
 }
 export interface PlanChangeRepository {
@@ -130,7 +131,9 @@ const ChangeCommandRowSchema = z.object({
 });
 const SnapshotSchema = z.object({
   weeks: z.array(
-    z.object({ workouts: z.array(z.object({ id: z.string(), date: z.string().nullable() })) }),
+    z.object({
+      workouts: z.array(z.object({ id: z.string(), date: z.string().nullable() }).passthrough()),
+    }),
   ),
 });
 const draftId = (workout: PlanWorkoutRecord) =>
@@ -198,17 +201,49 @@ export function createPlanChangeRepository(
       ],
     );
   };
-  const writeWorkouts = async (input: ApplyPlanChangeInput, afterSnapshotJson: string) => {
+  const writeWorkouts = async (
+    input: ApplyPlanChangeInput,
+    change: ChangeRow,
+    afterSnapshotJson: string,
+  ) => {
     const plan = await plans.read(input.planId);
     if (plan === undefined) return fail();
     const current = await plans.readWorkouts(input.planId);
-    const mutations = input.materialize(afterSnapshotJson, current);
+    const diffIds = new Set(
+      PlanChangeEnvelopeSchema.parse(JSON.parse(change.diff_json)).diff.map(
+        (item) => item.workoutId,
+      ),
+    );
+    const revision = z
+      .object({ snapshot_json: z.string() })
+      .parse(
+        await store.get(
+          "SELECT snapshot_json FROM plan_revision WHERE plan_id=? AND revision_number=?",
+          [input.planId, change.base_revision_number],
+        ),
+      );
+    const baseWorkouts = SnapshotSchema.parse(JSON.parse(revision.snapshot_json)).weeks.flatMap(
+      (week) => week.workouts,
+    );
+    const currentByDraftId = new Map(current.map((workout) => [draftId(workout), workout]));
+    for (const workout of baseWorkouts) {
+      if (!diffIds.has(workout.id)) continue;
+      const row = currentByDraftId.get(workout.id);
+      if (
+        row === undefined
+          ? workout.date !== null
+          : canonicalJson(JSON.parse(row.structureJson)) !== canonicalJson(workout)
+      )
+        return false;
+    }
+    const mutations = input.materialize(afterSnapshotJson, current, diffIds);
     const byId = new Map(current.map((workout) => [workout.id, workout]));
     const byDraftId = new Map(current.map((workout) => [draftId(workout), workout.id]));
     const touched = new Set<string>();
     const next = new Map(byId);
     for (const id of mutations.delete) {
-      if (!byId.has(id) || touched.has(id)) return fail();
+      if (!byId.has(id) || touched.has(id) || !diffIds.has(draftId(byId.get(id) ?? fail())))
+        return fail();
       touched.add(id);
       next.delete(id);
     }
@@ -218,6 +253,7 @@ export function createPlanChangeRepository(
     ] as const) {
       for (const workout of rows) {
         validatePlanWorkoutRecord(plan, workout);
+        if (!diffIds.has(draftId(workout))) return fail();
         if (touched.has(workout.id) || (operation === "insert") === byId.has(workout.id))
           return fail();
         const existingId = byDraftId.get(draftId(workout));
@@ -277,6 +313,7 @@ export function createPlanChangeRepository(
         ],
       );
     }
+    return true;
   };
   return {
     async preview(input) {
@@ -376,6 +413,8 @@ export function createPlanChangeRepository(
           const { afterSnapshotJson } = z
             .object({ afterSnapshotJson: z.string() })
             .parse(JSON.parse(change.reconciliation_effect_json));
+          if (!(await writeWorkouts(input, change, afterSnapshotJson)))
+            return { status: "rejected", reason: "stale-version" };
           const revisionNumber = active.current_revision_number + 1;
           await store.run(
             `INSERT INTO plan_revision (id,plan_id,revision_number,parent_revision_number,source_kind,source_id,snapshot_json,fingerprint,created_at_ms,device_id,hlc_physical_ms,hlc_counter) VALUES (?,?,?,?,'plan-change',?,?,?,?,?,?,?)`,
@@ -405,7 +444,6 @@ export function createPlanChangeRepository(
               input.expectedVersion,
             ],
           );
-          await writeWorkouts(input, afterSnapshotJson);
           await store.run(
             "UPDATE plan SET updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=? WHERE id=?",
             [

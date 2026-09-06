@@ -153,6 +153,20 @@ describe("Schedule Plan Changes", () => {
     expect(result.totals.after.plan).toBe(1105);
   });
 
+  it.each([
+    { hours: 2.25, minutes: 135 },
+    { hours: 2.749, minutes: 164 },
+  ])("converts a $hours hour weekly budget to $minutes whole minutes", ({ hours, minutes }) => {
+    const result = run({ kind: "weekly-duration", hours });
+    expect(result.totals.after.weeks.map((week) => week.minutes)).toEqual([
+      205,
+      ...Array<number>(5).fill(minutes),
+    ]);
+    expect(
+      result.diff.every((row) => row.after === null || Number.isInteger(row.after.minutes)),
+    ).toBe(true);
+  });
+
   it("removes a Workout when a weekly trim would leave less than 15 minutes", () => {
     const result = run({ kind: "weekly-duration", hours: 115 / 60 });
     expect(result.diff.find((row) => row.workoutId === "w2-long")?.after).toBeNull();
