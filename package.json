@@ -51,7 +51,7 @@
     "@sinonjs/fake-timers": "^15.4.0",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.4",
-    "@xmldom/xmldom": "0.9.10",
+    "@xmldom/xmldom": "0.9.12",
     "ai": "^6.0.158",
     "intervals-icu-api": "0.4.0",
     "knip": "^6.32.2",

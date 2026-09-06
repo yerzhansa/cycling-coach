@@ -36,7 +36,7 @@
     "test": "pnpm --dir ../.. exec vitest run --project workspace packages/kernel/tests"
   },
   "dependencies": {
-    "@xmldom/xmldom": "0.9.10",
+    "@xmldom/xmldom": "0.9.12",
     "fflate": "0.8.3",
     "zod": "^4.3.6"
   },
