@@ -1164,6 +1164,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
       creation: null,
       active: {
         planId: activated.planId,
+        version: 1,
         name: "Improve fitness",
         start: test.draft.start,
         end: test.draft.end,
@@ -1176,6 +1177,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
       },
       closed: [{
         planId: incumbentId,
+        version: 2,
         name: "Earlier Plan",
         start: "1997-12-22",
         end: "1998-01-18",
@@ -1186,6 +1188,33 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
         activatedAt: "1997-12-22",
         creationId: null,
       }],
+    });
+  });
+
+  it("exposes the active version for closure and rejects a stale version", async () => {
+    const test = await review();
+    const activated = await test.host["plan_creation.activate"](test.request);
+    const { active } = await test.host["plan.list"]({});
+    expect(active).toMatchObject({ planId: activated.planId, version: 1 });
+    if (active === null) throw new Error("Expected an active Plan");
+
+    await expect(
+      test.host["plan.close"]({
+        commandId: "stop-stale",
+        planId: active.planId,
+        expectedVersion: active.version + 1,
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "stale-version" });
+    await expect(
+      test.host["plan.close"]({
+        commandId: "stop-current",
+        planId: active.planId,
+        expectedVersion: active.version,
+      }),
+    ).resolves.toMatchObject({ status: "closed", planId: active.planId });
+    await expect(test.host["plan.list"]({})).resolves.toMatchObject({
+      active: null,
+      closed: [{ planId: active.planId, version: active.version + 1 }],
     });
   });
 

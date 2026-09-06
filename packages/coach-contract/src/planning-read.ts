@@ -96,6 +96,7 @@ export type GetPlanningReadModelRpcResult = z.infer<typeof GetPlanningReadModelR
 export const PlanSummarySchema = z
   .object({
     planId: z.string().min(1),
+    version: z.number().int().positive(),
     name: z.string().min(1),
     start: z.iso.date(),
     end: z.iso.date(),

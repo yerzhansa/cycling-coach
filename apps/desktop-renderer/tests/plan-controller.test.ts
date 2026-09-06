@@ -106,6 +106,7 @@ describe("Plan library refresh", () => {
       closed: [
         {
           planId: "closed-plan",
+          version: 2,
           name: "Fitness",
           start: "1998-09-07",
           end: "1998-10-04",

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createPlanCreationRepository,
+  createPlanRepository,
   createPlanLifecycleRepository,
   type PlanLifecycleRepository,
   type PlanCreationCommandStamp,
@@ -134,6 +135,22 @@ describe("Plan lifecycle repository", () => {
     ) VALUES (?,?,'preview',1,1,NULL,'{}','Adjust training','[]',?,'{}',?,?,NULL,'test-device',?,3)`,
       [id("81"), id("11"), fingerprint, nowMs + 60, nowMs + 60, nowMs + 60],
     );
+
+  it("lists the current Plan version before and after closure", async () => {
+    await activate();
+    const plans = createPlanRepository(store);
+    const [active] = await plans.listPlans();
+    expect(active).toMatchObject({ planId: id("11"), status: "active", version: 1 });
+    if (active === undefined) throw new Error("Expected an active Plan");
+
+    await expect(
+      lifecycle.close({ ...closeInput(), expectedVersion: active.version }),
+    ).resolves.toMatchObject({ status: "closed" });
+
+    await expect(plans.listPlans()).resolves.toMatchObject([
+      { planId: active.planId, status: "closed", version: active.version + 1 },
+    ]);
+  });
 
   it("closes offline, records cleanup intent and preserves every revision and Workout", async () => {
     await activate();
@@ -424,6 +441,7 @@ describe("Plan lifecycle repository", () => {
         closeReason: "stopped",
         closedAtMs: nowMs + 50,
         activatedAtMs: nowMs + 12,
+        version: 2,
         creationId: id("1"),
       },
       closeActor: "athlete",

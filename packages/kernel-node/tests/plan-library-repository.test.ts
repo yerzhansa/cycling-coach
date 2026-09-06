@@ -93,6 +93,7 @@ describe("Plan library repository", () => {
       closeReason,
       closedAtMs,
       activatedAtMs,
+      version: 1,
       creationId,
     };
   }

@@ -68,6 +68,7 @@ const ClosedRowSchema = z.object({
   close_reason: z.enum(["stopped", "completed", "legacy-unclassified"]),
   closed_at_ms: z.number().int().nonnegative(),
   activated_at_ms: z.number().int().nonnegative(),
+  version: z.number().int().positive(),
   creation_id: z.string().nullable(),
   close_actor: z.string().nullable(),
   cleanup_status: z.enum(["pending", "running", "retrying", "failed", "verified"]).nullable(),
@@ -239,7 +240,7 @@ export function createPlanLifecycleRepository(
       const row = await store.get(
         `SELECT planning_plan.plan_id,plan.name,plan.start_date_key,plan.total_weeks,
         planning_plan.status,planning_plan.close_reason,planning_plan.closed_at_ms,
-        planning_plan.activated_at_ms,planning_plan.close_actor,activation.source_id AS creation_id,
+        planning_plan.activated_at_ms,planning_plan.version,planning_plan.close_actor,activation.source_id AS creation_id,
         (SELECT status FROM plan_reconciliation_job WHERE plan_id=planning_plan.plan_id AND kind='cleanup'
           ORDER BY updated_at_ms DESC,id DESC LIMIT 1) AS cleanup_status
         FROM planning_plan JOIN plan ON plan.id=planning_plan.plan_id
@@ -267,6 +268,7 @@ export function createPlanLifecycleRepository(
           closeReason: closed.close_reason,
           closedAtMs: closed.closed_at_ms,
           activatedAtMs: closed.activated_at_ms,
+          version: closed.version,
           creationId: closed.creation_id,
         },
         closeActor: closed.close_actor,

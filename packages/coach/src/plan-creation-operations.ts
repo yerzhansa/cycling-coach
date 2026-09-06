@@ -176,6 +176,7 @@ export function createPlanCreationOperations(input: {
     value === null ? null : new Date(value).toISOString().slice(0, 10);
   const summarizePlan = (plan: PlanSummaryRecord) => ({
     planId: plan.planId,
+    version: plan.version,
     name: plan.name,
     start: dateText(plan.startDateKey),
     end: dateText(addCivilDays(plan.startDateKey, plan.totalWeeks * 7 - 1)),

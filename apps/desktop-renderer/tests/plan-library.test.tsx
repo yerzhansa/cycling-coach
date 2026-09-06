@@ -168,6 +168,7 @@ const creation: PlanCreationCardModel = {
 };
 const active: NonNullable<ListPlansResult["active"]> = {
   planId: "active-library",
+  version: 1,
   name: "Build steady power",
   start: "1998-09-07",
   end: "1998-10-04",
