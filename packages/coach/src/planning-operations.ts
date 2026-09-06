@@ -1916,6 +1916,7 @@ export function createPlanningOperations(
       if (activePlan.status === "active" && overrides.endedScenario === undefined) {
         return readActive(activePlan, 0, overrides);
       }
+      return readEnded(activePlan, 0, overrides);
     }
     const conversation = await conversations.readLatestOpenConversation();
     if (conversation === undefined) {

@@ -229,8 +229,9 @@ describe("legacy writer fence", () => {
     },
   );
 
-  it("retains natural completion while target ownership remains active", async () => {
+  it("retains natural completion over an open legacy conversation while target ownership remains active", async () => {
     const test = await fixture("active");
+    await test.openConversation();
     if (test.planId === null) throw new Error("Expected active Plan");
     const planId = test.planId;
     const plans = createPlanRepository(test.store);
@@ -281,10 +282,12 @@ describe("legacy writer fence", () => {
     await expect(createLegacyWriterFence(test.store).read()).resolves.toMatchObject({
       activePlanId: planId,
     });
+    const before = await dumpStore(test.store);
     await expect(operations.getPlanState?.({})).resolves.toMatchObject({
       status: "ready",
-      state: { lifecycle: "ended", projection: "ended" },
+      state: { lifecycle: "ended", projection: "ended", planId },
     });
+    expect(await dumpStore(test.store)).toBe(before);
   });
 
   it.each(["in-progress", "review", "active"] as const)(
