@@ -30,7 +30,8 @@ describe("CI cost contract", () => {
     expect(check).toContain("pnpm exec vitest run --shard=2/2");
     expect(check).toContain("run: pnpm s8a");
     expect(check).toContain("Pack and smoke cycling-coach");
-    expect(check).toContain("xvfb-run -a pnpm --filter @enduragent/desktop test:e2e");
+    expect(check).not.toContain("Test Desktop E2E on Linux");
+    expect(check).not.toContain("xvfb-run");
     expect(ci).not.toContain("test_shards:");
     expect(ci).not.toMatch(/^  s8a:/mu);
   });

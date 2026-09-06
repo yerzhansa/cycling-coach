@@ -108,22 +108,6 @@ jobs:
           else
             echo "::warning::No changeset found for this PR. Behavioral/user-facing changes should ship a .changeset/*.md (see .changeset/README.md). chore:/ci: PRs are exempt."
           fi
-      - id: desktop_e2e
-        name: Test Desktop E2E on Linux
-        if: needs.desktop-scope.outputs.native == 'true'
-        continue-on-error: true
-        run: |
-          pnpm --filter @enduragent/desktop exec playwright install-deps chromium
-          xvfb-run -a pnpm --filter @enduragent/desktop test:e2e
-      - name: Upload Desktop E2E artifacts
-        if: steps.desktop_e2e.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-e2e-linux-artifacts
-          path: |
-            apps/desktop/playwright-report/
-            apps/desktop/test-results/
-          if-no-files-found: warn
 
   test:
     needs: check
