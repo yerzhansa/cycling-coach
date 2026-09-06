@@ -6,6 +6,10 @@ import {
   PlanChangePreviewRpcParamsSchema,
   PlanChangeApplyRpcParamsSchema,
   type PlanChangeOperations,
+  type PlanChangeApplyRpcParams,
+  type PlanChangeApplyResult,
+  type PlanChangePreviewRpcParams,
+  type PlanCreationAnswerInput,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationPreviewRpcParamsSchema,
   type CoachEngine,
@@ -116,6 +120,10 @@ const response = (value: unknown): readonly string[] => [JSON.stringify(value)];
 export class PlanCreationBackend {
   readonly script: DesktopFixtureScript;
   readonly creationRequests: ScriptRequest[] = [];
+  readonly changeApplyResponses: {
+    readonly params: PlanChangeApplyRpcParams;
+    readonly result: PlanChangeApplyResult;
+  }[] = [];
   readonly planListRequests: ScriptRequest[] = [];
   private store: (SqlStore & MigratorStore) | undefined;
   private repository: PlanCreationRepository | undefined;
@@ -142,6 +150,7 @@ export class PlanCreationBackend {
       onRequest: async (value) => {
         const request = value as ScriptRequest;
         if (request.method.startsWith("plan_creation.")) this.creationRequests.push(request);
+        if (request.method.startsWith("plan_change.")) this.creationRequests.push(request);
         if (coexistence && request.method === "listArchivedConversations") {
           return response({
             schemaVersion: 1,
@@ -259,11 +268,10 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
         }
         if (request.method === "plan_change.apply") {
           if (!this.changes) throw new TypeError("Plan Change operations are unavailable");
-          return response(
-            await this.changes["plan_change.apply"](
-              PlanChangeApplyRpcParamsSchema.parse(request.params),
-            ),
-          );
+          const params = PlanChangeApplyRpcParamsSchema.parse(request.params);
+          const result = await this.changes["plan_change.apply"](params);
+          this.changeApplyResponses.push({ params, result });
+          return response(result);
         }
         if (request.method === "plan_creation.activate") {
           return response(
@@ -391,6 +399,63 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
 
   async library() {
     return this.requireHost()["plan.list"]({});
+  }
+
+  async seedActiveTraining() {
+    const host = this.requireHost();
+    const started = await host["plan_creation.start"]({ commandId: "seed-training-start" });
+    if (started.status !== "started") throw new TypeError("Training seed was not started");
+    let card = started.planCreation;
+    const answers: PlanCreationAnswerInput[] = [
+      { kind: "goal", goal: { kind: "fitness" } },
+      { kind: "plan-length", weeks: 4 },
+      { kind: "schedule-mode", mode: "fixed" },
+      {
+        kind: "availability",
+        mode: "fixed",
+        weeklyHoursLimit: 6,
+        longestWorkoutHours: 2,
+        usableWeekdays: [1, 3, 6],
+      },
+      { kind: "start-timing", timing: { kind: "as-soon-as-possible" } },
+      { kind: "commitments", commitments: { kind: "none" } },
+      { kind: "baseline", baseline: "regular" },
+      { kind: "success", success: { kind: "authored", text: "Ride four steady hours" } },
+      { kind: "restriction", restriction: { kind: "none" } },
+    ];
+    for (const [index, answer] of answers.entries()) {
+      const answered = await host["plan_creation.answer"]({
+        commandId: `seed-training-answer-${index}`,
+        creationId: card.creationId,
+        expectedVersion: card.version,
+        answer,
+      });
+      if (answered.status !== "answered") throw new TypeError("Training seed answer was rejected");
+      card = answered.planCreation;
+    }
+    const previewed = await host["plan_creation.preview"]({
+      commandId: "seed-training-preview",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    });
+    if (previewed.status !== "previewed" || previewed.planCreation.draft === null)
+      throw new TypeError("Training seed Draft is unavailable");
+    const activated = await host["plan_creation.activate"]({
+      commandId: "seed-training-activate",
+      creationId: card.creationId,
+      expectedVersion: previewed.planCreation.version,
+    });
+    return { planId: activated.planId, draft: previewed.planCreation.draft };
+  }
+
+  async previewChange(params: PlanChangePreviewRpcParams) {
+    if (!this.changes) throw new TypeError("Plan Change operations are unavailable");
+    return this.changes["plan_change.preview"](params);
+  }
+
+  async applyChange(params: PlanChangeApplyRpcParams) {
+    if (!this.changes) throw new TypeError("Plan Change operations are unavailable");
+    return this.changes["plan_change.apply"](params);
   }
 
   async seedLibrary(presence: {
