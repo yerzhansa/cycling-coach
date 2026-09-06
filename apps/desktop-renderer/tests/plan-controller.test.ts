@@ -115,6 +115,7 @@ describe("Plan library refresh", () => {
           closeReason: "completed",
           closedAt: "1998-10-04",
           activatedAt: "1998-09-07",
+          calendar: { status: "pending", window: null, currentThrough: null, error: null },
           creationId: null,
         },
       ],

@@ -20,6 +20,11 @@ import {
   createPlanCreationRepository,
   type PlanCreationRepository,
 } from "@enduragent/kernel/planning";
+import type { PlanMirrorCalendarPort } from "@enduragent/engine";
+import {
+  createPlanCalendarDrain,
+  type PlanCalendarDrain,
+} from "../../../../packages/coach/src/plan-calendar-drain.js";
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
@@ -130,6 +135,7 @@ export class PlanCreationBackend {
   private host: PlanCreationHost | undefined;
   private changes: PlanChangeOperations | undefined;
   private planning: PlanningOperations | undefined;
+  private calendarDrain: PlanCalendarDrain | undefined;
   planStateReadFails = false;
   planListReadFails = false;
   private sequence = 0;
@@ -144,6 +150,10 @@ export class PlanCreationBackend {
     private readonly databasePath: string,
     coexistence = false,
     readStoredPlans = false,
+    private readonly options: {
+      readonly calendar?: PlanMirrorCalendarPort;
+      readonly calendarConnected?: boolean;
+    } = {},
   ) {
     const base = coexistence ? createPlanInspectionFixtureScript() : createPlanQaFixtureScript();
     this.script = {
@@ -178,7 +188,11 @@ export class PlanCreationBackend {
           const config = JSON.parse(frames[0] ?? "null");
           return response({
             ...config,
-            intervals: { ...config.intervals, credential_configured: false },
+            intervals: {
+              ...config.intervals,
+              credential_configured:
+                this.options.calendarConnected ?? Boolean(this.options.calendar),
+            },
           });
         }
         if (
@@ -343,19 +357,69 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
       store: this.store,
       identity,
       crypto: globalThis.crypto,
-      todayDateKey: () => 19980101,
+      todayDateKey: () =>
+        this.options.calendar === undefined
+          ? 19980101
+          : Number(this.civilDate.replaceAll("-", "")),
       now: () => this.instant,
     });
+    const calendarConnected = () =>
+      this.options.calendarConnected ?? Boolean(this.options.calendar);
     this.host = createPlanCreationOperations({
       store: this.store,
       repository: this.repository,
       identity,
       crypto: globalThis.crypto,
       eventCandidates: { read: async () => [] },
+      calendarConnected,
       today: () => this.civilDate,
       todayDateKey: () => Number(this.civilDate.replaceAll("-", "")),
       now: () => Date.parse(`${this.civilDate}T00:00:00.000Z`),
     });
+    if (this.options.calendar !== undefined) {
+      const drain = createPlanCalendarDrain({
+        store: this.store,
+        calendar: this.options.calendar,
+        calendarConnected,
+        identity,
+        todayDateKey: () => Number(this.civilDate.replaceAll("-", "")),
+        now: () => this.instant,
+        logger: { warn: () => {} },
+      });
+      this.calendarDrain = drain;
+      const host = this.host;
+      this.host = {
+        ...host,
+        "plan_creation.activate": async (input) => {
+          const result = await host["plan_creation.activate"](input);
+          void drain.kick();
+          return result;
+        },
+        "plan.close": async (input) => {
+          const result = await host["plan.close"](input);
+          void drain.kick();
+          return result;
+        },
+        "plan.list": async (input) => {
+          const result = await host["plan.list"](input);
+          void drain.kick();
+          return result;
+        },
+      };
+      const changes = this.changes;
+      this.changes = {
+        ...changes,
+        "plan_change.apply": async (input) => {
+          const result = await changes["plan_change.apply"](input);
+          void drain.kick();
+          return result;
+        },
+      };
+    }
+  }
+
+  async calendarIdle(): Promise<void> {
+    await this.calendarDrain?.idle();
   }
 
   setCivilDate(date: string): void {
@@ -379,6 +443,8 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
   }
 
   async close(): Promise<void> {
+    await this.calendarIdle();
+    this.calendarDrain = undefined;
     await this.store?.close();
     this.store = undefined;
     this.repository = undefined;

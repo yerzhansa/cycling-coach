@@ -1,3 +1,4 @@
+import { createPlanCalendarDrain } from "./plan-calendar-drain.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -888,6 +889,7 @@ export async function createLocalCoachComposition(
     crypto: globalThis.crypto,
     eventCandidates: { read: async () => [] },
     baselineEvidence: { read: async () => undefined },
+    calendarConnected: () => approvedConfig().intervals.apiKey.length > 0,
     today: () => todayInTZ(planningTimezone, new Date(now())),
     todayDateKey: planningDateKey,
     now,
@@ -1735,6 +1737,9 @@ export async function createLocalCoachComposition(
       if (initialRefreshPromise !== undefined) return initialRefreshPromise;
       initialPlanCompletion ??= planLifecycle
         .completeExpired({ todayDateKey: planningDateKey(), nowMs: now() })
+        .then(() => {
+          if (!closing) void drain.kick();
+        })
         .catch((error: unknown) => {
           initialPlanCompletion = undefined;
           throw error;
@@ -1787,7 +1792,9 @@ export async function createLocalCoachComposition(
             );
           }),
         )
-        .then(() => undefined)
+        .then(() => {
+          if (!closing) void drain.kick();
+        })
         .finally(() => {
           if (ownerSucceeded && unapprovedConfig.intervals.apiKey.length > 0) {
             ensureSchedulerStarted();
@@ -2023,6 +2030,28 @@ export async function createLocalCoachComposition(
         ? null
         : makeChatClient({ apiKey: intervals.apiKey, athleteId: intervals.athleteId });
     });
+    const drain = createPlanCalendarDrain({
+      store: input.context.store,
+      calendar: planCalendar,
+      calendarConnected: () => approvedConfig().intervals.apiKey.length > 0,
+      identity: planningIdentity,
+      todayDateKey: planningDateKey,
+      now,
+      logger,
+    });
+    const runWindow = runtime.runWindow.bind(runtime);
+    runtime.runWindow = async () => {
+      const result = await runWindow();
+      if (!closing) void drain.kick();
+      return result;
+    };
+    const kickAfter =
+      <Params, Result>(operation: (params: Params) => Promise<Result>) =>
+      async (params: Params): Promise<Result> => {
+        const result = await operation(params);
+        if (!closing) void drain.kick();
+        return result;
+      };
     const readiness = {
       async read({
         plan,
@@ -2283,15 +2312,20 @@ export async function createLocalCoachComposition(
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
       ...planningRequestOperations,
-      "plan.list": planCreationOperations["plan.list"],
-      "plan.close": planCreationOperations["plan.close"],
+      "plan.list": async (params) => {
+        const result = await planCreationOperations["plan.list"](params);
+        if (!closing) void drain.kick();
+        return result;
+      },
+      "plan.close": kickAfter(planCreationOperations["plan.close"]),
       ...planChangeOperations,
+      "plan_change.apply": kickAfter(planChangeOperations["plan_change.apply"]),
       "plan.history": planCreationOperations["plan.history"],
       "plan_creation.start": planCreationOperations["plan_creation.start"],
       "plan_creation.answer": planCreationOperations["plan_creation.answer"],
       "plan_creation.preview": planCreationOperations["plan_creation.preview"],
       "plan_creation.discard": planCreationOperations["plan_creation.discard"],
-      "plan_creation.activate": planCreationOperations["plan_creation.activate"],
+      "plan_creation.activate": kickAfter(planCreationOperations["plan_creation.activate"]),
       ...planningOperations,
     } satisfies CoachOperations &
       PlanningReadOperations &
@@ -2323,6 +2357,7 @@ export async function createLocalCoachComposition(
           };
           await attempt(() => dependencies.closeHostAdapters?.());
           await attempt(() => reference!.scheduler.stop());
+          await attempt(() => drain.idle());
           await attempt(() => runtime!.close());
           await initialRefreshPromise?.catch(() => {});
           if (failure !== undefined) throw failure.error;

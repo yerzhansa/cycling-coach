@@ -9,6 +9,7 @@ import {
 } from "@enduragent/coach-contract";
 import {
   createPlanCreationRepository,
+  createPlanReconciliationRepository,
   createPlanRepository,
   PlanCreationStoreError,
   type PlanCreationAnswerRecord,
@@ -24,6 +25,7 @@ import {
 import { runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
+import { createPlanChangeOperations } from "../src/plan-change-operations.js";
 import { createPlanningReadService } from "../src/planning-read-service.js";
 import { readPlanCreationAnswers } from "../src/plan-creation-answers.js";
 
@@ -856,6 +858,7 @@ describe("Plan Creation operations", () => {
 
 async function previewHarness() {
   let currentToday = today;
+  let connected = false;
   const store = openSqliteStorage(":memory:");
   onTestFinished(() => store.close());
   await runMigrations(store, MIGRATIONS);
@@ -871,6 +874,7 @@ async function previewHarness() {
     },
     crypto: globalThis.crypto,
     eventCandidates: { read: async () => [candidateSource] },
+    calendarConnected: () => connected,
     today: () => currentToday,
     todayDateKey: () => Number(currentToday.replaceAll("-", "")),
     now: () => Date.parse(`${currentToday}T12:00:00Z`),
@@ -911,6 +915,9 @@ async function previewHarness() {
     ready,
     answer,
     card: () => card,
+    setConnected: (value: boolean) => {
+      connected = value;
+    },
     setToday: (value: string) => {
       currentToday = value;
     },
@@ -1100,27 +1107,245 @@ describe("Plan Creation activation", () => {
     };
   };
 
+  it("projects pending, running, failed and verified mirror work across connection changes", async () => {
+    const test = await review();
+    const activated = await test.host["plan_creation.activate"](test.request);
+    const repository = createPlanReconciliationRepository(test.store);
+    const job = await repository.readLatestJobByWindow(activated.planId, "mirror");
+    if (job === undefined) throw new Error("Expected mirror job");
+    const calendar = {
+      status: "not-connected",
+      window: { start: today, end: "1998-09-08" },
+      currentThrough: null,
+      error: null,
+    };
+    const read = async () => (await test.host["plan.list"]({})).active?.calendar;
+    expect(await read()).toEqual(calendar);
+    test.setConnected(true);
+    expect(await read()).toEqual({ ...calendar, status: "pending" });
+    await repository.beginAttempt(job.id, job.updatedAtMs + 1);
+    expect(await read()).toEqual({ ...calendar, status: "running" });
+    await repository.failJob(job.id, "calendar-list-failed", job.updatedAtMs + 2);
+    expect(await read()).toEqual({
+      ...calendar,
+      status: "failed",
+      error: "Calendar sync failed. Retry available.",
+    });
+    test.setConnected(false);
+    expect(await read()).toEqual(calendar);
+    test.setConnected(true);
+    await repository.beginAttempt(job.id, job.updatedAtMs + 3);
+    expect(await read()).toEqual({ ...calendar, status: "running" });
+    await repository.verifyJob(job.id, job.updatedAtMs + 4);
+    expect(await read()).toEqual({ ...calendar, status: "verified", currentThrough: "1998-09-08" });
+    test.setConnected(false);
+    expect(await read()).toEqual({ ...calendar, status: "verified", currentThrough: "1998-09-08" });
+    await test.store.run("DELETE FROM plan_reconciliation_job WHERE id = ?", [job.id]);
+    expect(await read()).toEqual({ ...calendar, window: null });
+    test.setConnected(true);
+    expect(await read()).toEqual({ ...calendar, status: "pending", window: null });
+  });
+
+  it("projects the cleanup job for a closed Plan and preserves history cleanup", async () => {
+    const test = await review();
+    test.setConnected(true);
+    const activated = await test.host["plan_creation.activate"](test.request);
+    await test.host["plan.close"]({
+      commandId: "close-calendar",
+      planId: activated.planId,
+      expectedVersion: 1,
+    });
+    const repository = createPlanReconciliationRepository(test.store);
+    const job = await repository.readLatestJobByWindow(activated.planId, "cleanup");
+    if (job === undefined) throw new Error("Expected cleanup job");
+    const calendar = {
+      status: "pending",
+      window: { start: "1998-09-03", end: test.draft.end },
+      currentThrough: null,
+      error: null,
+    };
+    expect((await test.host["plan.list"]({})).closed[0]?.calendar).toEqual(calendar);
+    await repository.beginAttempt(job.id, job.updatedAtMs + 1);
+    await repository.failJob(job.id, "calendar-list-failed", job.updatedAtMs + 2);
+    const failed = {
+      ...calendar,
+      status: "failed",
+      error: "Calendar cleanup failed. Retry available.",
+    };
+    expect((await test.host["plan.list"]({})).closed[0]?.calendar).toEqual(failed);
+    expect(await test.host["plan.history"]({ planId: activated.planId })).toMatchObject({
+      plan: { calendar: failed },
+      cleanup: "failed",
+    });
+  });
+
+  it.each(["mirror", "cleanup"] as const)(
+    "offers retry only below the failure budget for %s work in the library",
+    async (kind) => {
+      const test = await review();
+      test.setConnected(true);
+      const activated = await test.host["plan_creation.activate"](test.request);
+      if (kind === "cleanup") {
+        await test.host["plan.close"]({
+          commandId: "close-calendar",
+          planId: activated.planId,
+          expectedVersion: 1,
+        });
+      }
+      const repository = createPlanReconciliationRepository(test.store);
+      const job = await repository.readLatestJobByWindow(activated.planId, kind);
+      if (job === undefined) throw new Error("Expected calendar job");
+      const error = kind === "mirror" ? "Calendar sync failed." : "Calendar cleanup failed.";
+      for (let failureCount = 1; failureCount <= 6; failureCount += 1) {
+        await repository.beginAttempt(job.id, job.updatedAtMs + failureCount * 2 - 1);
+        await repository.failJob(
+          job.id,
+          "calendar-list-failed",
+          job.updatedAtMs + failureCount * 2,
+        );
+        const library = await test.host["plan.list"]({});
+        const calendar = kind === "mirror" ? library.active?.calendar : library.closed[0]?.calendar;
+        expect(calendar).toMatchObject({
+          status: "failed",
+          error: failureCount >= 5 ? error : `${error} Retry available.`,
+        });
+      }
+    },
+  );
+
+  it("reads history cleanup and calendar from one snapshot during verification", async () => {
+    const test = await review();
+    test.setConnected(true);
+    const activated = await test.host["plan_creation.activate"](test.request);
+    await test.host["plan.close"]({
+      commandId: "close-calendar-snapshot",
+      planId: activated.planId,
+      expectedVersion: 1,
+    });
+    const repository = createPlanReconciliationRepository(test.store);
+    const job = await repository.readLatestJobByWindow(activated.planId, "cleanup");
+    if (job === undefined) throw new Error("Expected cleanup job");
+    await repository.beginAttempt(job.id, job.updatedAtMs + 1);
+    await repository.failJob(job.id, "calendar-list-failed", job.updatedAtMs + 2);
+    const transaction = vi.spyOn(test.store, "transaction");
+    const get = test.store.get.bind(test.store);
+    let signalEntered = () => {};
+    let releaseRead = () => {};
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const reader = vi.spyOn(test.store, "get").mockImplementation(async (sql, params) => {
+      const row = await get(sql, params);
+      if (sql.includes("AS cleanup_status")) {
+        signalEntered();
+        await released;
+      }
+      return row;
+    });
+    const history = test.host["plan.history"]({ planId: activated.planId });
+    await entered;
+    expect(transaction).toHaveBeenCalledTimes(1);
+    let verified = false;
+    const verification = test.store.transaction(async () => {
+      await test.store.run(
+        "UPDATE plan_reconciliation_job SET status='verified',last_error_code=NULL,completed_at_ms=?,updated_at_ms=? WHERE id=?",
+        [job.updatedAtMs + 3, job.updatedAtMs + 3, job.id],
+      );
+      verified = true;
+    });
+    expect(transaction).toHaveBeenCalledTimes(2);
+    expect(verified).toBe(false);
+    releaseRead();
+    await expect(history).resolves.toMatchObject({
+      cleanup: "failed",
+      plan: { calendar: { status: "failed", currentThrough: null } },
+    });
+    await verification;
+    reader.mockRestore();
+    transaction.mockClear();
+    await expect(test.host["plan.history"]({ planId: activated.planId })).resolves.toMatchObject({
+      cleanup: "complete",
+      plan: { calendar: { status: "verified", currentThrough: test.draft.end } },
+    });
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows pending again after a second Change in the verified window", async () => {
+    const test = await review();
+    test.setConnected(true);
+    const activated = await test.host["plan_creation.activate"](test.request);
+    let sequence = 1000;
+    const changes = createPlanChangeOperations({
+      store: test.store,
+      identity: {
+        deviceId: async () => "calendar-change-test-device",
+        newUlid: () => id(String(++sequence)),
+        hlcStamp: () => ({ physicalMs: 904_694_400_000, counter: sequence }),
+      },
+      crypto: globalThis.crypto,
+      todayDateKey: () => 19980902,
+      now: () => 904_694_400_000,
+    });
+    const repository = createPlanReconciliationRepository(test.store);
+    for (const [index, minutes] of [60, 30].entries()) {
+      const plan = (await test.host["plan.list"]({})).active;
+      if (plan === null) throw new Error("Expected active Plan");
+      const preview = await changes["plan_change.preview"]({
+        commandId: `preview-calendar-${index}`,
+        planId: activated.planId,
+        expectedVersion: plan.version,
+        intent: { kind: "longest-workout", minutes },
+      });
+      if (preview.status !== "previewed") throw new Error(`Expected preview: ${preview.reason}`);
+      const result = await changes["plan_change.apply"]({
+        commandId: `apply-calendar-${index}`,
+        planId: activated.planId,
+        changeId: preview.change.changeId,
+        expectedVersion: plan.version,
+        decision: "apply",
+      });
+      expect(result.status).toBe("applied");
+      expect((await test.host["plan.list"]({})).active?.calendar).toEqual({
+        status: "pending",
+        window: { start: today, end: "1998-09-08" },
+        currentThrough: null,
+        error: null,
+      });
+      const job = await repository.readLatestJobByWindow(activated.planId, "mirror");
+      if (job === undefined) throw new Error("Expected mirror job");
+      await repository.beginAttempt(job.id, job.updatedAtMs);
+      await repository.verifyJob(job.id, job.updatedAtMs);
+      expect((await test.host["plan.list"]({})).active?.calendar.status).toBe("verified");
+    }
+  });
+
   it("reads one snapshot while replacing the active Plan", async () => {
     const test = await review();
     const incumbentId = id("800");
-    await createPlanRepository(test.store).replace({
-      id: incumbentId,
-      originId: null,
-      name: "Earlier Plan",
-      primaryGoal: "Build fitness",
-      startDateKey: 19971222,
-      targetDateKey: 19980118,
-      status: "active",
-      kind: "short_race_preparation",
-      totalWeeks: 4,
-      weekStartDay: 1,
-      structureJson: "{}",
-      createdAtMs: 882_748_800_000,
-      updatedAtMs: 882_748_800_000,
-      deviceId: "test-device",
-      hlcPhysicalMs: 882_748_800_000,
-      hlcCounter: 0,
-    }, []);
+    await createPlanRepository(test.store).replace(
+      {
+        id: incumbentId,
+        originId: null,
+        name: "Earlier Plan",
+        primaryGoal: "Build fitness",
+        startDateKey: 19971222,
+        targetDateKey: 19980118,
+        status: "active",
+        kind: "short_race_preparation",
+        totalWeeks: 4,
+        weekStartDay: 1,
+        structureJson: "{}",
+        createdAtMs: 882_748_800_000,
+        updatedAtMs: 882_748_800_000,
+        deviceId: "test-device",
+        hlcPhysicalMs: 882_748_800_000,
+        hlcCounter: 0,
+      },
+      [],
+    );
     await test.store.run(
       `INSERT INTO planning_plan
 (plan_id,status,version,current_revision_number,activated_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter)
@@ -1176,20 +1401,34 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
         closedAt: null,
         activatedAt: "1998-01-01",
         creationId: test.request.creationId,
+        calendar: {
+          status: "not-connected",
+          window: { start: "1998-01-01", end: "1998-01-07" },
+          currentThrough: null,
+          error: null,
+        },
       },
-      closed: [{
-        planId: incumbentId,
-        version: 2,
-        name: "Earlier Plan",
-        start: "1997-12-22",
-        end: "1998-01-18",
-        weeks: 4,
-        status: "closed",
-        closeReason: "stopped",
-        closedAt: "1998-01-01",
-        activatedAt: "1997-12-22",
-        creationId: null,
-      }],
+      closed: [
+        {
+          planId: incumbentId,
+          version: 2,
+          name: "Earlier Plan",
+          start: "1997-12-22",
+          end: "1998-01-18",
+          weeks: 4,
+          status: "closed",
+          closeReason: "stopped",
+          closedAt: "1998-01-01",
+          activatedAt: "1997-12-22",
+          creationId: null,
+          calendar: {
+            status: "not-connected",
+            window: { start: "1998-01-02", end: "1998-01-18" },
+            currentThrough: null,
+            error: null,
+          },
+        },
+      ],
     });
   });
 
@@ -1228,7 +1467,10 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
     const result = await test.host["plan.close"](request);
     expect(result).toMatchObject({ status: "closed", planId: activated.planId });
     await expect(test.host["plan.close"](request)).resolves.toEqual(result);
-    await expect(test.host["plan.close"]({ ...request, expectedVersion: 2 })).resolves.toEqual({ status: "rejected", reason: "command-conflict" });
+    await expect(test.host["plan.close"]({ ...request, expectedVersion: 2 })).resolves.toEqual({
+      status: "rejected",
+      reason: "command-conflict",
+    });
     const detail = await test.host["plan.history"]({ planId: activated.planId });
     expect(detail).toMatchObject({
       plan: { planId: activated.planId, status: "closed", closeReason: "stopped" },

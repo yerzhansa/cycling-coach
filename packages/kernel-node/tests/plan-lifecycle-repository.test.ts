@@ -42,6 +42,9 @@ const activationInput = (key = "1") => {
     creationId: id(key),
     expectedVersion: 2,
     activatedAt: "1998-01-01",
+    todayDateKey: 19980101,
+    mirrorJobId: id(`5${key}`),
+    cleanupJobId: id(`6${key}`),
     revisionId: id(`2${key}`),
     materialize: () => ({
       plan: {
@@ -176,7 +179,7 @@ describe("Plan lifecycle repository", () => {
     expect(await store.get("SELECT status FROM plan")).toEqual({ status: "ended" });
     expect(
       await store.get(`SELECT kind,status,window_start_date_key,window_end_date_key
-      FROM plan_reconciliation_job`),
+      FROM plan_reconciliation_job WHERE kind='cleanup'`),
     ).toEqual({
       kind: "cleanup",
       status: "pending",
@@ -250,7 +253,7 @@ describe("Plan lifecycle repository", () => {
     await lifecycle.close({ ...closeInput(), todayDateKey: 19980201 });
     expect(
       await store.get(
-        "SELECT window_start_date_key,window_end_date_key FROM plan_reconciliation_job",
+        "SELECT window_start_date_key,window_end_date_key FROM plan_reconciliation_job WHERE kind='cleanup'",
       ),
     ).toEqual({ window_start_date_key: 19980202, window_end_date_key: 19980202 });
   });
@@ -351,7 +354,7 @@ describe("Plan lifecycle repository", () => {
       expect(await store.get("SELECT status FROM plan")).toEqual({ status: "ended" });
       expect(
         await store.get(
-          "SELECT kind,status,window_start_date_key,window_end_date_key FROM plan_reconciliation_job",
+          "SELECT kind,status,window_start_date_key,window_end_date_key FROM plan_reconciliation_job WHERE kind='cleanup'",
         ),
       ).toEqual({
         kind: "cleanup",
@@ -421,7 +424,10 @@ describe("Plan lifecycle repository", () => {
       [id("90"), id("11"), nowMs, nowMs],
     );
     await expect(lifecycle.close(closeInput())).resolves.toMatchObject({ cleanupJobId: id("90") });
-    expect(await store.all("SELECT id FROM plan_reconciliation_job")).toEqual([{ id: id("90") }]);
+    expect(await store.all("SELECT id FROM plan_reconciliation_job ORDER BY id")).toEqual([
+      { id: id("51") },
+      { id: id("90") },
+    ]);
   });
 
   it("reads immutable closed details including undated Workouts and cleanup state", async () => {

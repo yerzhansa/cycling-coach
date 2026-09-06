@@ -36,6 +36,7 @@ function history(): NonNullable<PlanHistoryResult> {
       closeReason: "stopped",
       closedAt: "1998-09-14",
       activatedAt: "1998-09-07",
+      calendar: { status: "pending", window: null, currentThrough: null, error: null },
       creationId: "creation-closed",
     },
     closeActor: "fictional-device",
