@@ -1,6 +1,11 @@
 import { defineConfig } from "@playwright/test";
 
-const version = "application-ui-extraction-v1";
+import {
+  applicationBaselineForEnvironment,
+  currentApplicationEnvironment,
+} from "./tests/e2e/application-ui-states/baseline-environment.js";
+
+const version = applicationBaselineForEnvironment(currentApplicationEnvironment());
 
 export default defineConfig({
   testDir: "./tests/e2e",

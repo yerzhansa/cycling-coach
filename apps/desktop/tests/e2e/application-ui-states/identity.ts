@@ -2,12 +2,20 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { arch, platform, release } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 
-export const applicationBaselineVersion = "application-ui-extraction-v1";
+import {
+  applicationBaselineForEnvironment,
+  assertApplicationBaselineEnvironment,
+  currentApplicationEnvironment,
+  type ApplicationCaptureEnvironment,
+} from "./baseline-environment.js";
+
+export const applicationBaselineVersion = applicationBaselineForEnvironment(
+  currentApplicationEnvironment(),
+);
 
 export const applicationProjects = {
   "compact-dark": { width: 760, height: 760, theme: "dark" },
@@ -36,11 +44,7 @@ export interface SourceRevisionIdentity {
 
 export interface ApplicationBuildIdentity {
   readonly schemaVersion: 1;
-  readonly environment: {
-    readonly platform: string;
-    readonly architecture: string;
-    readonly darwinRelease: string;
-  };
+  readonly environment: ApplicationCaptureEnvironment;
   readonly applicationSource: FileSetIdentity;
   readonly verificationSource: FileSetIdentity;
   readonly applicationBuild: FileSetIdentity & {
@@ -243,6 +247,7 @@ export async function collectApplicationBuildIdentity(): Promise<ApplicationBuil
         resolve(repository, "apps/desktop/tests/e2e/application-ui-states/fixture.ts"),
         resolve(repository, "apps/desktop/tests/e2e/application-ui-states/global-setup.ts"),
         resolve(repository, "apps/desktop/tests/e2e/application-ui-states/identity.ts"),
+        resolve(repository, "apps/desktop/tests/e2e/application-ui-states/baseline-environment.ts"),
         resolve(repository, "apps/desktop/tests/e2e/application-ui-states/seal-baseline.ts"),
         resolve(repository, "apps/desktop/tests/helpers/desktop-fixture.ts"),
         resolve(repository, "tools/ui-verification/contracts.ts"),
@@ -258,7 +263,7 @@ export async function collectApplicationBuildIdentity(): Promise<ApplicationBuil
   const uiPackage = await packageJson(resolve(uiRoot, "package.json"));
   return {
     schemaVersion: 1,
-    environment: { platform: platform(), architecture: arch(), darwinRelease: release() },
+    environment: currentApplicationEnvironment(),
     applicationSource: fileSet(applicationSource),
     verificationSource: fileSet(verificationSource),
     applicationBuild: {
@@ -304,13 +309,7 @@ export async function assertApplicationBuildIsFresh(): Promise<void> {
 }
 
 export function assertApplicationCaptureEnvironment(identity: ApplicationBuildIdentity): void {
-  if (
-    identity.environment.platform !== "darwin" ||
-    identity.environment.architecture !== "arm64" ||
-    identity.environment.darwinRelease.split(".")[0] !== "25"
-  ) {
-    throw new Error(`${applicationBaselineVersion} requires macOS 26 on arm64`);
-  }
+  assertApplicationBaselineEnvironment(identity.environment, applicationBaselineVersion);
 }
 
 export function applicationRepositoryRoot(): string {

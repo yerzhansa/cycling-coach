@@ -20,18 +20,6 @@ interface BaselineManifest {
   readonly screenshots: Readonly<Record<string, string>>;
 }
 
-function environmentContract(identity: ApplicationBuildIdentity): {
-  readonly platform: string;
-  readonly architecture: string;
-  readonly darwinMajor: string;
-} {
-  return {
-    platform: identity.environment.platform,
-    architecture: identity.environment.architecture,
-    darwinMajor: identity.environment.darwinRelease.split(".")[0] ?? "",
-  };
-}
-
 function manifest(value: unknown): BaselineManifest {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Application baseline manifest must be an object");
@@ -76,11 +64,6 @@ export default async function setup(config: FullConfig): Promise<void> {
   }
   const sealed = manifest(JSON.parse(manifestBytes.toString("utf8")));
   assertApplicationCaptureEnvironment(sealed.identity);
-  deepStrictEqual(
-    environmentContract(current),
-    environmentContract(sealed.identity),
-    "Capture environment family changed",
-  );
   deepStrictEqual(current.electron, sealed.identity.electron, "Electron capture runtime changed");
   const files = (await readdir(root, { recursive: true }))
     .filter((file) => file.endsWith(".png"))
