@@ -241,7 +241,7 @@ describe("Plan library", () => {
       "This creation is no longer unfinished. Open the Plan library for its current result.";
     useEnduragentStore.setState({
       chat: { ...EMPTY_CHAT_SURFACE, notice },
-      planLibrary: { status: "ready", value: { creation: null, active, closed } },
+      planLibrary: { status: "ready", value: { creation: null, active, closed, changes: [] } },
     });
     render(<PlanView />);
     expect(screen.getByText(notice, { exact: true })).toBeVisible();
@@ -256,6 +256,7 @@ describe("Plan library", () => {
         creation: hasCreation ? creation : null,
         active: hasActive ? active : null,
         closed: hasClosed ? closed : [],
+        changes: [],
       };
       useEnduragentStore.setState({ planLibrary: { status: "ready", value: library } });
       render(<PlanView />);
@@ -326,7 +327,7 @@ describe("Plan library", () => {
     render(
       <PlanLibrary
         readFinalDetails={vi.fn()}
-        library={{ creation, active, closed }}
+        library={{ creation, active, closed, changes: [] }}
         readDetails={readDetails}
       />,
     );
@@ -351,7 +352,7 @@ describe("Plan library", () => {
     const view = render(
       <PlanLibrary
         readFinalDetails={vi.fn()}
-        library={{ creation, active: null, closed: [] }}
+        library={{ creation, active: null, closed: [], changes: [] }}
         readDetails={vi.fn()}
       />,
     );
@@ -363,6 +364,7 @@ describe("Plan library", () => {
           creation: { ...creation, draft: planCreationDraft() },
           active: null,
           closed: [],
+          changes: [],
         }}
         readDetails={vi.fn()}
       />,
@@ -373,7 +375,7 @@ describe("Plan library", () => {
 
   it("preserves readable cards with an explicit retry on failure", () => {
     const refresh = vi.fn();
-    const library: ListPlansResult = { creation: null, active, closed };
+    const library: ListPlansResult = { creation: null, active, closed, changes: [] };
     useEnduragentStore.setState({
       planLibrary: { status: "ready", value: library },
       planningReadActions: {
@@ -404,6 +406,7 @@ describe("Plan library", () => {
           creation,
           active,
           closed,
+          changes: [],
         }),
       );
       const controller = createPlanController({
@@ -490,7 +493,7 @@ describe("Plan library refresh subscription", () => {
   it("does not reread when Chat hydrates the creation already in the library", () => {
     useEnduragentStore.setState({
       chat: { ...EMPTY_CHAT_SURFACE, planCreation: null },
-      planLibrary: { status: "ready", value: { creation, active, closed } },
+      planLibrary: { status: "ready", value: { creation, active, closed, changes: [] } },
     });
     const { refresh, unsubscribe } = watchRefresh();
     try {
@@ -528,7 +531,7 @@ describe("Plan library refresh subscription", () => {
   ])("refreshes once when creation identity changes to $creationId version $version", (next) => {
     useEnduragentStore.setState({
       chat: { ...EMPTY_CHAT_SURFACE, planCreation: creation, planCreationLoaded: true },
-      planLibrary: { status: "ready", value: { creation, active, closed } },
+      planLibrary: { status: "ready", value: { creation, active, closed, changes: [] } },
     });
     const { refresh, unsubscribe } = watchRefresh();
     try {
@@ -544,7 +547,7 @@ describe("Plan library refresh subscription", () => {
   it("ignores active Plan hydration and clones but refreshes once for a different Plan id", () => {
     const model = planReadModel({ lifecycle: "active", planId: active.planId });
     useEnduragentStore.setState({
-      planLibrary: { status: "ready", value: { creation, active, closed } },
+      planLibrary: { status: "ready", value: { creation, active, closed, changes: [] } },
     });
     const { refresh, unsubscribe } = watchRefresh();
     try {
@@ -610,13 +613,13 @@ describe("Plan library refresh subscription", () => {
         },
       });
       expect(refresh).toHaveBeenCalledExactlyOnceWith(false);
-      result.resolve({ creation, active, closed });
+      result.resolve({ creation, active, closed, changes: [] });
       await started;
       await Promise.all(refresh.mock.results.map((call) => call.value));
       expect(listPlans).toHaveBeenCalledOnce();
       expect(store.getState().planLibrary).toEqual({
         status: "ready",
-        value: { creation, active, closed },
+        value: { creation, active, closed, changes: [] },
       });
     } finally {
       unsubscribe();
@@ -661,7 +664,7 @@ describe("Plan creation title", () => {
       render(
         <PlanLibrary
           readFinalDetails={vi.fn()}
-          library={{ creation: answered, active: null, closed: [] }}
+          library={{ creation: answered, active: null, closed: [], changes: [] }}
           readDetails={vi.fn()}
         />,
       );
@@ -704,7 +707,7 @@ it("keeps Plan history below the library while a creation occupies the header", 
   useEnduragentStore.setState({
     plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state: model }, lastReady: model },
     planActions,
-    planLibrary: { status: "ready", value: { creation, active, closed: [] } },
+    planLibrary: { status: "ready", value: { creation, active, closed: [], changes: [] } },
   });
   render(<PlanView />);
   const library = screen.getByRole("region", { name: "Plan library" });
@@ -721,7 +724,7 @@ describe("Stop Plan", () => {
     const readFinalDetails = vi.fn();
     render(
       <PlanLibrary
-        library={{ creation: null, active, closed }}
+        library={{ creation: null, active, closed, changes: [] }}
         readDetails={vi.fn()}
         readFinalDetails={readFinalDetails}
       />,
@@ -846,12 +849,13 @@ describe("Stop Plan", () => {
               creation: null,
               active: null,
               closed: [{ ...history.plan, status: "closed" }],
+              changes: [],
             },
           },
         });
       });
       useEnduragentStore.setState({
-        planLibrary: { status: "ready", value: { creation: null, active, closed } },
+        planLibrary: { status: "ready", value: { creation: null, active, closed, changes: [] } },
       });
       render(<PlanView />);
       fireEvent.click(screen.getByRole("button", { name: "Stop Plan" }));
@@ -903,7 +907,7 @@ describe("Stop Plan", () => {
     try {
       const started = controller.start();
       store.getState().setActiveView("plan");
-      finishRead({ creation: null, active, closed });
+      finishRead({ creation: null, active, closed, changes: [] });
       await started;
       await vi.waitFor(() => expect(listPlans).toHaveBeenCalledTimes(2));
       expect(store.getState().planLibrary.value?.active).toBeNull();

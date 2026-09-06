@@ -18,6 +18,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type PlanCreationOperations,
+  type PlanChangeOperations,
 } from "@enduragent/coach-contract";
 import type { CoachClient, CoachClientCallOptions } from "@enduragent/coach-client";
 import {
@@ -61,7 +62,7 @@ const state: AthleteState = {
   wellness: {},
 };
 
-const operations: CoachOperations & PlanCreationOperations = {
+const operations: CoachOperations & PlanCreationOperations & PlanChangeOperations = {
   ...planCreationOperationStubs,
   importFiles: async ({ paths }) => ({
     schemaVersion: 2,

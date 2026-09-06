@@ -130,6 +130,27 @@ const rpcDeadlineCases = [
     { commandId: "close-1", planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV", expectedVersion: 1 },
     30_000,
   ],
+  [
+    "plan_change.preview",
+    {
+      commandId: "change-preview",
+      planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      expectedVersion: 1,
+      intent: { kind: "longest-workout", minutes: 60 },
+    },
+    30_000,
+  ],
+  [
+    "plan_change.apply",
+    {
+      commandId: "change-apply",
+      planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      changeId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      expectedVersion: 1,
+      decision: "apply",
+    },
+    30_000,
+  ],
   ["plan.history", { planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV" }, 30_000],
   [
     "getActivityAnalysis",
@@ -1036,8 +1057,10 @@ describe("RPC receive and observers", () => {
           plannedWorkouts: [],
           wellness: {},
         },
-        "plan.list": { creation: null, active: null, closed: [] },
+        "plan.list": { creation: null, active: null, closed: [], changes: [] },
         "plan.close": { status: "rejected", reason: "no-active-plan" },
+        "plan_change.preview": { status: "rejected", reason: "no-active-plan" },
+        "plan_change.apply": { status: "rejected", reason: "no-active-plan" },
         "plan.history": null,
         getPlanningReadModel: {
           schemaVersion: 1,

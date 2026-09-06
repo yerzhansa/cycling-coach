@@ -3,6 +3,9 @@ import {
   PlanCloseRpcParamsSchema,
   PlanHistoryParamsSchema,
   PlanCreationDraftSchema,
+  PlanChangePreviewRpcParamsSchema,
+  PlanChangeApplyRpcParamsSchema,
+  type PlanChangeOperations,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationPreviewRpcParamsSchema,
   type CoachEngine,
@@ -22,6 +25,7 @@ import {
   createPlanCreationOperations,
   type PlanCreationHost,
 } from "../../../../packages/coach/src/plan-creation-operations.js";
+import { createPlanChangeOperations } from "../../../../packages/coach/src/plan-change-operations.js";
 import type { DesktopFixtureScript } from "./desktop-fixture.js";
 import { createPlanQaFixtureScript } from "./plan-qa-live.js";
 import {
@@ -116,6 +120,7 @@ export class PlanCreationBackend {
   private store: (SqlStore & MigratorStore) | undefined;
   private repository: PlanCreationRepository | undefined;
   private host: PlanCreationHost | undefined;
+  private changes: PlanChangeOperations | undefined;
   private planning: PlanningOperations | undefined;
   planStateReadFails = false;
   planListReadFails = false;
@@ -244,6 +249,22 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
             await this.requireHost()["plan.history"](PlanHistoryParamsSchema.parse(request.params)),
           );
         }
+        if (request.method === "plan_change.preview") {
+          if (!this.changes) throw new TypeError("Plan Change operations are unavailable");
+          return response(
+            await this.changes["plan_change.preview"](
+              PlanChangePreviewRpcParamsSchema.parse(request.params),
+            ),
+          );
+        }
+        if (request.method === "plan_change.apply") {
+          if (!this.changes) throw new TypeError("Plan Change operations are unavailable");
+          return response(
+            await this.changes["plan_change.apply"](
+              PlanChangeApplyRpcParamsSchema.parse(request.params),
+            ),
+          );
+        }
         if (request.method === "plan_creation.activate") {
           return response(
             await this.requireHost()["plan_creation.activate"](
@@ -310,6 +331,13 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
       },
       { todayDateKey: () => Number(this.civilDate.replaceAll("-", "")) },
     );
+    this.changes = createPlanChangeOperations({
+      store: this.store,
+      identity,
+      crypto: globalThis.crypto,
+      todayDateKey: () => 19980101,
+      now: () => this.instant,
+    });
     this.host = createPlanCreationOperations({
       store: this.store,
       repository: this.repository,
@@ -347,6 +375,7 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
     this.store = undefined;
     this.repository = undefined;
     this.host = undefined;
+    this.changes = undefined;
     this.planning = undefined;
   }
 
@@ -539,9 +568,10 @@ fingerprint,created_at_ms,device_id,hlc_physical_ms,hlc_counter
       revisions: await store.all("SELECT * FROM plan_revision ORDER BY plan_id,revision_number"),
       creations: await store.all("SELECT * FROM plan_creation ORDER BY id"),
       jobs: await store.all("SELECT * FROM plan_reconciliation_job ORDER BY id"),
+      changes: await store.all("SELECT * FROM plan_change ORDER BY id"),
       workouts: await store.all("SELECT * FROM plan_workout ORDER BY id"),
       commands: await store.all(
-        "SELECT * FROM planning_command WHERE command_name IN ('plan_creation.activate','plan.close') ORDER BY created_at_ms,command_id",
+        "SELECT * FROM planning_command WHERE command_name IN ('plan_creation.activate','plan.close','plan_change.preview','plan_change.apply') ORDER BY created_at_ms,command_id",
       ),
     };
   }

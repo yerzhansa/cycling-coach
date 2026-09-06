@@ -8,6 +8,8 @@ import { createRequire } from "node:module";
 import {
   ListPlansResultSchema,
   PlanCloseResultSchema,
+  PlanChangePreviewResultSchema,
+  PlanChangeApplyResultSchema,
   PlanHistoryResultSchema,
 } from "@enduragent/coach-contract";
 import type {
@@ -16,6 +18,7 @@ import type {
   SpendOperations,
   OperationProgressEvent,
   PlanCreationOperations,
+  PlanChangeOperations,
   PlanningOperations,
   PlanningReadOperations,
   PlanningRequestOperations,
@@ -395,7 +398,8 @@ export async function launchDesktopFixture(input: {
     PlanningOperations &
     PlanningReadOperations &
     PlanningRequestOperations &
-    PlanCreationOperations = {
+    PlanCreationOperations &
+    PlanChangeOperations = {
     async importFiles(request, onEvent) {
       const frames = await invoke("importFiles", request);
       for (const event of eventFrames(frames)) onEvent?.(event as OperationProgressEvent);
@@ -568,6 +572,16 @@ export async function launchDesktopFixture(input: {
     },
     async "plan.list"(request) {
       return ListPlansResultSchema.parse(finalFrame(await invoke("plan.list", request)));
+    },
+    async "plan_change.preview"(request) {
+      return PlanChangePreviewResultSchema.parse(
+        finalFrame(await invoke("plan_change.preview", request)),
+      );
+    },
+    async "plan_change.apply"(request) {
+      return PlanChangeApplyResultSchema.parse(
+        finalFrame(await invoke("plan_change.apply", request)),
+      );
     },
     async "plan.close"(request) {
       return PlanCloseResultSchema.parse(finalFrame(await invoke("plan.close", request)));

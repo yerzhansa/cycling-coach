@@ -112,6 +112,7 @@ import {
   type PlanningReadOperations,
   type CreatePlanningRequestPayload,
   type PlanCreationOperations,
+  type PlanChangeOperations,
   type PlanningRequestOperations,
   type PlanningOperations,
   type VerifyIntervalsCredentialRpcParams,
@@ -144,6 +145,7 @@ import {
   normalizeIntervalsAthleteSelector,
 } from "./intervals-credential-approval.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
+import { createPlanChangeOperations } from "./plan-change-operations.js";
 import { createPlanCreationOperations } from "./plan-creation-operations.js";
 import {
   createStoreRuntime,
@@ -229,6 +231,7 @@ export interface LocalCoachComposition {
     PlanningReadOperations &
     PlanningRequestOperations &
     PlanCreationOperations &
+    PlanChangeOperations &
     PlanningOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
@@ -885,6 +888,13 @@ export async function createLocalCoachComposition(
     eventCandidates: { read: async () => [] },
     baselineEvidence: { read: async () => undefined },
     today: () => todayInTZ(planningTimezone, new Date(now())),
+    todayDateKey: planningDateKey,
+    now,
+  });
+  const planChangeOperations = createPlanChangeOperations({
+    store: input.context.store,
+    identity: planningIdentity,
+    crypto: globalThis.crypto,
     todayDateKey: planningDateKey,
     now,
   });
@@ -2267,6 +2277,7 @@ export async function createLocalCoachComposition(
       ...planningRequestOperations,
       "plan.list": planCreationOperations["plan.list"],
       "plan.close": planCreationOperations["plan.close"],
+      ...planChangeOperations,
       "plan.history": planCreationOperations["plan.history"],
       "plan_creation.start": planCreationOperations["plan_creation.start"],
       "plan_creation.answer": planCreationOperations["plan_creation.answer"],
@@ -2278,6 +2289,7 @@ export async function createLocalCoachComposition(
       PlanningReadOperations &
       PlanningRequestOperations &
       PlanCreationOperations &
+      PlanChangeOperations &
       PlanningOperations;
     return {
       engine: reconfigurable.engine,

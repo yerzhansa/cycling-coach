@@ -145,6 +145,8 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   getPlanningReadModel: 30_000,
   "plan.list": 30_000,
   "plan.close": 30_000,
+  "plan_change.preview": 30_000,
+  "plan_change.apply": 30_000,
   "plan.history": 30_000,
   getActivityAnalysis: 90_000,
   exportTrainingFile: 120_000,

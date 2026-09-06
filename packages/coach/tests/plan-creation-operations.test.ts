@@ -1154,6 +1154,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
       creation: { creationId: test.request.creationId, status: "review" },
       active: { planId: incumbentId, start: "1997-12-22", end: "1998-01-18", creationId: null },
       closed: [],
+      changes: [],
     });
     const activated = await activation;
     reader.mockRestore();
@@ -1162,6 +1163,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(after).toEqual({
       creation: null,
+      changes: [],
       active: {
         planId: activated.planId,
         version: 1,

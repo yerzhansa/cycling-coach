@@ -35,6 +35,7 @@ import {
   type CoachOperations,
   type PlanCreationCardModel,
   type PlanCreationOperations,
+  type PlanChangeOperations,
   type PlanningReadOperations,
   type PlanningOperations,
   type PlanReadModel,
@@ -137,7 +138,10 @@ const completedDecision = {
   },
 } satisfies CoachDecisionReadModel;
 
-const operations: CoachOperations & PlanningReadOperations & PlanCreationOperations = {
+const operations: CoachOperations &
+  PlanningReadOperations &
+  PlanCreationOperations &
+  PlanChangeOperations = {
   ...planCreationOperationStubs,
   exportTrainingFile: async () => ({
     status: "exported",
@@ -209,8 +213,10 @@ const operations: CoachOperations & PlanningReadOperations & PlanCreationOperati
     turns: [],
     nextCursor: null,
   }),
-  "plan.list": async () => ({ creation: null, active: null, closed: [] }),
+  "plan.list": async () => ({ creation: null, active: null, closed: [], changes: [] }),
   "plan.close": async () => ({ status: "rejected", reason: "no-active-plan" }),
+  "plan_change.preview": async () => ({ status: "rejected", reason: "no-active-plan" }),
+  "plan_change.apply": async () => ({ status: "rejected", reason: "no-active-plan" }),
   "plan.history": async () => null,
   getPlanningReadModel: async () => ({
     schemaVersion: 1,
@@ -853,10 +859,18 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         ...operations,
         "plan.list": async () => {
           calls.push("plan.list");
-          return { creation: null, active: null, closed: [] };
+          return { creation: null, active: null, closed: [], changes: [] };
         },
         "plan.close": async () => {
           calls.push("plan.close");
+          return { status: "rejected", reason: "no-active-plan" };
+        },
+        "plan_change.preview": async () => {
+          calls.push("plan_change.preview");
+          return { status: "rejected", reason: "no-active-plan" };
+        },
+        "plan_change.apply": async () => {
+          calls.push("plan_change.apply");
           return { status: "rejected", reason: "no-active-plan" };
         },
         "plan.history": async () => {
@@ -959,6 +973,27 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         method: "plan.close",
         params: { commandId: "close-1", planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV", expectedVersion: 1 },
       },
+      {
+        id: 45,
+        method: "plan_change.preview",
+        params: {
+          commandId: "change-preview",
+          planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          expectedVersion: 1,
+          intent: { kind: "longest-workout", minutes: 60 },
+        },
+      },
+      {
+        id: 46,
+        method: "plan_change.apply",
+        params: {
+          commandId: "change-apply",
+          planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          changeId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+          expectedVersion: 1,
+          decision: "apply",
+        },
+      },
       { id: 44, method: "plan.history", params: { planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV" } },
       {
         id: 5,
@@ -999,6 +1034,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "getPlanningReadModel",
       "plan.list",
       "plan.close",
+      "plan_change.preview",
+      "plan_change.apply",
       "plan.history",
       "getActivityAnalysis",
       "exportTrainingFile",
@@ -2418,12 +2455,25 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       closedPlanId: null,
       activatedAt: "1998-09-07",
     };
-    const listPlans = vi.fn(async () => ({ creation: startedCard, active: null, closed: [] }));
+    const listPlans = vi.fn(async () => ({
+      creation: startedCard,
+      active: null,
+      closed: [],
+      changes: [],
+    }));
     const closePlan = vi.fn<PlanCreationOperations["plan.close"]>(async () => ({
       status: "closed",
       planId: activationResult.planId,
       closedAt: 904_953_600_000,
       cleanupJobId: "01J00000000000000000000002",
+    }));
+    const previewPlanChange = vi.fn<PlanChangeOperations["plan_change.preview"]>(async () => ({
+      status: "rejected",
+      reason: "no-active-plan",
+    }));
+    const applyPlanChange = vi.fn<PlanChangeOperations["plan_change.apply"]>(async () => ({
+      status: "rejected",
+      reason: "no-active-plan",
     }));
     const readHistory = vi.fn(async () => null);
     const activatePlanCreation = vi.fn<PlanCreationOperations["plan_creation.activate"]>(
@@ -2435,6 +2485,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         ...operations,
         "plan.list": listPlans,
         "plan.close": closePlan,
+        "plan_change.preview": previewPlanChange,
+        "plan_change.apply": applyPlanChange,
         "plan.history": readHistory,
         "plan_creation.start": startPlanCreation,
         "plan_creation.answer": answerPlanCreation,
@@ -2452,6 +2504,19 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       ),
     );
     await renderer.frames.next();
+    const changePreviewParams = {
+      commandId: "change-preview",
+      planId: activationResult.planId,
+      expectedVersion: 1,
+      intent: { kind: "longest-workout", minutes: 60 },
+    };
+    const changeApplyParams = {
+      commandId: "change-apply",
+      planId: activationResult.planId,
+      changeId: "01J00000000000000000000003",
+      expectedVersion: 1,
+      decision: "apply",
+    };
     const startParams = { commandId: "start-1" };
     const answerParams = {
       commandId: "answer-1",
@@ -2503,7 +2568,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         id: "list",
         method: "plan.list",
         params: {},
-        result: { creation: startedCard, active: null, closed: [] },
+        result: { creation: startedCard, active: null, closed: [], changes: [] },
       },
       {
         id: "close",
@@ -2515,6 +2580,18 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
           closedAt: 904_953_600_000,
           cleanupJobId: "01J00000000000000000000002",
         },
+      },
+      {
+        id: "change-preview",
+        method: "plan_change.preview",
+        params: changePreviewParams,
+        result: { status: "rejected", reason: "no-active-plan" },
+      },
+      {
+        id: "change-apply",
+        method: "plan_change.apply",
+        params: changeApplyParams,
+        result: { status: "rejected", reason: "no-active-plan" },
       },
       {
         id: "history",
@@ -2537,6 +2614,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(activatePlanCreation).toHaveBeenCalledWith(activateParams);
     expect(listPlans).toHaveBeenCalledWith({});
     expect(closePlan).toHaveBeenCalledWith(closeParams);
+    expect(previewPlanChange).toHaveBeenCalledWith(changePreviewParams);
+    expect(applyPlanChange).toHaveBeenCalledWith(changeApplyParams);
     expect(readHistory).toHaveBeenCalledWith(historyParams);
 
     for (const request of [
@@ -2581,6 +2660,16 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         params: { ...closeParams, closeReason: "completed" },
       },
       {
+        id: "invalid-change-preview",
+        method: "plan_change.preview",
+        params: { ...changePreviewParams, extra: true },
+      },
+      {
+        id: "invalid-change-apply",
+        method: "plan_change.apply",
+        params: { ...changeApplyParams, extra: true },
+      },
+      {
         id: "invalid-history",
         method: "plan.history",
         params: { ...historyParams, extra: true },
@@ -2597,6 +2686,8 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(previewPlanCreation).toHaveBeenCalledOnce();
     expect(discardPlanCreation).toHaveBeenCalledOnce();
     expect(activatePlanCreation).toHaveBeenCalledOnce();
+    expect(previewPlanChange).toHaveBeenCalledOnce();
+    expect(applyPlanChange).toHaveBeenCalledOnce();
     await renderer.close();
   });
 

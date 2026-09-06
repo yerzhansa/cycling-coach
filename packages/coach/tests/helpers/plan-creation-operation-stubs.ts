@@ -1,4 +1,4 @@
-import type { PlanCreationOperations } from "@enduragent/coach-contract";
+import type { PlanCreationOperations, PlanChangeOperations } from "@enduragent/coach-contract";
 
 export const planCreationOperationStubs = {
   "plan.close": async () => ({
@@ -27,4 +27,6 @@ export const planCreationOperationStubs = {
   "plan_creation.activate": async () => {
     throw new Error("No unfinished creation");
   },
-} satisfies PlanCreationOperations;
+  "plan_change.preview": async () => ({ status: "rejected", reason: "no-active-plan" }),
+  "plan_change.apply": async () => ({ status: "rejected", reason: "no-active-plan" }),
+} satisfies PlanCreationOperations & PlanChangeOperations;

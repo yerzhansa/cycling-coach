@@ -105,7 +105,7 @@ function rulesFor(answers: CreationDraftInput["answers"], key: number) {
   };
 }
 
-function digest(value: unknown): string {
+export function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 

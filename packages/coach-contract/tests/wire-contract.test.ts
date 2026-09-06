@@ -1325,7 +1325,7 @@ describe("coach request and event projection", () => {
         asOfDateKey: 20260826,
         plan: null,
       }),
-      "plan.list": async () => ({ creation: null, active: null, closed: [] }),
+      "plan.list": async () => ({ creation: null, active: null, closed: [], changes: [] }),
       "plan.close": async () => ({ status: "rejected", reason: "no-active-plan" }),
       "plan.history": async () => null,
       getActivityAnalysis: async () => {
@@ -1473,6 +1473,8 @@ describe("coach request and event projection", () => {
         closedPlanId: null,
         activatedAt: "1998-09-07",
       }),
+      "plan_change.preview": async () => ({ status: "rejected", reason: "no-active-plan" }),
+      "plan_change.apply": async () => ({ status: "rejected", reason: "no-active-plan" }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));

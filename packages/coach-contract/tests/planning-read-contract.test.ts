@@ -75,7 +75,7 @@ describe("Plan library contract", () => {
   };
 
   it("accepts the empty library and strict empty params", () => {
-    const empty = { creation: null, active: null, closed: [] };
+    const empty = { creation: null, active: null, closed: [], changes: [] };
     expect(ListPlansParamsSchema.parse({})).toEqual({});
     expect(ListPlansResultSchema.parse(empty)).toEqual(empty);
     expect(ListPlansParamsSchema.safeParse({ planId: "extra" }).success).toBe(false);
@@ -94,7 +94,7 @@ describe("Plan library contract", () => {
         activatedAt: null,
         creationId: null,
       };
-      const library = { creation: null, active, closed: [closed] };
+      const library = { creation: null, active, closed: [closed], changes: [] };
       expect(ListPlansResultSchema.parse(library)).toEqual(library);
       expect(ListPlansResultSchema.safeParse({ ...library, active: closed }).success).toBe(false);
       expect(ListPlansResultSchema.safeParse({ ...library, closed: [active] }).success).toBe(false);

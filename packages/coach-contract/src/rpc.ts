@@ -160,6 +160,14 @@ import {
   type PlanCreationOperations,
 } from "./plan-creation.js";
 
+import {
+  PlanChangePreviewRpcParamsSchema,
+  PlanChangePreviewResultSchema,
+  PlanChangeApplyRpcParamsSchema,
+  PlanChangeApplyResultSchema,
+  type PlanChangeOperations,
+} from "./plan-change.js";
+
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
 
@@ -327,6 +335,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "plan_creation.preview",
   "plan_creation.discard",
   "plan_creation.activate",
+  "plan_change.preview",
+  "plan_change.apply",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -1338,6 +1348,7 @@ export type CoachRpcService = CoachEngine &
   PlanningReadOperations &
   PlanningRequestOperations &
   PlanCreationOperations &
+  PlanChangeOperations &
   SpendOperations &
   CoachSelfTestOperations &
   TelegramControlOperations &
@@ -1952,6 +1963,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: PlanCreationActivateRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("plan_change.preview"),
+      params: PlanChangePreviewRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("plan_change.apply"),
+      params: PlanChangeApplyRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -2518,6 +2545,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "plan_creation.activate",
     requestSchema: PlanCreationActivateRpcParamsSchema,
     responseSchema: PlanCreationActivateRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan_change.preview": {
+    wireName: "plan_change.preview",
+    requestSchema: PlanChangePreviewRpcParamsSchema,
+    responseSchema: PlanChangePreviewResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  "plan_change.apply": {
+    wireName: "plan_change.apply",
+    requestSchema: PlanChangeApplyRpcParamsSchema,
+    responseSchema: PlanChangeApplyResultSchema,
     eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;

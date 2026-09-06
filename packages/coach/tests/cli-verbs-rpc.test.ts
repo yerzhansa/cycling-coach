@@ -43,6 +43,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type PlanCreationOperations,
+  type PlanChangeOperations,
   type TelegramControlSnapshot,
   type TurnEvent,
 } from "@enduragent/coach-contract";
@@ -83,7 +84,7 @@ const disabledTelegram: DesktopTelegramController = {
   drainPending: async () => disabledTelegramSnapshot,
   close: async () => disabledTelegramSnapshot,
 };
-const operations: CoachOperations & PlanCreationOperations = {
+const operations: CoachOperations & PlanCreationOperations & PlanChangeOperations = {
   ...planCreationOperationStubs,
   importFiles: async ({ paths }) => ({
     schemaVersion: 2,

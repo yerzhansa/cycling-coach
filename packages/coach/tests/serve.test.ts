@@ -6,6 +6,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type PlanCreationOperations,
+  type PlanChangeOperations,
   type SpendSummary,
 } from "@enduragent/coach-contract";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
@@ -67,7 +68,7 @@ const engine: CoachEngine = {
   getAthleteState: async () => state,
 };
 
-const operations: CoachOperations & PlanCreationOperations = {
+const operations: CoachOperations & PlanCreationOperations & PlanChangeOperations = {
   ...planCreationOperationStubs,
   importFiles: async ({ paths }) => ({
     schemaVersion: 2,
