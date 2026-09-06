@@ -1804,6 +1804,9 @@ export function createChatController(input: {
                   ? parameterCopy
                   : "This Change could not be previewed. Training is unchanged.",
           });
+          if (result.reason === "stale-version") {
+            await input.refreshPlanLibrary?.().catch(() => {});
+          }
           return;
         }
         const superseded = library.changes.find(
@@ -1852,6 +1855,9 @@ export function createChatController(input: {
                   ? "This preview is no longer pending. Training is unchanged."
                   : "This Change could not be applied. Training and the pending preview are unchanged.",
           });
+          if (result.reason === "stale-version" || result.reason === "not-pending") {
+            await input.refreshPlanLibrary?.().catch(() => {});
+          }
           return;
         }
         publishChange({

@@ -32,6 +32,7 @@ import { createTelegramSettingsAdapter } from "./state/adapters/telegram";
 import { createManualSyncViewAdapter } from "./state/adapters/sync";
 import { createTrainingViewAdapter } from "./state/adapters/training";
 import { createUpdateSettingsAdapter } from "./state/adapters/update";
+import { EMPTY_PLAN_CHANGE_SURFACE } from "./state/chat-slice";
 import { credentialDrafts } from "./state/credential-drafts";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus";
 import { useEnduragentStore, type EnduragentState } from "./state/store";
@@ -267,10 +268,11 @@ export function bootRenderer(): Disposer {
     changeInChat: () => {
       chatController.pausePlanCreation();
       const state = store.getState();
+      const planId = state.planLibrary.value?.active?.planId ?? null;
       state.setPlanChange({
-        ...state.planChange,
+        ...(state.planChange.planId === planId ? state.planChange : EMPTY_PLAN_CHANGE_SURFACE),
         open: true,
-        planId: state.planLibrary.value?.active?.planId ?? null,
+        planId,
       });
       store.getState().setActiveView("chat");
       requestAnimationFrame(focusComposer);
@@ -285,7 +287,12 @@ export function bootRenderer(): Disposer {
       false;
     if (
       pending &&
-      (!hadPending || (!previousState.chat.planCreationLoaded && state.chat.planCreationLoaded))
+      (!hadPending ||
+        (!previousState.chat.planCreationLoaded && state.chat.planCreationLoaded) ||
+        (previousState.chat.planCreationPaused && !state.chat.planCreationPaused) ||
+        (previousState.chat.planCreationBusy &&
+          !state.chat.planCreationBusy &&
+          !state.chat.planCreationPaused))
     ) {
       chatController.pausePlanCreation();
     }

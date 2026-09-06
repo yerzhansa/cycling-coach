@@ -582,62 +582,69 @@ const otherChanges: ChangeCase[] = [
 ];
 
 for (const change of otherChanges) {
-  test(`previews ${change.label} and cancels without changing training`, async ({ playwright }) => {
-    test.setTimeout(120_000);
-    const scenario = await launch(playwright, appearances[0]);
-    try {
-      await enterChanges(scenario);
-      const initial = await scenario.backend.inspectActivation();
-      const pending = await preview(scenario, change);
-      const before = await scenario.backend.inspectActivation();
-      expect(training(before)).toEqual(training(initial));
-      await capture(scenario, `preview-${change.intent.kind}`);
-      await changeCard(scenario, pending.title, "Pending")
-        .getByRole("button", { name: "Cancel", exact: true })
-        .click();
-      await expect(changes(scenario).getByRole("status")).toHaveText(
-        "Change cancelled. Training is unchanged; the preview remains in history.",
-      );
-      await expect(changeCard(scenario, pending.title, "Cancelled")).toBeVisible();
-      await expect(changeCard(scenario, pending.title, "Pending")).toHaveCount(0);
-      await expect(
-        changes(scenario).getByRole("button", { name: "Change one thing", exact: true }),
-      ).toBeFocused();
-      const after = await scenario.backend.inspectActivation();
-      expect(training(after)).toEqual(training(before));
-      expect(after.changes).toHaveLength(1);
-      expect(after.changes[0]).toMatchObject({
-        id: pending.changeId,
-        status: "discarded",
-        version: Number(before.changes[0]?.version) + 1,
-      });
-      expect(after.commands.slice(0, -1)).toEqual(before.commands);
-      expect(after.commands.filter((row) => row.command_name === "plan_change.apply")).toHaveLength(
-        1,
-      );
-      expect(after.commands.at(-1)).toMatchObject({
-        command_name: "plan_change.apply",
-        status: "succeeded",
-      });
-      expect(scenario.backend.changeApplyResponses.at(-1)).toMatchObject({
-        params: { decision: "cancel", changeId: pending.changeId },
-        result: { status: "cancelled" },
-      });
-      const history = changeCard(scenario, pending.title, "Cancelled");
-      await history.getByRole("button", { name: "Read this difference", exact: true }).click();
-      const source = changes(scenario).getByRole("region", { name: "Source details", exact: true });
-      await expect(source.getByText("Cancelled", { exact: true })).toBeVisible();
-      await expect(
-        source
-          .getByRole("table", { name: "Affected individual Workouts", exact: true })
-          .getByRole("row"),
-      ).toHaveCount(4);
-      await source.getByRole("button", { name: "Back", exact: true }).click();
-      await capture(scenario, `cancelled-${change.intent.kind}`);
-    } finally {
-      await close(scenario);
-    }
-  });
+  for (const appearance of appearances) {
+    test(`previews ${change.label} and cancels without changing training at ${appearance.width} in ${appearance.colorScheme}`, async ({
+      playwright,
+    }) => {
+      test.setTimeout(120_000);
+      const scenario = await launch(playwright, appearance);
+      try {
+        await enterChanges(scenario);
+        const initial = await scenario.backend.inspectActivation();
+        const pending = await preview(scenario, change);
+        const before = await scenario.backend.inspectActivation();
+        expect(training(before)).toEqual(training(initial));
+        await capture(scenario, `preview-${change.intent.kind}`);
+        await changeCard(scenario, pending.title, "Pending")
+          .getByRole("button", { name: "Cancel", exact: true })
+          .click();
+        await expect(changes(scenario).getByRole("status")).toHaveText(
+          "Change cancelled. Training is unchanged; the preview remains in history.",
+        );
+        await expect(changeCard(scenario, pending.title, "Cancelled")).toBeVisible();
+        await expect(changeCard(scenario, pending.title, "Pending")).toHaveCount(0);
+        await expect(
+          changes(scenario).getByRole("button", { name: "Change one thing", exact: true }),
+        ).toBeFocused();
+        const after = await scenario.backend.inspectActivation();
+        expect(training(after)).toEqual(training(before));
+        expect(after.changes).toHaveLength(1);
+        expect(after.changes[0]).toMatchObject({
+          id: pending.changeId,
+          status: "discarded",
+          version: Number(before.changes[0]?.version) + 1,
+        });
+        expect(after.commands.slice(0, -1)).toEqual(before.commands);
+        expect(
+          after.commands.filter((row) => row.command_name === "plan_change.apply"),
+        ).toHaveLength(1);
+        expect(after.commands.at(-1)).toMatchObject({
+          command_name: "plan_change.apply",
+          status: "succeeded",
+        });
+        expect(scenario.backend.changeApplyResponses.at(-1)).toMatchObject({
+          params: { decision: "cancel", changeId: pending.changeId },
+          result: { status: "cancelled" },
+        });
+        const history = changeCard(scenario, pending.title, "Cancelled");
+        await history.getByRole("button", { name: "Read this difference", exact: true }).click();
+        const source = changes(scenario).getByRole("region", {
+          name: "Source details",
+          exact: true,
+        });
+        await expect(source.getByText("Cancelled", { exact: true })).toBeVisible();
+        await expect(
+          source
+            .getByRole("table", { name: "Affected individual Workouts", exact: true })
+            .getByRole("row"),
+        ).toHaveCount(4);
+        await source.getByRole("button", { name: "Back", exact: true }).click();
+        await capture(scenario, `cancelled-${change.intent.kind}`);
+      } finally {
+        await close(scenario);
+      }
+    });
+  }
 }
 
 test("supersedes a pending Change with a second request", async ({ playwright }) => {

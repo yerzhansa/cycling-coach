@@ -29,7 +29,7 @@ const change: PlanChangeModel = {
 
 function harness(result: unknown, changes: PlanChangeModel[] = [change]) {
   let surface: PlanChangeSurfaceState = EMPTY_PLAN_CHANGE_SURFACE;
-  const library: ListPlansResult = {
+  let library: ListPlansResult = {
     active: {
       planId: "plan-active",
       version: 7,
@@ -73,7 +73,15 @@ function harness(result: unknown, changes: PlanChangeModel[] = [change]) {
     },
     refreshPlanLibrary: refresh,
   });
-  return { controller, call, refresh, surface: () => surface };
+  return {
+    controller,
+    call,
+    refresh,
+    surface: () => surface,
+    updateVersion(version: number) {
+      if (library.active) library = { ...library, active: { ...library.active, version } };
+    },
+  };
 }
 
 describe("Plan Change controller", () => {
@@ -149,7 +157,7 @@ describe("Plan Change controller", () => {
       h.controller.openPlanChangeEditor();
       await h.controller.previewPlanChange(intent);
       expect(h.surface()).toMatchObject({ editorOpen: true, busy: false, error });
-      expect(h.refresh).not.toHaveBeenCalled();
+      expect(h.refresh).toHaveBeenCalledTimes(reason === "stale-version" ? 1 : 0);
     },
   );
 
@@ -196,8 +204,59 @@ describe("Plan Change controller", () => {
     const h = harness({ status: "rejected", reason });
     await h.controller.applyPlanChange("apply");
     expect(h.surface()).toMatchObject({ busy: false, notice });
-    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.refresh).toHaveBeenCalledTimes(
+      reason === "stale-version" || reason === "not-pending" ? 1 : 0,
+    );
   });
+
+  it.each(["stale-version", "not-pending"])(
+    "refreshes after %s apply so the next preview uses the new version",
+    async (reason) => {
+      const h = harness({ status: "rejected", reason });
+      h.refresh.mockImplementation(async () => h.updateVersion(8));
+      await h.controller.applyPlanChange("apply");
+      expect(h.refresh).toHaveBeenCalledOnce();
+      h.controller.openPlanChangeEditor();
+      await h.controller.previewPlanChange(change.intent);
+      expect(h.call).toHaveBeenNthCalledWith(2, "plan_change.preview", {
+        planId: "plan-active",
+        expectedVersion: 8,
+        intent: change.intent,
+        commandId: expect.any(String),
+      });
+    },
+  );
+
+  it("refreshes a stale preview before another preview", async () => {
+    const h = harness({ status: "rejected", reason: "stale-version" });
+    h.refresh.mockImplementation(async () => h.updateVersion(8));
+    await h.controller.previewPlanChange(change.intent);
+    expect(h.refresh).toHaveBeenCalledOnce();
+    await h.controller.previewPlanChange(change.intent);
+    expect(h.call).toHaveBeenNthCalledWith(2, "plan_change.preview", {
+      planId: "plan-active",
+      expectedVersion: 8,
+      intent: change.intent,
+      commandId: expect.any(String),
+    });
+  });
+
+  it.each(["apply", "preview"] as const)(
+    "preserves stale %s copy if the library refresh fails",
+    async (action) => {
+      const h = harness({ status: "rejected", reason: "stale-version" });
+      h.refresh.mockRejectedValue(new Error("unavailable"));
+      if (action === "apply") await h.controller.applyPlanChange("apply");
+      else await h.controller.previewPlanChange(change.intent);
+      expect(h.refresh).toHaveBeenCalledOnce();
+      expect(h.surface().busy).toBe(false);
+      expect(action === "apply" ? h.surface().notice : h.surface().error).toBe(
+        action === "apply"
+          ? "This preview is stale because the Plan or its sources changed. Request a fresh preview; no training changed."
+          : "This request used an older Plan revision. Request a fresh preview.",
+      );
+    },
+  );
 
   it("keeps the pending preview on transport failure", async () => {
     const h = harness(new Error("offline"));
