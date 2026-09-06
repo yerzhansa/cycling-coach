@@ -9,6 +9,7 @@ import type {
   PlanCreationAnswerSummary,
   PlanCreationCardModel,
   PlanHandoffSuggestion,
+  PlanChangeIntent,
 } from "@enduragent/coach-contract";
 import type { ActivePlanKnowledge } from "../chat/controller";
 import type { StateCreator } from "zustand";
@@ -108,6 +109,10 @@ export interface ChatSurfaceState {
 }
 
 export interface ChatActions {
+  openPlanChangeEditor(): void;
+  backFromPlanChangeEditor(): void;
+  previewPlanChange(intent: PlanChangeIntent): void;
+  applyPlanChange(decision: "apply" | "cancel"): void;
   submit(message: string, attachmentIds?: readonly string[]): Promise<boolean>;
   chooseAttachments(): Promise<void>;
   pasteAttachment(): Promise<void>;
@@ -203,7 +208,32 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
 
 export const IDLE_FIRST_SYNC: FirstSyncState = Object.freeze({ status: "idle" });
 
+export interface PlanChangeSurfaceState {
+  readonly open: boolean;
+  readonly planId: string | null;
+  readonly editorOpen: boolean;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly notice: string | null;
+  readonly focusRequest: {
+    readonly target: "editor" | "preview" | "change";
+    readonly revision: number;
+  } | null;
+}
+
+export const EMPTY_PLAN_CHANGE_SURFACE: PlanChangeSurfaceState = Object.freeze({
+  open: false,
+  planId: null,
+  editorOpen: false,
+  busy: false,
+  error: null,
+  notice: null,
+  focusRequest: null,
+});
+
 export interface ChatSlice {
+  readonly planChange: PlanChangeSurfaceState;
+  setPlanChange: (next: PlanChangeSurfaceState) => void;
   readonly chat: ChatSurfaceState;
   readonly chatActions: ChatActions | null;
   readonly firstSync: FirstSyncState;
@@ -360,6 +390,10 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
 }
 
 export const createChatSlice: StateCreator<EnduragentState, [], [], ChatSlice> = (set) => ({
+  planChange: EMPTY_PLAN_CHANGE_SURFACE,
+  setPlanChange(next) {
+    set({ planChange: next });
+  },
   chat: EMPTY_CHAT_SURFACE,
   chatActions: null,
   firstSync: IDLE_FIRST_SYNC,

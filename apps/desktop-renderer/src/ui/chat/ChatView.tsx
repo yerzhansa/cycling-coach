@@ -27,6 +27,7 @@ import { QueuedMessages } from "./QueuedMessages";
 import { SpendNotice } from "./SpendNotice";
 import { TrainingContextPanel } from "./TrainingContextPanel";
 import { Transcript } from "./Transcript";
+import { PlanChangeCards } from "./PlanChangeCards";
 import {
   PlanCreationActivateDialog,
   PlanCreationDiscardDialog,
@@ -68,6 +69,15 @@ export function ChatView(): ReactElement {
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
   const planningRequestFocusId = useEnduragentStore((state) => state.chat.planningRequestFocusId);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const changeSurfaceVisible = useEnduragentStore((state) => {
+    const library = state.planLibrary.value;
+    return (
+      library?.active !== null &&
+      library?.active !== undefined &&
+      ((state.planChange.open && state.planChange.planId === library.active.planId) ||
+        library.changes.some((change) => change.status === "pending"))
+    );
+  });
   const mountedView = useRef(activeView);
 
   useLayoutEffect(() => {
@@ -200,6 +210,7 @@ export function ChatView(): ReactElement {
           >
             <div className="thread mx-auto w-[min(720px,calc(100%-48px))] max-[760px]:w-[calc(100%-32px)]">
               <Transcript />
+              <PlanChangeCards />
               <CoachProgress />
               <FirstSyncCard />
             </div>
@@ -228,7 +239,9 @@ export function ChatView(): ReactElement {
             {decisionCustomOpen || planCreationEditorOpen ? null : (
               <Composer handle={composer} draftMemory={composerDraft} />
             )}
-            <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
+            <p className="mt-inset mb-0 text-center text-xs text-ink-3">
+              {changeSurfaceVisible ? "Training changes need your confirmation." : CHAT_DISCLAIMER}
+            </p>
           </div>
         </div>
         {contextOpen && !compact ? <TrainingContextPanel /> : null}

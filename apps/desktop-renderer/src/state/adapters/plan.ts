@@ -10,6 +10,8 @@ import {
   type PlanCloseRpcParams,
   type PlanCloseResult,
   type PlanHistoryResult,
+  type PlanChangePreviewRpcParams,
+  type PlanChangeApplyRpcParams,
   type ListPlansResult,
   type PlanHydrationState,
   type PlanProgressEvent,
@@ -44,6 +46,26 @@ export async function closePlan(
   input: Omit<PlanCloseRpcParams, "commandId">,
 ): Promise<PlanCloseResult> {
   return (await clients.getClient()).call("plan.close", {
+    ...input,
+    commandId: globalThis.crypto.randomUUID(),
+  });
+}
+
+export async function previewPlanChange(
+  clients: DesktopCoachClientProvider,
+  input: Omit<PlanChangePreviewRpcParams, "commandId">,
+) {
+  return (await clients.getClient()).call("plan_change.preview", {
+    ...input,
+    commandId: globalThis.crypto.randomUUID(),
+  });
+}
+
+export async function applyPlanChange(
+  clients: DesktopCoachClientProvider,
+  input: Omit<PlanChangeApplyRpcParams, "commandId">,
+) {
+  return (await clients.getClient()).call("plan_change.apply", {
     ...input,
     commandId: globalThis.crypto.randomUUID(),
   });
