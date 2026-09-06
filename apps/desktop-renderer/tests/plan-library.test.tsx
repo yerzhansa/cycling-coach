@@ -724,7 +724,7 @@ describe("Stop Plan", () => {
     const readFinalDetails = vi.fn();
     render(
       <PlanLibrary
-        library={{ creation: null, active, closed }}
+        library={{ creation: null, active, closed, changes: [] }}
         readDetails={vi.fn()}
         readFinalDetails={readFinalDetails}
       />,
@@ -849,12 +849,13 @@ describe("Stop Plan", () => {
               creation: null,
               active: null,
               closed: [{ ...history.plan, status: "closed" }],
+              changes: [],
             },
           },
         });
       });
       useEnduragentStore.setState({
-        planLibrary: { status: "ready", value: { creation: null, active, closed } },
+        planLibrary: { status: "ready", value: { creation: null, active, closed, changes: [] } },
       });
       render(<PlanView />);
       fireEvent.click(screen.getByRole("button", { name: "Stop Plan" }));
@@ -906,7 +907,7 @@ describe("Stop Plan", () => {
     try {
       const started = controller.start();
       store.getState().setActiveView("plan");
-      finishRead({ creation: null, active, closed });
+      finishRead({ creation: null, active, closed, changes: [] });
       await started;
       await vi.waitFor(() => expect(listPlans).toHaveBeenCalledTimes(2));
       expect(store.getState().planLibrary.value?.active).toBeNull();
