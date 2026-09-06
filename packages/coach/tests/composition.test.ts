@@ -549,9 +549,10 @@ describe("local coach composition", () => {
 
     await lifecycle.startInitialRefresh();
     expect(kick).toHaveBeenCalledTimes(1);
+    expect(kick).toHaveBeenLastCalledWith({ reclaimRunning: true });
     await storeRuntime.runWindow();
     expect(kick).toHaveBeenCalledTimes(2);
-    expect(kick.mock.calls).toEqual([[], []]);
+    expect(kick.mock.calls).toEqual([[{ reclaimRunning: true }], []]);
     const list = lifecycle.operations["plan.list"];
     if (list === undefined) throw new Error("Expected plan.list");
     await list({});

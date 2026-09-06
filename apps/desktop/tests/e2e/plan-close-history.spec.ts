@@ -240,7 +240,10 @@ for (const appearance of [
           .filter({ hasText: "Plan closed. Calendar cleanup pending." }),
       ).toBeVisible();
       await expect(
-        scenario.page.getByRole("row", { name: "Calendar Calendar cleanup pending", exact: true }),
+        scenario.page.getByRole("row", {
+          name: "Calendar Calendar cleanup waits for intervals.icu",
+          exact: true,
+        }),
       ).toBeVisible();
       const after = await scenario.backend.inspectActivation();
       expect(after.planningPlans).toEqual([

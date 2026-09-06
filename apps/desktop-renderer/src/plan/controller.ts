@@ -7,7 +7,7 @@ import type { PlanLibraryState, PlanReadSurfaceState } from "../state/plan-slice
 
 export interface PlanController {
   start(): Promise<void>;
-  refresh(afterPending?: boolean): Promise<void>;
+  refresh(afterPending?: boolean, shouldRefresh?: () => boolean): Promise<void>;
   openFromChat(target: PlanNavigationTarget): void;
   backToChat(): void;
   dispose(): void;
@@ -26,9 +26,10 @@ export function createPlanController(input: {
   let library: ListPlansResult | null = null;
   let pending: Promise<void> | undefined;
 
-  const refresh = (afterPending = false): Promise<void> => {
-    if (disposed) return Promise.resolve();
-    if (pending !== undefined) return afterPending ? pending.then(() => refresh()) : pending;
+  const refresh = (afterPending = false, shouldRefresh = () => true): Promise<void> => {
+    if (disposed || !shouldRefresh()) return Promise.resolve();
+    if (pending !== undefined)
+      return afterPending ? pending.then(() => refresh(false, shouldRefresh)) : pending;
     input.render(value === null ? { status: "loading", value: null } : { status: "ready", value });
     const list = input
       .listPlans()

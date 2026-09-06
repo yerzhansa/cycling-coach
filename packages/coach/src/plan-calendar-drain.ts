@@ -9,7 +9,7 @@ import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 import { createLegacyPlanRepository } from "@enduragent/kernel-node/planning";
 
 export interface PlanCalendarDrain {
-  kick(): Promise<void>;
+  kick(options?: { reclaimRunning?: boolean }): Promise<void>;
   idle(): Promise<void>;
 }
 
@@ -28,8 +28,9 @@ export function createPlanCalendarDrain(deps: {
 }): PlanCalendarDrain {
   let active: Promise<void> | undefined;
   let rerun = false;
+  let reclaimRunning = false;
 
-  const run = async (): Promise<void> => {
+  const run = async (reclaim: boolean): Promise<void> => {
     const { store } = deps;
     if (!hasTransactions(store))
       throw new TypeError("Calendar reconciliation requires transactions.");
@@ -61,7 +62,7 @@ export function createPlanCalendarDrain(deps: {
     }
     const jobs = await repository.listRunnable({
       nowMs: deps.now(),
-      leaseMs: 300_000,
+      leaseMs: reclaim ? 0 : 300_000,
       maxFailures: 5,
     });
     for (const job of jobs) {
@@ -126,7 +127,8 @@ export function createPlanCalendarDrain(deps: {
   };
 
   return {
-    kick() {
+    kick(options) {
+      reclaimRunning ||= options?.reclaimRunning === true;
       if (!deps.calendarConnected()) return Promise.resolve();
       if (active !== undefined) {
         rerun = true;
@@ -136,8 +138,10 @@ export function createPlanCalendarDrain(deps: {
       active = Promise.resolve().then(async () => {
         try {
           for (;;) {
+            const reclaim = reclaimRunning;
+            reclaimRunning = false;
             try {
-              await run();
+              await run(reclaim);
             } catch (error) {
               deps.logger.warn("plan_calendar_drain_failed", { error });
             }

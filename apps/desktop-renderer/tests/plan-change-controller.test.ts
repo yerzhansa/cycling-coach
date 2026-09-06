@@ -30,6 +30,7 @@ const change: PlanChangeModel = {
 function harness(result: unknown, changes: PlanChangeModel[] = [change]) {
   let surface: PlanChangeSurfaceState = EMPTY_PLAN_CHANGE_SURFACE;
   let library: ListPlansResult = {
+    calendarConnected: false,
     active: {
       planId: "plan-active",
       version: 7,

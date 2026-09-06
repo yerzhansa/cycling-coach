@@ -15,7 +15,13 @@ describe("Plan controller", () => {
     let fail = false;
     const states: PlanReadSurfaceState[] = [];
     const controller = createPlanController({
-      listPlans: async () => ({ creation: null, active: null, closed: [], changes: [] }),
+      listPlans: async () => ({
+        calendarConnected: false,
+        creation: null,
+        active: null,
+        closed: [],
+        changes: [],
+      }),
       renderLibrary: vi.fn(),
       read: vi.fn(async () => {
         if (fail) throw new Error("offline");
@@ -35,7 +41,13 @@ describe("Plan controller", () => {
     const navigate = vi.fn();
     const focus = vi.fn();
     const controller = createPlanController({
-      listPlans: async () => ({ creation: null, active: null, closed: [], changes: [] }),
+      listPlans: async () => ({
+        calendarConnected: false,
+        creation: null,
+        active: null,
+        closed: [],
+        changes: [],
+      }),
       renderLibrary: vi.fn(),
       read: vi.fn(async () => model),
       render: vi.fn(),
@@ -65,7 +77,13 @@ function deferredLibrary() {
 }
 
 describe("Plan library refresh", () => {
-  const library: ListPlansResult = { creation: null, active: null, closed: [], changes: [] };
+  const library: ListPlansResult = {
+    calendarConnected: false,
+    creation: null,
+    active: null,
+    closed: [],
+    changes: [],
+  };
 
   function subject(
     listPlans: () => Promise<ListPlansResult>,

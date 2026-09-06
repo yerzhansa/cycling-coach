@@ -270,6 +270,7 @@ export function createPlanCreationOperations(input: {
         );
         const active = summaries.find((plan) => plan.status === "active") ?? null;
         return ListPlansResultSchema.parse({
+          calendarConnected: calendarConnected(),
           creation:
             creation === undefined ? null : projectPlanCreationCard(creation, { today: today() }),
           active,

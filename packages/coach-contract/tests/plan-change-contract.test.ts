@@ -125,10 +125,21 @@ describe("Plan Change contract", () => {
   });
 
   it("requires explicit changes in the Plan list", () => {
-    const empty = { creation: null, active: null, closed: [], changes: [] };
+    const empty = {
+      calendarConnected: false,
+      creation: null,
+      active: null,
+      closed: [],
+      changes: [],
+    };
     expect(ListPlansResultSchema.parse(empty)).toEqual(empty);
     expect(
-      ListPlansResultSchema.safeParse({ creation: null, active: null, closed: [] }).success,
+      ListPlansResultSchema.safeParse({
+        calendarConnected: false,
+        creation: null,
+        active: null,
+        closed: [],
+      }).success,
     ).toBe(false);
   });
 

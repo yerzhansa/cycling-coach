@@ -176,6 +176,7 @@ export const ListPlansParamsSchema = z.object({}).strict();
 export type ListPlansParams = z.infer<typeof ListPlansParamsSchema>;
 export const ListPlansResultSchema = z
   .object({
+    calendarConnected: z.boolean(),
     creation: PlanCreationCardModelSchema.nullable(),
     active: PlanSummarySchema.extend({ status: z.literal("active") }).nullable(),
     closed: z.array(PlanSummarySchema.extend({ status: z.literal("closed") })),

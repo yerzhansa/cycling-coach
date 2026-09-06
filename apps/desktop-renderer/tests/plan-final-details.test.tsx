@@ -111,10 +111,55 @@ describe("final Plan details", () => {
     (cleanup, label) => {
       const value = history();
       value.cleanup = cleanup;
+      Reflect.deleteProperty(value.plan, "calendar");
       render(<PlanFinalDetails history={value} backToLibrary={vi.fn()} />);
       expect(
         within(screen.getByRole("row", { name: /^Calendar/ })).getByRole("cell", { name: label }),
       ).toBeVisible();
+    },
+  );
+
+  it.each([
+    [
+      { status: "verified", window: null, currentThrough: "1998-09-13", error: null },
+      "Cleanup complete",
+    ],
+    [
+      { status: "pending", window: null, currentThrough: null, error: null },
+      "Calendar cleanup pending",
+    ],
+    [
+      { status: "running", window: null, currentThrough: null, error: null },
+      "Calendar cleanup pending",
+    ],
+    [
+      { status: "not-connected", window: null, currentThrough: null, error: null },
+      "Calendar cleanup waits for intervals.icu",
+    ],
+    [
+      {
+        status: "failed",
+        window: null,
+        currentThrough: null,
+        error: "Calendar cleanup failed. Retry available.",
+      },
+      "Calendar cleanup failed. Retry available.",
+    ],
+    [
+      { status: "failed", window: null, currentThrough: null, error: "Calendar cleanup failed." },
+      "Calendar cleanup failed.",
+    ],
+  ] satisfies Array<[NonNullable<PlanHistoryResult>["plan"]["calendar"], string]>)(
+    "prefers calendar %j over cleanup",
+    (calendar, copy) => {
+      const value = history();
+      value.plan.calendar = calendar;
+      value.cleanup = "none";
+      render(<PlanFinalDetails history={value} backToLibrary={vi.fn()} />);
+      expect(screen.getByRole("row", { name: /^Calendar/ })).toHaveTextContent(copy);
+      expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+        "Back to library",
+      ]);
     },
   );
 

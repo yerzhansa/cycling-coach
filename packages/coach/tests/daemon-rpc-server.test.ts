@@ -213,7 +213,13 @@ const operations: CoachOperations &
     turns: [],
     nextCursor: null,
   }),
-  "plan.list": async () => ({ creation: null, active: null, closed: [], changes: [] }),
+  "plan.list": async () => ({
+    calendarConnected: false,
+    creation: null,
+    active: null,
+    closed: [],
+    changes: [],
+  }),
   "plan.close": async () => ({ status: "rejected", reason: "no-active-plan" }),
   "plan_change.preview": async () => ({ status: "rejected", reason: "no-active-plan" }),
   "plan_change.apply": async () => ({ status: "rejected", reason: "no-active-plan" }),
@@ -859,7 +865,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         ...operations,
         "plan.list": async () => {
           calls.push("plan.list");
-          return { creation: null, active: null, closed: [], changes: [] };
+          return {
+            calendarConnected: false,
+            creation: null,
+            active: null,
+            closed: [],
+            changes: [],
+          };
         },
         "plan.close": async () => {
           calls.push("plan.close");
@@ -2456,6 +2468,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       activatedAt: "1998-09-07",
     };
     const listPlans = vi.fn(async () => ({
+      calendarConnected: false,
       creation: startedCard,
       active: null,
       closed: [],
@@ -2568,7 +2581,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         id: "list",
         method: "plan.list",
         params: {},
-        result: { creation: startedCard, active: null, closed: [], changes: [] },
+        result: {
+          calendarConnected: false,
+          creation: startedCard,
+          active: null,
+          closed: [],
+          changes: [],
+        },
       },
       {
         id: "close",

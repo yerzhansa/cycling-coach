@@ -2,8 +2,68 @@ import { planReadModel } from "../state/plan-slice";
 import { useEnduragentStore } from "../state/store";
 import type { PlanController } from "./controller";
 
-export function subscribePlanLibraryRefresh(controller: PlanController): () => void {
-  return useEnduragentStore.subscribe((state, previousState) => {
+const retryListeners = new Set<(planId: string) => void>();
+
+export function requestPlanCalendarRetry(planId: string): void {
+  for (const listener of retryListeners) listener(planId);
+}
+
+export function subscribePlanLibraryRefresh(
+  controller: PlanController,
+  timers: {
+    readonly setTimeout: typeof globalThis.setTimeout;
+    readonly clearTimeout: typeof globalThis.clearTimeout;
+  } = globalThis,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let attempts = 0;
+  let refreshing = false;
+  let disposed = false;
+  let generation = 0;
+  const cancel = (): void => {
+    generation += 1;
+    if (timer !== undefined) timers.clearTimeout(timer);
+    timer = undefined;
+  };
+  const canPoll = (): boolean => {
+    const state = useEnduragentStore.getState();
+    const calendar = state.planLibrary.value?.active?.calendar;
+    return (
+      !disposed &&
+      state.activeView === "plan" &&
+      calendar !== undefined &&
+      (calendar.status === "pending" ||
+        calendar.status === "running" ||
+        (calendar.status === "failed" && calendar.error.endsWith("Retry available.")))
+    );
+  };
+  const schedule = (): void => {
+    if (!canPoll()) {
+      cancel();
+      return;
+    }
+    if (timer !== undefined || refreshing || attempts >= 20) return;
+    timer = timers.setTimeout(() => {
+      timer = undefined;
+      attempts += 1;
+      refreshing = true;
+      const currentGeneration = generation;
+      void controller
+        .refresh(true, () => currentGeneration === generation && canPoll())
+        .finally(() => {
+          refreshing = false;
+          schedule();
+        });
+    }, 4_000);
+  };
+  const requestRetry = (planId: string): void => {
+    if (disposed || useEnduragentStore.getState().planLibrary.value?.active?.planId !== planId)
+      return;
+    attempts = 0;
+    schedule();
+  };
+  retryListeners.add(requestRetry);
+  const unsubscribe = useEnduragentStore.subscribe((state, previousState) => {
     const creation = state.chat.planCreation;
     const previousCreation = previousState.chat.planCreation;
     const creationChanged =
@@ -22,11 +82,27 @@ export function subscribePlanLibraryRefresh(controller: PlanController): () => v
     const activePlanNeedsRefresh =
       activePlanId !== previousActivePlanId && activePlanId !== (library?.active?.planId ?? null);
     const opened = state.activeView === "plan" && previousState.activeView !== "plan";
+    if (
+      opened ||
+      state.planLibrary.value?.active?.planId !== previousState.planLibrary.value?.active?.planId ||
+      (state.planLibrary.status === "loading" && previousState.planLibrary.status !== "loading")
+    ) {
+      cancel();
+      attempts = 0;
+    }
     if (opened || creationNeedsRefresh || activePlanNeedsRefresh)
       void controller.refresh(
         opened ||
           (creationNeedsRefresh && previousState.chat.planCreationLoaded) ||
           (activePlanNeedsRefresh && previousPlan !== null),
       );
+    schedule();
   });
+  schedule();
+  return () => {
+    disposed = true;
+    retryListeners.delete(requestRetry);
+    cancel();
+    unsubscribe();
+  };
 }

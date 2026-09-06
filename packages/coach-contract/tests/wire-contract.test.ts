@@ -1325,7 +1325,13 @@ describe("coach request and event projection", () => {
         asOfDateKey: 20260826,
         plan: null,
       }),
-      "plan.list": async () => ({ creation: null, active: null, closed: [], changes: [] }),
+      "plan.list": async () => ({
+        calendarConnected: false,
+        creation: null,
+        active: null,
+        closed: [],
+        changes: [],
+      }),
       "plan.close": async () => ({ status: "rejected", reason: "no-active-plan" }),
       "plan.history": async () => null,
       getActivityAnalysis: async () => {

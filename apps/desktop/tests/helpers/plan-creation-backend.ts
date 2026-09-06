@@ -358,9 +358,7 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
       identity,
       crypto: globalThis.crypto,
       todayDateKey: () =>
-        this.options.calendar === undefined
-          ? 19980101
-          : Number(this.civilDate.replaceAll("-", "")),
+        this.options.calendar === undefined ? 19980101 : Number(this.civilDate.replaceAll("-", "")),
       now: () => this.instant,
     });
     const calendarConnected = () =>
@@ -374,7 +372,7 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
       calendarConnected,
       today: () => this.civilDate,
       todayDateKey: () => Number(this.civilDate.replaceAll("-", "")),
-      now: () => Date.parse(`${this.civilDate}T00:00:00.000Z`),
+      now: () => this.instant,
     });
     if (this.options.calendar !== undefined) {
       const drain = createPlanCalendarDrain({
@@ -440,6 +438,18 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
   async reopen(): Promise<void> {
     await this.close();
     await this.open();
+    void this.calendarDrain?.kick({ reclaimRunning: true });
+  }
+
+  async crash(): Promise<void> {
+    void this.calendarDrain?.idle().catch(() => {});
+    this.calendarDrain = undefined;
+    await this.store?.close();
+    this.store = undefined;
+    this.repository = undefined;
+    this.host = undefined;
+    this.changes = undefined;
+    this.planning = undefined;
   }
 
   async close(): Promise<void> {
@@ -689,6 +699,18 @@ fingerprint,created_at_ms,device_id,hlc_physical_ms,hlc_counter
       if (answered.status !== "answered")
         throw new TypeError("Plan Creation goal seed was rejected");
     }
+  }
+
+  async physicalWorkouts(planId: string) {
+    const rows = await this.requireStore().all(
+      "SELECT id,date_key,structure_json FROM plan_workout WHERE plan_id=? ORDER BY id",
+      [planId],
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      dateKey: row.date_key === null ? null : Number(row.date_key),
+      structureJson: String(row.structure_json),
+    }));
   }
 
   async inspectActivation() {

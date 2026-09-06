@@ -328,9 +328,17 @@ for (const appearance of [
             "Cancel",
             activePlan ? "Activate new Plan" : "Activate Plan",
           ]);
-          await expect(dialog).toContainText(
-            `${activePlan ? "Active endurance Plan closes. " : ""}The new Plan activates now.`,
-          );
+          await expect(
+            dialog.getByText(
+              `${activePlan ? "Active endurance Plan closes. Today’s calendar Workout stays. " : ""}The new Plan activates now.`,
+              { exact: true },
+            ),
+          ).toBeVisible();
+          await expect(
+            dialog.getByText("Calendar updates wait until intervals.icu is connected.", {
+              exact: true,
+            }),
+          ).toBeVisible();
         };
         await openDialog();
         await capture(scenario, "confirmation");

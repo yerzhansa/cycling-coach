@@ -16,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog";
+import { requestPlanCalendarRetry } from "../../plan/library-refresh";
 import { useEnduragentStore } from "../../state/store";
 
 function dateLabel(value: string): string {
@@ -56,6 +57,57 @@ function LibraryCard(props: {
         {props.children}
       </CardContent>
     </Card>
+  );
+}
+
+function CalendarStatus(props: {
+  readonly calendar: PlanSummary["calendar"];
+  readonly retry: (() => Promise<void>) | undefined;
+}): ReactElement {
+  const { calendar } = props;
+  if (calendar.status === "failed") {
+    const retryAvailable = calendar.error.endsWith("Retry available.");
+    return (
+      <div className="grid gap-inset">
+        <p role="alert" className="m-0 text-sm text-danger">
+          {retryAvailable ? "Calendar sync failed. Retry available." : "Calendar sync failed."}
+        </p>
+        {retryAvailable ? (
+          <div>
+            <Button
+              variant="outline"
+              disabled={props.retry === undefined}
+              onClick={() => void props.retry?.()}
+            >
+              Retry calendar
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  let label: string;
+  switch (calendar.status) {
+    case "verified":
+      label =
+        calendar.window === null
+          ? "Up to date"
+          : `${dateLabel(calendar.window.start)} to ${dateLabel(calendar.window.end)} · Up to date`;
+      break;
+    case "pending":
+      label = calendar.window === null ? "Local only" : "Updating calendar";
+      break;
+    case "running":
+      label = "Updating calendar";
+      break;
+    case "not-connected":
+      label = "Connect to mirror Workouts";
+      break;
+  }
+  return (
+    <p role="status" className="m-0 text-sm leading-5 text-ink-2">
+      Calendar · {label}
+    </p>
   );
 }
 
@@ -257,6 +309,17 @@ export function PlanLibrary(props: {
           status="Active"
           summary={spanLabel(active)}
         >
+          <CalendarStatus
+            calendar={active.calendar}
+            retry={
+              actions
+                ? async () => {
+                    requestPlanCalendarRetry(active.planId);
+                    await actions.refresh();
+                  }
+                : undefined
+            }
+          />
           <div className="flex flex-wrap gap-inset">
             <Button
               ref={stop}

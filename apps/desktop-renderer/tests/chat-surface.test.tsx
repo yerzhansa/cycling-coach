@@ -3131,7 +3131,7 @@ describe("chat surface", () => {
         expect(
           screen.getByText(
             hasActivePlan
-              ? "Steady autumn closes. The new Plan activates now."
+              ? "Steady autumn closes. Today’s calendar Workout stays. The new Plan activates now."
               : "The new Plan activates now.",
           ),
         ).toBeVisible();
