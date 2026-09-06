@@ -913,8 +913,7 @@ export async function createLocalCoachComposition(
   let intervalsConfigRevision = 0;
   const ownerLookup = (config: Config) => ({
     apiKey: config.intervals.apiKey,
-    athleteId:
-      config.intervals.athleteId.length === 0 ? "0" : config.intervals.athleteId,
+    athleteId: config.intervals.athleteId.length === 0 ? "0" : config.intervals.athleteId,
     historyNewestDate: referencePlan(config).window.newest,
     clock: ownerClock,
   });
@@ -1716,12 +1715,19 @@ export async function createLocalCoachComposition(
     };
     const startInitialRefresh = (): Promise<void> => {
       if (initialRefreshPromise !== undefined) return initialRefreshPromise;
-      initialPlanCompletion ??= planLifecycle.completeExpired({
-        todayDateKey: planningDateKey(),
-        nowMs: now(),
-      });
+      initialPlanCompletion ??= planLifecycle
+        .completeExpired({ todayDateKey: planningDateKey(), nowMs: now() })
+        .catch((error: unknown) => {
+          initialPlanCompletion = undefined;
+          throw error;
+        });
       if (!input.deferInitialRefresh) {
-        initialRefreshPromise = initialPlanCompletion.then(() => undefined);
+        initialRefreshPromise = initialPlanCompletion
+          .then(() => undefined)
+          .catch((error: unknown) => {
+            initialRefreshPromise = undefined;
+            throw error;
+          });
         return initialRefreshPromise;
       }
       if (initialRefreshRetryTimer !== undefined) {
@@ -1875,8 +1881,7 @@ export async function createLocalCoachComposition(
         runtime,
         intervalsCredentials: options.liveIntervals,
         historyNewestDate: () => referencePlan(approvedConfig()).window.newest,
-        calendarTimeZone: () =>
-          resolveUserTimezone(approvedConfig().session.timezone),
+        calendarTimeZone: () => resolveUserTimezone(approvedConfig().session.timezone),
         readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
         readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
         readArchivedTranscriptPage: (request) => reconfigurable.getArchivedTranscriptPage(request),
