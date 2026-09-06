@@ -684,7 +684,35 @@ export const PlanCreationActivateRpcResultSchema = z
   .strict();
 export type PlanCreationActivateRpcResult = z.infer<typeof PlanCreationActivateRpcResultSchema>;
 
+export const PlanCloseRpcParamsSchema = z
+  .object({
+    commandId: PlanCreationCommandIdSchema,
+    planId: PlanCreationUlidSchema,
+    expectedVersion: z.number().int().positive(),
+  })
+  .strict();
+export type PlanCloseRpcParams = z.infer<typeof PlanCloseRpcParamsSchema>;
+
+export const PlanCloseResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("closed"),
+      planId: PlanCreationUlidSchema,
+      closedAt: z.number().int().nonnegative(),
+      cleanupJobId: PlanCreationUlidSchema,
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("rejected"),
+      reason: z.enum(["stale-version", "no-active-plan", "command-conflict"]),
+    })
+    .strict(),
+]);
+export type PlanCloseResult = z.infer<typeof PlanCloseResultSchema>;
+
 export interface PlanCreationOperations {
+  "plan.close"(request: PlanCloseRpcParams): Promise<PlanCloseResult>;
   "plan_creation.activate"(
     request: PlanCreationActivateRpcParams,
   ): Promise<PlanCreationActivateRpcResult>;

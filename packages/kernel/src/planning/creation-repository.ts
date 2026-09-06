@@ -4,32 +4,23 @@ import {
   type PlanRecord,
   type PlanWorkoutRecord,
 } from "./repository.js";
+import {
+  createPlanningCommandLedger,
+  fail,
+  PlanCreationStoreError,
+  type PlanCreationCommandStamp,
+} from "./command-ledger.js";
+export {
+  PlanCreationStoreError,
+  type PlanCreationErrorCode,
+  type PlanCreationCommandStamp,
+} from "./command-ledger.js";
 import { canonicalJson } from "../archive/canonical.js";
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
 import { z } from "zod";
 
 export type PlanCreationStore = SqlStore & Pick<MigratorStore, "transaction">;
-export type PlanCreationErrorCode =
-  | "command-conflict"
-  | "stale-version"
-  | "missing-creation"
-  | "no-unfinished-creation"
-  | "corrupt-record"
-  | "version-conflict"
-  | "not-ready";
-
-export class PlanCreationStoreError extends Error {
-  constructor(readonly code: PlanCreationErrorCode) {
-    super(
-      code === "not-ready"
-        ? "Build a current complete Draft and resolve pending answers before activation."
-        : code,
-    );
-    this.name = "PlanCreationStoreError";
-  }
-}
-
 export const PlanCreationSeedV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -92,15 +83,6 @@ const PlanCreationSnapshotSchema = z
   })
   .readonly();
 export type PlanCreationSnapshot = z.infer<typeof PlanCreationSnapshotSchema>;
-
-export interface PlanCreationCommandStamp {
-  readonly commandId: string;
-  readonly requestDigest: string;
-  readonly nowMs: number;
-  readonly deviceId: string;
-  readonly hlcPhysicalMs: number;
-  readonly hlcCounter: number;
-}
 
 export interface StartPlanCreationInput {
   readonly command: PlanCreationCommandStamp;
@@ -184,9 +166,6 @@ export interface PlanCreationRepository {
   }>;
 }
 
-const fail = (): never => {
-  throw new PlanCreationStoreError("corrupt-record");
-};
 const text = (row: Row, key: string): string => {
   const value = row[key];
   return typeof value === "string" ? value : fail();
@@ -208,6 +187,7 @@ const parseSeed = (value: unknown): PlanCreationSeedV1 => {
 };
 
 export function createPlanCreationRepository(store: PlanCreationStore): PlanCreationRepository {
+  const { hasReplay, recordCommand } = createPlanningCommandLedger(store);
   const readUnfinished = async (): Promise<PlanCreationSnapshot | undefined> => {
     const rows = await store.all(
       "SELECT * FROM plan_creation WHERE status IN ('in-progress','review') ORDER BY created_at_ms,id",
@@ -276,25 +256,6 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
     if (snapshot === undefined) throw new PlanCreationStoreError("missing-creation");
     return snapshot;
   };
-  const hasReplay = async (
-    name:
-      | "plan_creation.start"
-      | "plan_creation.answer"
-      | "plan_creation.discard"
-      | "plan_creation.preview"
-      | "plan_creation.activate",
-    command: PlanCreationCommandStamp,
-  ) => {
-    const row = await store.get(
-      "SELECT request_digest,status,result_json FROM planning_command WHERE command_name=? AND command_id=?",
-      [name, command.commandId],
-    );
-    if (row === undefined) return undefined;
-    if (text(row, "request_digest") !== command.requestDigest)
-      throw new PlanCreationStoreError("command-conflict");
-    if (text(row, "status") !== "succeeded") fail();
-    return row;
-  };
   const replay = async (
     name: "plan_creation.start" | "plan_creation.answer",
     command: PlanCreationCommandStamp,
@@ -305,35 +266,6 @@ export function createPlanCreationRepository(store: PlanCreationStore): PlanCrea
     const parsed = PlanCreationSnapshotSchema.safeParse(json(text(row, "result_json")));
     return parsed.success ? parsed.data : fail();
   };
-  const recordCommand = (
-    name:
-      | "plan_creation.start"
-      | "plan_creation.answer"
-      | "plan_creation.discard"
-      | "plan_creation.preview"
-      | "plan_creation.activate",
-    command: PlanCreationCommandStamp,
-    creationId: string,
-    result: unknown,
-  ) =>
-    store.run(
-      `INSERT INTO planning_command (
-command_name,command_id,request_digest,status,aggregate_refs_json,result_json,error_code,error_json,
-version,created_at_ms,updated_at_ms,device_id,hlc_physical_ms,hlc_counter
-) VALUES (?, ?, ?, 'succeeded', ?, ?, NULL, NULL, 2, ?, ?, ?, ?, ?)`,
-      [
-        name,
-        command.commandId,
-        command.requestDigest,
-        canonicalJson({ creationId }),
-        canonicalJson(result),
-        command.nowMs,
-        command.nowMs,
-        command.deviceId,
-        command.hlcPhysicalMs,
-        command.hlcCounter,
-      ],
-    );
   return {
     readUnfinished,
     replayDraft,
@@ -361,10 +293,15 @@ terminal_at_ms,device_id,hlc_physical_ms,hlc_counter
           );
           snapshot = await requireUnfinished();
         }
-        await recordCommand("plan_creation.start", command, snapshot.id, {
-          creationId: snapshot.id,
-          outcome,
-        });
+        await recordCommand(
+          "plan_creation.start",
+          command,
+          { creationId: snapshot.id },
+          {
+            creationId: snapshot.id,
+            outcome,
+          },
+        );
         return { outcome, snapshot };
       });
     },
@@ -410,11 +347,16 @@ WHERE id=? AND status IN ('in-progress','review') AND version=?`,
         const snapshot = await requireUnfinished();
         if (snapshot.id !== creationId || snapshot.version !== version)
           throw new PlanCreationStoreError("stale-version");
-        await recordCommand("plan_creation.answer", command, creationId, {
-          creationId,
-          answerId,
-          version,
-        });
+        await recordCommand(
+          "plan_creation.answer",
+          command,
+          { creationId },
+          {
+            creationId,
+            answerId,
+            version,
+          },
+        );
         return { outcome: "recorded", snapshot };
       });
     },
@@ -475,7 +417,7 @@ WHERE id=? AND status IN ('in-progress','review') AND version=?`,
           snapshot.status !== "review"
         )
           throw new PlanCreationStoreError("stale-version");
-        await recordCommand("plan_creation.preview", command, creationId, snapshot);
+        await recordCommand("plan_creation.preview", command, { creationId }, snapshot);
         return { outcome: "recorded", snapshot };
       });
     },
@@ -628,7 +570,7 @@ updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=? WHERE id=? AND statu
         );
         if (updated === undefined || integer(updated, "version") !== expectedVersion + 1)
           throw new PlanCreationStoreError("version-conflict");
-        await recordCommand("plan_creation.activate", command, creationId, result);
+        await recordCommand("plan_creation.activate", command, { creationId }, result);
         return result;
       });
     },
@@ -659,11 +601,16 @@ RETURNING status,version`,
         if (text(updated, "status") !== "discarded" || integer(updated, "version") !== version) {
           fail();
         }
-        await recordCommand("plan_creation.discard", command, creationId, {
-          creationId,
-          outcome: "discarded",
-          version,
-        });
+        await recordCommand(
+          "plan_creation.discard",
+          command,
+          { creationId },
+          {
+            creationId,
+            outcome: "discarded",
+            version,
+          },
+        );
         return { outcome: "discarded" };
       });
     },

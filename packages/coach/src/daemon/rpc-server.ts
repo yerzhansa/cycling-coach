@@ -529,6 +529,8 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getAthleteState",
   "getPlanningReadModel",
   "plan.list",
+  "plan.close",
+  "plan.history",
   "getActivityAnalysis",
   "importFiles",
   "sync",
@@ -1360,6 +1362,32 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 throw new TypeError("Plan library operation is unavailable.");
               }
               result = await input.operations["plan.list"](request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan.close":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY["plan.close"].requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations["plan.close"] === undefined) {
+                throw new TypeError("Plan closure operation is unavailable.");
+              }
+              result = await input.operations["plan.close"](request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "plan.history":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY["plan.history"].requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations["plan.history"] === undefined) {
+                throw new TypeError("Plan history operation is unavailable.");
+              }
+              result = await input.operations["plan.history"](request);
             } catch (error) {
               invocationFailure = { error };
             }

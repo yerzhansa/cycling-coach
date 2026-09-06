@@ -204,6 +204,7 @@ import { createPlanningRequestSourceCleanup } from "./planning-request-source-cl
 import {
   createPlanConversationRepository,
   createPlanCreationRepository,
+  createPlanLifecycleRepository,
   createPlanningRequestIntakeRepository,
   createPlanningRequestRepository,
   createPlanRepository,
@@ -871,6 +872,11 @@ export async function createLocalCoachComposition(
   const logger = createSubsystemLogger("agent", input.home.root);
   const planningIdentity = createAuthoredIdentity(input.home.configDir, { now });
   const planningTimezone = resolveUserTimezone(input.config.session.timezone);
+  const planningDateKey = (): number =>
+    Number(todayInTZ(planningTimezone, new Date(now())).replaceAll("-", ""));
+  const planLifecycle = createPlanLifecycleRepository(input.context.store, {
+    newId: () => planningIdentity.newUlid(),
+  });
   const planCreationOperations = createPlanCreationOperations({
     store: input.context.store,
     repository: createPlanCreationRepository(input.context.store),
@@ -879,10 +885,10 @@ export async function createLocalCoachComposition(
     eventCandidates: { read: async () => [] },
     baselineEvidence: { read: async () => undefined },
     today: () => todayInTZ(planningTimezone, new Date(now())),
+    todayDateKey: planningDateKey,
+    now,
   });
   const planningRepository = createLegacyPlanRepository(input.context.store);
-  const planningDateKey = (): number =>
-    Number(todayInTZ(planningTimezone, new Date(now())).replaceAll("-", ""));
   await importLegacyCurrentPlan({
     home: input.home,
     store: input.context.store,
@@ -1007,6 +1013,7 @@ export async function createLocalCoachComposition(
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
   let initialRefreshPromise: Promise<void> | undefined;
+  let initialPlanCompletion: Promise<unknown> | undefined;
   let initialRefreshRetryTimer: ReturnType<typeof setTimeout> | undefined;
   let initialRefreshFailedAttempts = 0;
   const initialRefreshController = new AbortController();
@@ -1709,8 +1716,12 @@ export async function createLocalCoachComposition(
     };
     const startInitialRefresh = (): Promise<void> => {
       if (initialRefreshPromise !== undefined) return initialRefreshPromise;
+      initialPlanCompletion ??= planLifecycle.completeExpired({
+        todayDateKey: planningDateKey(),
+        nowMs: now(),
+      });
       if (!input.deferInitialRefresh) {
-        initialRefreshPromise = Promise.resolve();
+        initialRefreshPromise = initialPlanCompletion.then(() => undefined);
         return initialRefreshPromise;
       }
       if (initialRefreshRetryTimer !== undefined) {
@@ -1720,36 +1731,38 @@ export async function createLocalCoachComposition(
       initialRefreshStarted = true;
       const refreshRevision = intervalsConfigRevision;
       let ownerSucceeded = false;
-      initialRefreshPromise = runtime!
-        .runWindowAfter(async (signal) => {
-          const initializationSignal = AbortSignal.any([signal, initialRefreshController.signal]);
-          initializationSignal.throwIfAborted();
-          initialRefreshConfigCaptured = true;
-          const initialConfig = copyConfig(unapprovedConfig);
-          if (initialConfig.intervals.apiKey.length > 0 && !intervalsOwnerReady) {
-            const ownerClaim = await assertIntervalsOwner(
-              initialConfig,
-              initialConfig,
-              initializationSignal,
+      initialRefreshPromise = initialPlanCompletion
+        .then(() =>
+          runtime!.runWindowAfter(async (signal) => {
+            const initializationSignal = AbortSignal.any([signal, initialRefreshController.signal]);
+            initializationSignal.throwIfAborted();
+            initialRefreshConfigCaptured = true;
+            const initialConfig = copyConfig(unapprovedConfig);
+            if (initialConfig.intervals.apiKey.length > 0 && !intervalsOwnerReady) {
+              const ownerClaim = await assertIntervalsOwner(
+                initialConfig,
+                initialConfig,
+                initializationSignal,
+              );
+              initializationSignal.throwIfAborted();
+              await ownerClaim?.claim();
+              initializationSignal.throwIfAborted();
+            }
+            await reconfigurable.replace(
+              () => {
+                initializationSignal.throwIfAborted();
+                return buildBundle(approvedRuntimeConfig(unapprovedConfig, true));
+              },
+              (replacement) => {
+                initializationSignal.throwIfAborted();
+                intervalsOwnerReady = true;
+                activeTimezone = replacement.timezone;
+                ownerSucceeded = true;
+                return replacement;
+              },
             );
-            initializationSignal.throwIfAborted();
-            await ownerClaim?.claim();
-            initializationSignal.throwIfAborted();
-          }
-          await reconfigurable.replace(
-            () => {
-              initializationSignal.throwIfAborted();
-              return buildBundle(approvedRuntimeConfig(unapprovedConfig, true));
-            },
-            (replacement) => {
-              initializationSignal.throwIfAborted();
-              intervalsOwnerReady = true;
-              activeTimezone = replacement.timezone;
-              ownerSucceeded = true;
-              return replacement;
-            },
-          );
-        })
+          }),
+        )
         .then(() => undefined)
         .finally(() => {
           if (ownerSucceeded && unapprovedConfig.intervals.apiKey.length > 0) {
@@ -2248,6 +2261,8 @@ export async function createLocalCoachComposition(
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
       ...planningRequestOperations,
       "plan.list": planCreationOperations["plan.list"],
+      "plan.close": planCreationOperations["plan.close"],
+      "plan.history": planCreationOperations["plan.history"],
       "plan_creation.start": planCreationOperations["plan_creation.start"],
       "plan_creation.answer": planCreationOperations["plan_creation.answer"],
       "plan_creation.preview": planCreationOperations["plan_creation.preview"],

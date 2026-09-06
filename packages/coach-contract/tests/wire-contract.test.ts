@@ -1326,6 +1326,8 @@ describe("coach request and event projection", () => {
         plan: null,
       }),
       "plan.list": async () => ({ creation: null, active: null, closed: [] }),
+      "plan.close": async () => ({ status: "rejected", reason: "no-active-plan" }),
+      "plan.history": async () => null,
       getActivityAnalysis: async () => {
         throw new Error("not exercised by registry exhaustiveness");
       },
@@ -2183,5 +2185,51 @@ describe("additive protocol signals", () => {
 
   it("uses protocol version 36", () => {
     expect(PROTOCOL_VERSION).toBe(36);
+  });
+});
+
+describe("Plan lifecycle wire contract", () => {
+  const closeParams = {
+    commandId: "close-1",
+    planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    expectedVersion: 1,
+  };
+
+  it("accepts athlete closure and rejects public actor or completion claims", () => {
+    const schema = COACH_RPC_METHOD_REGISTRY["plan.close"].requestSchema;
+    expect(schema.parse(closeParams)).toEqual(closeParams);
+    for (const extra of [
+      { closeActor: "system:plan-completion" },
+      { closeReason: "completed" },
+      { closedAtMs: 904_953_600_000 },
+    ]) {
+      expect(schema.safeParse({ ...closeParams, ...extra }).success).toBe(false);
+    }
+    expect(schema.safeParse({ ...closeParams, expectedVersion: 0 }).success).toBe(false);
+  });
+
+  it("accepts closure results and every rejection reason", () => {
+    const schema = COACH_RPC_METHOD_REGISTRY["plan.close"].responseSchema;
+    expect(
+      schema.safeParse({
+        status: "closed",
+        planId: closeParams.planId,
+        closedAt: 904_953_600_000,
+        cleanupJobId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      }).success,
+    ).toBe(true);
+    for (const reason of ["stale-version", "no-active-plan", "command-conflict"]) {
+      expect(schema.parse({ status: "rejected", reason })).toEqual({ status: "rejected", reason });
+    }
+    expect(schema.safeParse({ status: "rejected", reason: "completed" }).success).toBe(false);
+  });
+
+  it("returns null for unavailable closed history and requires a Plan id", () => {
+    const method = COACH_RPC_METHOD_REGISTRY["plan.history"];
+    expect(method.requestSchema.parse({ planId: closeParams.planId })).toEqual({
+      planId: closeParams.planId,
+    });
+    expect(method.requestSchema.safeParse({ planId: "" }).success).toBe(false);
+    expect(method.responseSchema.parse(null)).toBeNull();
   });
 });

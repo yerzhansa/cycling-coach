@@ -1,6 +1,10 @@
 import type { PlanCreationOperations } from "@enduragent/coach-contract";
 
 export const planCreationOperationStubs = {
+  "plan.close": async () => ({
+    status: "rejected",
+    reason: "no-active-plan",
+  }),
   "plan_creation.start": async () => ({
     status: "rejected",
     reason: "command-conflict",
