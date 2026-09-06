@@ -348,7 +348,7 @@ test.describe.serial("production application UI states", () => {
     const originalStructure = await structure();
     expect(checkStructure(originalStructure, preferencesContract)).toEqual([]);
     const clip = await preferencesClip();
-    const originalImage = await screenshot("settings-correct-control", info, clip);
+    await screenshot("settings-correct-control", info, clip);
     const mutation = await harness.fixture.evaluate<{
       readonly after: number;
       readonly before: number;
@@ -405,7 +405,9 @@ test.describe.serial("production application UI states", () => {
       compareStructure(originalStructure, defectiveStructure, preferencesContract.anchors).length,
     ).toBeGreaterThan(0);
     const defectiveImage = await screenshot("settings-intentional-defect", info, clip);
-    expect(defectiveImage.equals(originalImage)).toBe(false);
+    expect(await screenshot("settings-defective-viewport", info)).not.toMatchSnapshot(
+      "desktop--settings-preferences.png",
+    );
     await info.attach("intentional-defect", {
       body: JSON.stringify(failures),
       contentType: "application/json",
@@ -434,8 +436,8 @@ test.describe.serial("production application UI states", () => {
     await scrollToPreferences();
     const recoveredStructure = await structure();
     expect(checkStructure(recoveredStructure, preferencesContract)).toEqual([]);
-    const recoveredImage = await screenshot("settings-recovered-control", info, clip);
-    expect(recoveredImage.equals(originalImage)).toBe(true);
+    await screenshot("settings-recovered-control", info, clip);
+    await capture("desktop--settings-preferences", info);
     await info.attach("recovered-structure", {
       body: JSON.stringify(recoveredStructure),
       contentType: "application/json",

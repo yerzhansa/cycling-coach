@@ -70,6 +70,22 @@ describe("CI cost contract", () => {
     expect(ci).not.toContain("desktop-e2e-macos:");
   });
 
+  it("detects native scope before installing workspace dependencies", () => {
+    const scope = job(ci, "desktop-scope");
+    expect(scope).toContain("native: ${{ steps.scope.outputs.native }}");
+    expect(scope).toContain("fetch-depth: 0");
+    expect(scope).toContain("node-version: 24");
+    expect(scope).toContain("run: node tools/ui-verification/desktop-scope.ts");
+    expect(scope.indexOf("actions/setup-node@")).toBeLessThan(scope.indexOf("- id: scope"));
+    expect(scope).toContain(
+      "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}",
+    );
+    expect(scope).not.toContain("pnpm install");
+    expect(ci).not.toContain("preview-scope");
+    expect(ci).not.toContain("outputs.previews");
+    expect(ci).not.toContain("playwright install chromium");
+  });
+
   it("scopes Windows packaging and leaves synthetic contracts on Linux", () => {
     const windows = job(ci, "windows-desktop-package");
     expect(windows).toContain("needs: desktop-scope");
