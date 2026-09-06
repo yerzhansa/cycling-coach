@@ -10,6 +10,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type PlanCreationOperations,
+  type PlanChangeOperations,
 } from "@enduragent/coach-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TelegramControlCoordinator } from "../src/main/telegram-control.js";
@@ -481,7 +482,7 @@ async function createFixture(): Promise<ReleaseChainFixture> {
         recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
       },
     }),
-  } as unknown as CoachOperations & PlanCreationOperations;
+  } as unknown as CoachOperations & PlanCreationOperations & PlanChangeOperations;
   const confirmations = {
     peek: () => undefined,
     confirm: async () => ({ status: "none" as const }),
