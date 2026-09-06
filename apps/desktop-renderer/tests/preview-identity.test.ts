@@ -164,6 +164,22 @@ describe("preview source identity", () => {
     }
   }, 30_000);
 
+  it("rejects a preview import from a workspace outside its CI dependency scope", async () => {
+    const entry = resolve(rendererRoot, "../../packages/core/src/text-truncate.ts");
+    const inject: Plugin = {
+      name: "preview-scope-regression",
+      resolveId(id) {
+        return id === "preview-backend-fixture" ? entry : null;
+      },
+      load(id) {
+        return id === entry ? "globalThis.previewFixture = 'backend';" : null;
+      },
+    };
+    await expect(
+      buildIdentity({ entry: "preview-backend-fixture", plugins: [inject] }),
+    ).rejects.toThrow("Preview input is outside the CI dependency scope:");
+  }, 30_000);
+
   it("serves development identity without presenting the requested module graph as a complete build", async () => {
     const server = await createServer({
       root: rendererRoot,
