@@ -1,4 +1,5 @@
 ---
+"@enduragent/desktop": patch
 "@enduragent/kernel": patch
 "@enduragent/kernel-node": patch
 "@enduragent/engine": patch
