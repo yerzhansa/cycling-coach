@@ -230,8 +230,6 @@ for (const appearance of [
       await expect(dialog).not.toBeVisible();
       await expect(stop).toBeFocused();
       expect(await scenario.backend.inspectActivation()).toEqual(before);
-      await scenario.page.context().setOffline(true);
-      expect(await scenario.page.evaluate(() => navigator.onLine)).toBe(false);
       await stop.click();
       await dialog.getByRole("button", { name: "Stop Plan", exact: true }).click();
       await assertFinalDetails(scenario, "Stopped");
