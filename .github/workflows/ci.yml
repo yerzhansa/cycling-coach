@@ -179,8 +179,16 @@ jobs:
         run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
       - name: Test Desktop E2E on macOS
         run: pnpm --filter @enduragent/desktop test:e2e
-      - name: Verify native application UI states
-        run: pnpm check:ui-states
+      - name: Capture unsealed CI application reference
+        run: |
+          pnpm --filter @enduragent/desktop exec tsx --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          import { collectApplicationBuildIdentity, currentSourceRevision } from './tests/e2e/application-ui-states/identity.ts';
+          writeFileSync('/tmp/enduragent-ci-baseline-capture.json', JSON.stringify({ identity: await collectApplicationBuildIdentity(), sourceRevision: await currentSourceRevision() }, null, 2));
+          NODE
+          pnpm --filter @enduragent/desktop exec playwright test --config=playwright.ui-states.config.ts --update-snapshots=all
+          cp /tmp/enduragent-ci-baseline-capture.json apps/desktop/test-results/ui-states/capture-identity.json
+          exit 1
       - name: Upload Desktop E2E artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -189,6 +197,7 @@ jobs:
           path: |
             apps/desktop/playwright-report/
             apps/desktop/test-results/
+            apps/desktop/tests/e2e/application-ui-states/baselines/application-ui-extraction-darwin-25-6-v1/
           if-no-files-found: warn
       - name: Test prepared Desktop package
         run: pnpm --filter @enduragent/desktop test:packaged-self-test --prepared-package
