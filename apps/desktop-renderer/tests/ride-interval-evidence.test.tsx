@@ -126,7 +126,7 @@ describe("ride interval evidence", () => {
         titleRef={createRef<HTMLHeadingElement>()}
       />,
     );
-    fireEvent.click(screen.getByText("Recorded analysis and export"));
+    fireEvent.click(screen.getByText("Recorded analysis"));
 
     const ordered = screen.getByRole("list", {
       name: "Ordered ride intervals and laps",

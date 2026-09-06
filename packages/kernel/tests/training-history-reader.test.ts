@@ -20,6 +20,7 @@ const SESSION_H = "2".repeat(64);
 
 interface PayloadRowFixture extends Row {
   readonly session_key: string;
+  readonly revision_id: string;
   readonly source_count: number;
   readonly payload_text_valid: number;
   readonly payload_oversized: number;
@@ -34,6 +35,7 @@ function activityPayload(activity: Readonly<Record<string, unknown>>): string {
 function payloadRow(sessionKey: string, payloadJson: string): PayloadRowFixture {
   return {
     session_key: sessionKey,
+    revision_id: sessionKey,
     source_count: 1,
     payload_text_valid: 1,
     payload_oversized: 0,
@@ -69,19 +71,25 @@ class WindowStore implements Pick<SqlReadStore, "all"> {
   readonly calls: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
   readonly corePages: Array<readonly ReturnType<typeof coreRow>[]>;
   readonly payloadRows: ReadonlyMap<string, PayloadRowFixture>;
+  readonly latestDateKey: number | null;
 
   constructor(input: {
     readonly corePages: Array<readonly ReturnType<typeof coreRow>[]>;
     readonly payloadRows?: readonly PayloadRowFixture[];
+    readonly latestDateKey?: number | null;
   }) {
     this.corePages = [...input.corePages];
     this.payloadRows = new Map(
       (input.payloadRows ?? []).map((row) => [String(row.session_key), row]),
     );
+    this.latestDateKey = input.latestDateKey ?? null;
   }
 
   async all(sql: string, params: readonly SqlValue[] = []): Promise<Row[]> {
     this.calls.push({ sql, params });
+    if (sql.includes("max(s.local_date_key)")) {
+      return [{ local_date_key: this.latestDateKey }];
+    }
     if (sql.includes("FROM session AS s") && !sql.includes("source_record_revision")) {
       return [...(this.corePages.shift() ?? [])];
     }
@@ -100,6 +108,79 @@ function rejected(reason: Extract<RecordedFact<number>, { kind: "rejected" }>["r
 }
 
 describe("training history reader", () => {
+  it("discovers the latest ride date without reading activity payloads", async () => {
+    const store = new WindowStore({ corePages: [], latestDateKey: 19980706 });
+
+    await expect(
+      createTrainingHistoryReader(store).readLatestRideDate({ through: "1998-07-12" }),
+    ).resolves.toBe("1998-07-06");
+    expect(store.calls).toEqual([
+      {
+        sql: expect.stringContaining("max(s.local_date_key)"),
+        params: [19980712],
+      },
+    ]);
+  });
+
+  it("returns null when sparse discovery finds no rides", async () => {
+    const store = new WindowStore({ corePages: [] });
+
+    await expect(
+      createTrainingHistoryReader(store).readLatestRideDate({ through: "1998-07-12" }),
+    ).resolves.toBeNull();
+  });
+
+  it("reuses parsed payload facts until the source revision changes", async () => {
+    let payload = activityPayload({
+      id: 12345,
+      name: "Cached source title",
+      start_date_local: "1998-07-06T08:00:00",
+      type: "Ride",
+      moving_time: 3_600,
+      elapsed_time: 3_700,
+      icu_training_load: 75,
+    });
+    const fixture = payloadRow(SESSION_A, payload);
+    let revisionId = SESSION_A;
+    let payloadReads = 0;
+    Object.defineProperty(fixture, "revision_id", {
+      enumerable: true,
+      get() {
+        return revisionId;
+      },
+    });
+    Object.defineProperty(fixture, "payload_json", {
+      enumerable: true,
+      get() {
+        payloadReads += 1;
+        return payload;
+      },
+    });
+    const store = new WindowStore({
+      corePages: [
+        [coreRow(SESSION_A, 900)],
+        [coreRow(SESSION_A, 900)],
+        [coreRow(SESSION_A, 900)],
+      ],
+      payloadRows: [fixture],
+    });
+    const reader = createTrainingHistoryReader(store);
+
+    await reader.readWindow({ start: "1998-07-06", end: "1998-07-12" });
+    const readsAfterFirstProjection = payloadReads;
+    await reader.readWindow({ start: "1998-07-06", end: "1998-07-12" });
+
+    expect(readsAfterFirstProjection).toBeGreaterThan(0);
+    expect(payloadReads).toBe(readsAfterFirstProjection);
+
+    revisionId = SESSION_B;
+    payload = payload.replace("75", "80");
+    const revised = await reader.readWindow({ start: "1998-07-06", end: "1998-07-12" });
+
+    expect(payloadReads).toBeGreaterThan(readsAfterFirstProjection);
+    expect(revised.rows[0]?.load).toEqual({ kind: "recorded", value: 80 });
+  });
+
   it("resolves title precedence and preserves localized RecordedFact outcomes", async () => {
     const valid = {
       id: 12345,
@@ -130,6 +211,7 @@ describe("training history reader", () => {
       payloadRow(SESSION_C, activityPayload({ ...valid, name: "Typed source title" })),
       {
         session_key: SESSION_D,
+        revision_id: SESSION_D,
         source_count: 2,
         payload_text_valid: 0,
         payload_oversized: 0,
@@ -138,6 +220,7 @@ describe("training history reader", () => {
       },
       {
         session_key: SESSION_E,
+        revision_id: SESSION_E,
         source_count: 1,
         payload_text_valid: 1,
         payload_oversized: 1,

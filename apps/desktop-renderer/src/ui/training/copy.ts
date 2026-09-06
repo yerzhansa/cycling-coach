@@ -1,26 +1,11 @@
 import type {
   AnalysisRefreshFailureCode,
   AnalysisUnavailableReason,
-  CyclingAnchor,
   PowerProgressComputed,
   PowerProgressRefreshFailureCode,
   PowerProgressUnavailableReason,
-  TrainingContextUnknownReason,
 } from "@enduragent/coach-contract";
-import { PLATFORM_COPY } from "../../platform-copy";
 import type { TrainingContextStatus } from "../../training-context/controller";
-
-export const TRAINING_UNKNOWN_COPY: Readonly<Record<TrainingContextUnknownReason, string>> = {
-  "not-synced": "Not synced yet",
-  "missing-anchor": "No cycling FTP anchor is available",
-  "no-platform-load": "No platform Load is available for the last 7 days",
-  "no-plan": "No planned cycling workouts are available",
-  "insufficient-data": "Not enough persisted data to show this yet",
-  "no-wellness": "No wellness readings are available",
-  "source-restricted": "Not enough activity data is visible to calculate this safely",
-};
-
-export const WELLNESS_LABELS: readonly string[] = ["HRV", "Sleep", "Resting HR"];
 
 export const POWER_PROGRESS_UNAVAILABLE_COPY: Readonly<
   Record<PowerProgressUnavailableReason, string>
@@ -65,14 +50,19 @@ export const POWER_PROGRESS_FRESHNESS_COPY: Readonly<
   critical: "Very stale",
 };
 
-export const RIDE_IMPORT_DESCRIPTION = PLATFORM_COPY.rideImportDescription;
-
 export const TRAINING_HISTORY_COPY = {
   current: "This week",
   previous: "Previous week",
+  next: "Next week",
   lastRecorded: "Last recorded week",
   coverage: "Recorded through",
   trendTitle: "Six complete weeks of riding time",
+  trendLabel: "Weekly time",
+  trendPeriod: "6 weeks",
+  newestFirst: "Newest first",
+  recentRides: "Recent rides",
+  recordedRides: "Recorded rides",
+  latestAvailableRides: "Latest available rides",
   trendUnavailable: "Trend unavailable",
   limitedHistory: "Six complete weeks are needed.",
   incompleteTrend: "Some weeks are not fully recorded.",
@@ -82,13 +72,16 @@ export const TRAINING_HISTORY_COPY = {
   lastRecordedEmpty: "No recorded rides in this period.",
   unknownRides: "Recent rides are not available for this period.",
   incomplete: "Some rides may be missing.",
+  outOfDate: "Training may be out of date.",
+  outOfDateIncomplete: "Training may be out of date, and some rides may be missing.",
   coverageLag: "This week has not been recorded yet.",
   sparse: "Showing imported rides only. Earlier rides may be missing.",
   refreshFailure: "Training could not be refreshed. Showing the last recorded data.",
   unavailable: "Training history is not available yet.",
   review: "Ride review",
   back: "Back to training",
-  disclosure: "Recorded analysis and export",
+  keyStats: "Key stats",
+  disclosure: "Recorded analysis",
 } as const;
 
 export function analysisUnavailableCopy(reason: AnalysisUnavailableReason): string {
@@ -174,10 +167,4 @@ export function trainingStatusCopy(status: TrainingContextStatus): string {
   return "";
 }
 
-export function stalenessCopy(band: CyclingAnchor["stalenessBand"], ageDays: number): string {
-  const days = Math.floor(ageDays);
-  if (band === "fresh") return "Fresh";
-  if (band === "aging") return `Aging · ${days}d`;
-  if (band === "stale") return `Stale · ${days}d`;
-  return `Very stale · ${days}d`;
-}
+export const TRAINING_DEGRADED_COPY = "Data may be incomplete";

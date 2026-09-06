@@ -15,6 +15,7 @@ import {
   type ConcernValue,
   type DedupCandidateSummary,
   type ImportArtifact,
+  type ImportArtifactSource,
   type ImportReport,
   type ImportReportDeps,
   type LapConcern,
@@ -341,7 +342,7 @@ function createImportReportDeps(options: NodeImportRuntimeOptions): ImportReport
 export async function importFilesWithReport(options: ImportFilesOptions): Promise<ImportReport> {
   if (options.inputPaths.length === 0) throw new TypeError("input path list is empty");
   const seen = new Set<string>();
-  const files: ImportArtifact[] = [];
+  const files: ImportArtifactSource[] = [];
   for (const inputPath of options.inputPaths) {
     if (typeof inputPath !== "string" || inputPath.length === 0 || seen.has(inputPath))
       throw new TypeError("duplicate or invalid input path");
@@ -349,7 +350,7 @@ export async function importFilesWithReport(options: ImportFilesOptions): Promis
     const ext = extname(inputPath).slice(1).toLowerCase();
     if (ext !== "fit" && ext !== "tcx" && ext !== "gpx")
       throw new TypeError("unsupported input extension");
-    files.push({ input_path: inputPath, bytes: new Uint8Array(await readFile(inputPath)), ext });
+    files.push({ input_path: inputPath, readBytes: () => readFile(inputPath), ext });
   }
   return createNodeImportRuntime(options).importBatchWithReport({ files, platform_records: [] });
 }

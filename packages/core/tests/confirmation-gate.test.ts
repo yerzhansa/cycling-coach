@@ -9,6 +9,7 @@ import {
   PROPOSAL_TTL_MS,
   createProposalSummarizers,
   createToolConfirmationPort,
+  formatConfirmOutcome,
 } from "../src/agent/confirmation-gate.js";
 import type { ProposalSummarizer } from "../src/agent/confirmation-gate.js";
 import { READ_ONLY_TOOL_NAMES } from "../../engine/src/agent/read-memoizer.js";
@@ -26,10 +27,7 @@ function turnOptions(chatId: string): unknown {
   return { experimental_context: createTurnContext(null, chatId) };
 }
 
-function port(
-  gate: ConfirmationGate,
-  summarizers: Record<string, ProposalSummarizer>,
-) {
+function port(gate: ConfirmationGate, summarizers: Record<string, ProposalSummarizer>) {
   return createToolConfirmationPort({ gate, summarizers });
 }
 
@@ -56,7 +54,9 @@ function fakeIntervals(initial = event()): {
   const updates = vi.fn(async () => ({ ok: true, value: current }));
   const deletes = vi.fn(async () => ({ ok: true, value: undefined }));
   return {
-    client: { events: { get: gets, update: updates, delete: deletes } } as unknown as IntervalsClient,
+    client: {
+      events: { get: gets, update: updates, delete: deletes },
+    } as unknown as IntervalsClient,
     setEvent: (next) => {
       current = next;
     },
@@ -67,6 +67,19 @@ function fakeIntervals(initial = event()): {
 }
 
 describe("ConfirmationGate", () => {
+  it.each([
+    [{ error: "NotFound", message: "Workout no longer exists." }, "Workout no longer exists."],
+    [{ error: "platform_credentials_required" }, "platform_credentials_required"],
+  ])("reports a returned failure without claiming success", async (result, message) => {
+    const gate = new ConfirmationGate();
+    gate.propose("chat", "Update workout", async () => result);
+    const proposal = gate.peek("chat")!;
+    const outcome = await gate.confirm("chat", proposal.nonce);
+    expect(outcome).toEqual({ status: "failed", summary: "Update workout", message });
+    expect(formatConfirmOutcome(outcome)).not.toContain("Done");
+    expect(await gate.confirm("chat", proposal.nonce)).toEqual({ status: "none" });
+  });
+
   it("stores, replaces, confirms once, and rejects mismatches", async () => {
     const gate = new ConfirmationGate();
     const firstRun = vi.fn(async () => "first");
@@ -310,9 +323,9 @@ describe("proposal summarizers and guard reuse", () => {
     });
 
     fake.setEvent(event({ tags: [] }));
-    await expect(
-      summarize({ eventId: 42, changes: { name: "Blocked" } }),
-    ).resolves.toMatchObject({ block: { error: "not_coach_created" } });
+    await expect(summarize({ eventId: 42, changes: { name: "Blocked" } })).resolves.toMatchObject({
+      block: { error: "not_coach_created" },
+    });
     expect(fake.updates).not.toHaveBeenCalled();
   });
 
@@ -353,9 +366,12 @@ describe("proposal summarizers and guard reuse", () => {
     fake.setEvent(event({ category: "NOTE" }));
     const outcome = await gate.confirm("chat", proposal.nonce);
     expect(outcome).toMatchObject({
-      status: "executed",
+      status: "refused",
       result: { error: "not_a_workout" },
     });
+    expect(formatConfirmOutcome(outcome)).toContain("Nothing was changed");
+    expect(formatConfirmOutcome(outcome)).not.toContain("Done");
+    expect(await gate.confirm("chat", proposal.nonce)).toEqual({ status: "none" });
     expect(fake.gets).toHaveBeenCalledTimes(2);
     expect(fake.deletes).not.toHaveBeenCalled();
   });
@@ -382,9 +398,12 @@ describe("proposal summarizers and guard reuse", () => {
     fake.setEvent(event({ category: "NOTE" }));
     const outcome = await gate.confirm("chat", proposal.nonce);
     expect(outcome).toMatchObject({
-      status: "executed",
+      status: "refused",
       result: { error: "not_a_workout" },
     });
+    expect(formatConfirmOutcome(outcome)).toContain("Nothing was changed");
+    expect(formatConfirmOutcome(outcome)).not.toContain("Done");
+    expect(await gate.confirm("chat", proposal.nonce)).toEqual({ status: "none" });
     expect(fake.gets).toHaveBeenCalledTimes(2);
     expect(fake.updates).not.toHaveBeenCalled();
   });

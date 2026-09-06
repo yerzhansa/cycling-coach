@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +29,46 @@ describe("operational incremental Node import", () => {
       expect(await left.store.get("SELECT initialized FROM ingest_incremental_state")).toEqual({ initialized: 1 });
       expect((await left.store.all("SELECT candidate_id FROM ingest_candidate_index")).length).toBeGreaterThan(0);
     } finally { await left.store.close(); await right.store.close(); }
+  });
+
+  it.each([false, true])("reads the next source after archiving the previous file with legacy cache %s", async (legacy) => {
+    const value = await fresh();
+    try {
+      if (legacy) {
+        await value.runtime.importBatchWithReport({ files: [artifact("brick-cycling.fit")], platform_records: [] });
+        await value.store.run("UPDATE ingest_incremental_state SET initialized=0");
+      }
+      const names = ["brick-cycling.fit", "brick-running.fit"];
+      const reads: string[] = [];
+      const files = names.map((name) => ({
+        input_path: name,
+        ext: "fit" as const,
+        async readBytes() {
+          if (reads.length > 0) {
+            const archived = readdirSync(join(value.root, "archive"), { recursive: true });
+            expect(archived.some((path) => String(path).endsWith(".fit"))).toBe(true);
+          }
+          reads.push(name);
+          return new Uint8Array(readFileSync(fixture(name)));
+        },
+      }));
+      const report = await value.runtime.importBatchWithReport({ files: [...files].reverse(), platform_records: [] });
+      expect(reads).toEqual(names);
+      expect(report.files.every((file) => file.outcome === "imported")).toBe(true);
+      expect(report.clusters).toHaveLength(1);
+    } finally { await value.store.close(); }
+  });
+
+  it("rolls back the batch if a later source cannot be read", async () => {
+    const value = await fresh();
+    try {
+      const before = await dumpStore(value.store);
+      await expect(value.runtime.importBatchWithReport({ files: [
+        { ...artifact("brick-cycling.fit"), input_path: "a.fit" },
+        { input_path: "z.fit", ext: "fit", readBytes: async () => { throw new Error("read failed"); } },
+      ], platform_records: [] })).rejects.toThrow("read failed");
+      expect(await dumpStore(value.store)).toBe(before);
+    } finally { await value.store.close(); }
   });
 
   it("commits data and progress together and performs no write after finalizer", async () => {

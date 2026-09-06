@@ -1,3 +1,4 @@
+import { readImportArtifact } from "./import-report.js";
 import { assertValidAddress } from "../archive/paths.js";
 import { sortKeys } from "../store/canonical-json.js";
 import { createDedupConfirmationRepository } from "../store/dedup-confirmation-repository.js";
@@ -681,11 +682,11 @@ async function runGlobalReplan(
     incomingPlatforms.set(presentation.row.id, presentation);
   }
 
-  const files = [...batch.files].map((file) => ({ ...file, bytes: new Uint8Array(file.bytes) }))
-    .sort((a, b) => compareText(a.input_path, b.input_path));
+  const files = [...batch.files].sort((a, b) => compareText(a.input_path, b.input_path));
   const fileWork: FileWork[] = [];
   const incomingAddresses = new Map<string, PreparedAddress>();
-  for (const file of files) {
+  for (const input of files) {
+    const file = await readImportArtifact(input);
     const result = await measure("archive-decode", () => deps.prepareFile(file, targetSettings));
     if (result.outcome === "quarantined") {
       const archived = await measure("archive-decode", () =>

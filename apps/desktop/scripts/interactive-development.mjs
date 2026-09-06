@@ -10,6 +10,10 @@ const SCRATCH_PREFIX = "enduragent-desktop-development-";
 export const DESKTOP_INSPECTION_FIXTURE_ENV = "ENDURAGENT_DESKTOP_INSPECTION_FIXTURE";
 export const PLAN_CURRENT_INSPECTION_FIXTURE = "plan-current";
 export const TRAINING_CURRENT_INSPECTION_FIXTURE = "training-current";
+export const TRAINING_NO_POWER_INSPECTION_FIXTURE = "training-no-power";
+export const TRAINING_LIMITED_INSPECTION_FIXTURE = "training-limited";
+export const TRAINING_INCOMPLETE_INSPECTION_FIXTURE = "training-incomplete";
+export const TRAINING_STALE_INSPECTION_FIXTURE = "training-stale";
 
 export function selectInteractiveDevelopmentTemporaryRoot(platform, configuredRoot) {
   return configuredRoot ?? (platform === "darwin" ? "/tmp" : tmpdir());
@@ -40,7 +44,11 @@ export function createInteractiveDevelopmentPlan(input) {
   if (
     inspectionFixture !== undefined &&
     inspectionFixture !== PLAN_CURRENT_INSPECTION_FIXTURE &&
-    inspectionFixture !== TRAINING_CURRENT_INSPECTION_FIXTURE
+    inspectionFixture !== TRAINING_CURRENT_INSPECTION_FIXTURE &&
+    inspectionFixture !== TRAINING_NO_POWER_INSPECTION_FIXTURE &&
+    inspectionFixture !== TRAINING_LIMITED_INSPECTION_FIXTURE &&
+    inspectionFixture !== TRAINING_INCOMPLETE_INSPECTION_FIXTURE &&
+    inspectionFixture !== TRAINING_STALE_INSPECTION_FIXTURE
   ) {
     throw new TypeError("unknown desktop inspection fixture");
   }

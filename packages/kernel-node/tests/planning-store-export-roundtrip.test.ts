@@ -384,7 +384,7 @@ describe("planning-domain SQLite export round-trip", () => {
           {
             sink: createSqliteImportSink(destination),
             presence: completePresence,
-            targetUserVersion: 30,
+            targetUserVersion: 31,
             ...webCryptoExportEnv,
           },
           { container },
@@ -434,7 +434,7 @@ describe("planning-domain SQLite export round-trip", () => {
           {
             sink: createSqliteImportSink(destination),
             presence: completePresence,
-            targetUserVersion: 30,
+            targetUserVersion: 31,
             ...webCryptoExportEnv,
           },
           { container },
@@ -479,7 +479,7 @@ describe("planning-domain SQLite export round-trip", () => {
         {
           sink: createSqliteImportSink(destination),
           presence: completePresence,
-          targetUserVersion: 30,
+          targetUserVersion: 31,
           ...webCryptoExportEnv,
         },
         { container: built.container },
@@ -495,7 +495,7 @@ describe("planning-domain SQLite export round-trip", () => {
         {
           sink: createSqliteImportSink(destination),
           presence: completePresence,
-          targetUserVersion: 30,
+          targetUserVersion: 31,
           ...webCryptoExportEnv,
         },
         { container: built.container },
@@ -528,7 +528,7 @@ describe("planning-domain SQLite export round-trip", () => {
           {
             sink: createSqliteImportSink(destination),
             presence: completePresence,
-            targetUserVersion: 30,
+            targetUserVersion: 31,
             ...webCryptoExportEnv,
           },
           { container },

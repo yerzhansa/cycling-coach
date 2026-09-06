@@ -22,9 +22,9 @@ import {
   type TrainingHistoryFactRow,
   type TrainingHistoryReader,
 } from "@enduragent/kernel/store";
+import { utcCivilDateFromEpochSeconds } from "./civil-date.js";
 
 const MAX_VISIBLE_RIDES = 50;
-const SPARSE_DISCOVERY_START = "1900-01-01";
 
 interface WeekSlot {
   readonly window: CivilDateWindow;
@@ -39,22 +39,23 @@ interface ExpectedWindows {
   readonly readWindow: CivilDateWindow;
 }
 
+interface CoverageSpan {
+  readonly start: string;
+  readonly end: string;
+}
+
 type FoldedCoverage =
+  | { readonly kind: "none" }
   | {
-      readonly kind: "contiguous";
-      readonly start: string;
-      readonly through: string;
-      readonly committedAt: string;
-    }
-  | {
-      readonly kind: "incomplete";
-      readonly provenStart: string | null;
-      readonly provenThrough: string | null;
+      readonly kind: "covered";
+      readonly start: string | null;
+      readonly through: string | null;
       readonly observedThrough: string | null;
       readonly committedAt: string | null;
-      readonly reason: "source-degraded" | "undated-dropped-rows" | "coverage-timezone-changed";
-    }
-  | { readonly kind: "none" };
+      readonly reason: "source-degraded" | "coverage-timezone-changed" | null;
+      readonly datedLocalDates: ReadonlySet<string>;
+      readonly undatedWindows: readonly CoverageSpan[];
+    };
 
 export interface TrainingHistorySource {
   readTrainingHistory(input: {
@@ -76,40 +77,59 @@ function instantFromEpochSeconds(value: number): string {
   return new Date(value * 1_000).toISOString();
 }
 
-function utcCivilDateFromEpochSeconds(value: number): string {
-  const date = new Date(value * 1_000);
-  const year = date.getUTCFullYear();
-  if (!Number.isFinite(date.getTime()) || year < 0 || year > 9_999) {
-    throw new TypeError("invalid epoch seconds");
-  }
-  return `${String(year).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+function effectiveCommit(row: CoverageCommitRow): CoverageCommitRow | null {
+  const committedDate = todayInTZ(
+    row.calendarTimeZone,
+    new Date(row.committedEpochSeconds * 1_000),
+  );
+  const elapsedThrough = addCivilDays(committedDate, -1);
+  const coveredNewest =
+    row.coveredNewest < elapsedThrough ? row.coveredNewest : elapsedThrough;
+  return coveredNewest < row.coveredOldest ? null : { ...row, coveredNewest };
 }
 
-function mergeCleanCoverage(rows: readonly CoverageCommitRow[]): {
-  readonly start: string;
-  readonly through: string;
-} {
-  const latest = rows.at(-1);
-  if (latest === undefined) throw new TypeError("clean coverage is empty");
-  let start = latest.coveredOldest;
-  let through = latest.coveredNewest;
-  for (let index = rows.length - 2; index >= 0; index -= 1) {
-    const row = rows.at(index);
-    if (row === undefined) throw new TypeError("coverage row is missing");
-    if (row.gapState !== "none") {
-      if (row.coveredOldest >= start && row.coveredNewest <= through) continue;
-      break;
-    }
-    if (
-      row.coveredNewest < addCivilDays(start, -1) ||
-      row.coveredOldest > addCivilDays(through, 1)
-    ) {
+function mergeSpans(values: readonly CoverageSpan[]): CoverageSpan[] {
+  const sorted = [...values].sort(
+    (left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end),
+  );
+  const result: CoverageSpan[] = [];
+  for (const span of sorted) {
+    const previous = result.at(-1);
+    if (previous === undefined || span.start > addCivilDays(previous.end, 1)) {
+      result.push(span);
       continue;
     }
-    if (row.coveredOldest < start) start = row.coveredOldest;
-    if (row.coveredNewest > through) through = row.coveredNewest;
+    result[result.length - 1] = {
+      start: previous.start,
+      end: previous.end > span.end ? previous.end : span.end,
+    };
   }
-  return { start, through };
+  return result;
+}
+
+function subtractOwned(span: CoverageSpan, owned: readonly CoverageSpan[]): CoverageSpan[] {
+  let remaining = [span];
+  for (const claimed of owned) {
+    const next: CoverageSpan[] = [];
+    for (const candidate of remaining) {
+      if (claimed.end < candidate.start || claimed.start > candidate.end) {
+        next.push(candidate);
+        continue;
+      }
+      if (claimed.start > candidate.start) {
+        next.push({ start: candidate.start, end: addCivilDays(claimed.start, -1) });
+      }
+      if (claimed.end < candidate.end) {
+        next.push({ start: addCivilDays(claimed.end, 1), end: candidate.end });
+      }
+    }
+    remaining = next;
+  }
+  return remaining;
+}
+
+function intersects(left: CoverageSpan, right: CoverageSpan): boolean {
+  return left.start <= right.end && left.end >= right.start;
 }
 
 function foldCoverage(
@@ -117,52 +137,58 @@ function foldCoverage(
   calendarTimeZone: string,
   sourceRestricted: boolean,
 ): FoldedCoverage {
-  const matching = commits.filter((commit) => commit.calendarTimeZone === calendarTimeZone);
-  const latestOverall = commits.at(-1);
-  const latestMatching = matching.at(-1);
-  const clean = matching.filter((commit) => commit.gapState === "none");
-  const latestClean = clean.at(-1);
-  const proven = latestClean === undefined ? null : mergeCleanCoverage(clean);
-  if (sourceRestricted) {
-    return {
-      kind: "incomplete",
-      provenStart: proven?.start ?? null,
-      provenThrough: proven?.through ?? null,
-      observedThrough: latestMatching?.coveredNewest ?? null,
-      committedAt:
-        latestMatching === undefined
-          ? null
-          : instantFromEpochSeconds(latestMatching.committedEpochSeconds),
-      reason: "source-degraded",
-    };
+  const effective = commits.flatMap((commit) => {
+    const row = effectiveCommit(commit);
+    return row === null ? [] : [row];
+  });
+  const latestOverall = effective.at(-1);
+  if (latestOverall === undefined) {
+    return sourceRestricted
+      ? {
+          kind: "covered",
+          start: null,
+          through: null,
+          observedThrough: null,
+          committedAt: null,
+          reason: "source-degraded",
+          datedLocalDates: new Set<string>(),
+          undatedWindows: Object.freeze([]),
+        }
+      : { kind: "none" };
   }
-  if (latestOverall !== undefined && latestOverall.calendarTimeZone !== calendarTimeZone) {
-    return {
-      kind: "incomplete",
-      provenStart: proven?.start ?? null,
-      provenThrough: proven?.through ?? null,
-      observedThrough: latestOverall.coveredNewest,
-      committedAt: instantFromEpochSeconds(latestOverall.committedEpochSeconds),
-      reason: "coverage-timezone-changed",
-    };
+  const matching = effective.filter((commit) => commit.calendarTimeZone === calendarTimeZone);
+  let owned: CoverageSpan[] = [];
+  const datedLocalDates = new Set<string>();
+  const undatedWindows: CoverageSpan[] = [];
+  for (let index = matching.length - 1; index >= 0; index -= 1) {
+    const row = matching[index]!;
+    const pieces = subtractOwned(
+      { start: row.coveredOldest, end: row.coveredNewest },
+      owned,
+    );
+    for (const date of row.gaps.datedLocalDates) {
+      if (pieces.some((piece) => date >= piece.start && date <= piece.end)) {
+        datedLocalDates.add(date);
+      }
+    }
+    if (row.gaps.undatedCount > 0) undatedWindows.push(...pieces);
+    owned = mergeSpans([...owned, ...pieces]);
   }
-  if (latestMatching === undefined) return { kind: "none" };
-  if (latestMatching.gapState === "undated-dropped-rows") {
-    return {
-      kind: "incomplete",
-      provenStart: proven?.start ?? null,
-      provenThrough: proven?.through ?? null,
-      observedThrough: latestMatching.coveredNewest,
-      committedAt: instantFromEpochSeconds(latestMatching.committedEpochSeconds),
-      reason: "undated-dropped-rows",
-    };
-  }
-  const current = mergeCleanCoverage(matching);
+  const latestSpan = owned.at(-1);
   return {
-    kind: "contiguous",
-    start: current.start,
-    through: current.through,
-    committedAt: instantFromEpochSeconds(latestMatching.committedEpochSeconds),
+    kind: "covered",
+    start: latestSpan?.start ?? null,
+    through: latestSpan?.end ?? null,
+    observedThrough: latestOverall.coveredNewest,
+    committedAt: instantFromEpochSeconds(latestOverall.committedEpochSeconds),
+    reason:
+      latestOverall.calendarTimeZone !== calendarTimeZone
+        ? "coverage-timezone-changed"
+        : sourceRestricted
+          ? "source-degraded"
+          : null,
+    datedLocalDates,
+    undatedWindows: Object.freeze(undatedWindows),
   };
 }
 
@@ -206,18 +232,8 @@ function expectedWindows(
 }
 
 function safeCoverageAnchor(coverage: FoldedCoverage): string | null {
-  if (coverage.kind === "contiguous") return coverage.through;
-  if (coverage.kind === "incomplete") {
-    if (coverage.provenThrough !== null) return coverage.provenThrough;
-    if (coverage.reason !== "coverage-timezone-changed") return coverage.observedThrough;
-  }
-  return null;
-}
-
-function latestRideDate(rows: readonly TrainingHistoryFactRow[]): string | null {
-  let latest: string | null = null;
-  for (const row of rows) if (latest === null || row.localDate > latest) latest = row.localDate;
-  return latest;
+  if (coverage.kind === "none" || coverage.reason === "coverage-timezone-changed") return null;
+  return coverage.through;
 }
 
 function scanCutoffDate(
@@ -234,13 +250,41 @@ function projectionCoverage(
   coverage: FoldedCoverage,
   sparseRideDate: string | null,
 ): TrainingHistoryCoverage | null {
-  if (coverage.kind === "contiguous") return coverage;
-  if (coverage.kind === "incomplete") return coverage;
-  if (sparseRideDate === null) return null;
+  if (coverage.kind === "none") {
+    if (sparseRideDate === null) return null;
+    return {
+      kind: "sparse",
+      latestKnownRideDate: sparseRideDate,
+      latestImportAt: null,
+    };
+  }
+  const hasGaps =
+    coverage.datedLocalDates.size > 0 || coverage.undatedWindows.length > 0;
+  if (
+    coverage.reason === null &&
+    !hasGaps &&
+    coverage.start !== null &&
+    coverage.through !== null &&
+    coverage.committedAt !== null
+  ) {
+    return {
+      kind: "contiguous",
+      start: coverage.start,
+      through: coverage.through,
+      committedAt: coverage.committedAt,
+    };
+  }
   return {
-    kind: "sparse",
-    latestKnownRideDate: sparseRideDate,
-    latestImportAt: null,
+    kind: "incomplete",
+    provenStart: coverage.start,
+    provenThrough: coverage.through,
+    observedThrough: coverage.observedThrough,
+    committedAt: coverage.committedAt,
+    reason:
+      coverage.reason ??
+      (coverage.undatedWindows.length > 0
+        ? "undated-dropped-rows"
+        : "source-degraded"),
   };
 }
 
@@ -332,23 +376,22 @@ function longestRecordedRideCallout(input: {
   readonly selectedWeek: CivilDateWindow;
   readonly rows: readonly TrainingHistoryFactRow[];
   readonly returnedRides: readonly TrainingHistoryRide[];
-  readonly coverage: TrainingHistoryCoverage;
+  readonly foldedCoverage: FoldedCoverage;
   readonly scanTruncated: boolean;
   readonly displayMode: "current" | "last-recorded";
 }): CompletedActivityWeek["callout"] {
-  if (
-    input.displayMode === "last-recorded" ||
-    input.scanTruncated ||
-    input.coverage.kind !== "contiguous"
-  ) {
+  if (input.displayMode === "last-recorded" || input.scanTruncated) {
+    return null;
+  }
+  if (input.foldedCoverage.kind === "none" || input.foldedCoverage.through === null) {
     return null;
   }
   const end =
-    input.coverage.through < input.selectedWeek.end
-      ? input.coverage.through
+    input.foldedCoverage.through < input.selectedWeek.end
+      ? input.foldedCoverage.through
       : input.selectedWeek.end;
   const window = { start: addCivilDays(end, -27), end };
-  if (input.coverage.start > window.start) return null;
+  if (!coverageForWindow(input.foldedCoverage, window)) return null;
   const rows = input.rows.filter(
     (row) => row.localDate >= window.start && row.localDate <= window.end,
   );
@@ -400,10 +443,31 @@ function recordedThrough(coverage: TrainingHistoryCoverage): string | null {
   return coverage.latestKnownRideDate;
 }
 
+function coverageForWindow(
+  coverage: FoldedCoverage,
+  window: CoverageSpan,
+): boolean {
+  if (
+    coverage.kind === "none" ||
+    coverage.reason !== null ||
+    coverage.start === null ||
+    coverage.through === null ||
+    coverage.start > window.start ||
+    coverage.through < window.end
+  ) {
+    return false;
+  }
+  for (const date of coverage.datedLocalDates) {
+    if (date >= window.start && date <= window.end) return false;
+  }
+  return !coverage.undatedWindows.some((gap) => intersects(gap, window));
+}
+
 function weekCoverage(input: {
   readonly window: CivilDateWindow;
   readonly today: string;
   readonly coverage: TrainingHistoryCoverage;
+  readonly foldedCoverage: FoldedCoverage;
   readonly scanCutoffDate: string | null;
   readonly currentAnchor: boolean;
 }): WeekCoverage {
@@ -414,28 +478,29 @@ function weekCoverage(input: {
   if (input.coverage.kind === "sparse") {
     return { kind: "incomplete", recordedThrough: through, reason: "sparse-imports" };
   }
-  if (input.coverage.kind === "incomplete") {
-    const reason =
-      input.coverage.reason === "coverage-timezone-changed"
-        ? "coverage-timezone-changed"
-        : input.coverage.reason === "source-degraded" ||
-            input.coverage.reason === "undated-dropped-rows"
-          ? "source-degraded"
-          : "backfill-incomplete";
-    return { kind: "incomplete", recordedThrough: through, reason };
-  }
   const open = calendarState(input.window, input.today) === "open";
-  const covered =
-    input.coverage.start <= input.window.start &&
-    input.coverage.through >= (open ? input.window.start : input.window.end);
+  const requiredThrough =
+    open && input.today < input.window.end ? input.today : input.window.end;
+  const covered = coverageForWindow(input.foldedCoverage, {
+    start: input.window.start,
+    end: requiredThrough,
+  });
   if (covered) return { kind: "complete" };
+  const reason =
+    input.coverage.kind === "incomplete" &&
+    input.coverage.reason === "coverage-timezone-changed"
+      ? "coverage-timezone-changed"
+      : input.coverage.kind === "incomplete" &&
+          (input.coverage.reason === "source-degraded" ||
+            input.coverage.reason === "undated-dropped-rows")
+        ? "source-degraded"
+        : input.currentAnchor && through !== null && through < input.window.start
+          ? "coverage-lag"
+          : "backfill-incomplete";
   return {
     kind: "incomplete",
-    recordedThrough: input.coverage.through,
-    reason:
-      input.currentAnchor && input.coverage.through < input.window.start
-        ? "coverage-lag"
-        : "backfill-incomplete",
+    recordedThrough: through,
+    reason,
   };
 }
 
@@ -453,6 +518,7 @@ function trend(input: {
   readonly windows: ExpectedWindows;
   readonly today: string;
   readonly coverage: TrainingHistoryCoverage;
+  readonly foldedCoverage: FoldedCoverage;
   readonly scanCutoffDate: string | null;
 }): RidingTimeTrend {
   const buckets = input.windows.trend.map((window) => {
@@ -462,6 +528,7 @@ function trend(input: {
       window,
       today: input.today,
       coverage: input.coverage,
+      foldedCoverage: input.foldedCoverage,
       scanCutoffDate: input.scanCutoffDate,
       currentAnchor: false,
     });
@@ -501,6 +568,7 @@ function completedWeek(input: {
   readonly windows: ExpectedWindows;
   readonly today: string;
   readonly coverage: TrainingHistoryCoverage;
+  readonly foldedCoverage: FoldedCoverage;
   readonly scanCutoffDate: string | null;
   readonly trend: RidingTimeTrend;
 }): CompletedActivityWeek {
@@ -510,13 +578,14 @@ function completedWeek(input: {
     window: input.window,
     today: input.today,
     coverage: input.coverage,
+    foldedCoverage: input.foldedCoverage,
     scanCutoffDate: input.scanCutoffDate,
     currentAnchor: input.id === "anchor",
   });
   const complete = coverage.kind === "complete";
   const items = slot.rows.slice(0, MAX_VISIBLE_RIDES).map(projectRide);
   const scanLimited = input.scanCutoffDate !== null && input.window.start <= input.scanCutoffDate;
-  const truncated = scanLimited || slot.rows.length > items.length;
+  const truncated = !complete || scanLimited || slot.rows.length > items.length;
   return {
     id: input.id,
     window: input.window,
@@ -538,7 +607,7 @@ function completedWeek(input: {
       ),
     },
     rides: {
-      count: scanLimited
+      count: !complete
         ? { kind: "at-least", value: slot.rows.length }
         : { kind: "exact", value: slot.rows.length },
       items,
@@ -573,6 +642,7 @@ export function createTrainingHistorySource(dependencies: {
     typeof dependencies !== "object" ||
     dependencies.facts === null ||
     typeof dependencies.facts !== "object" ||
+    typeof dependencies.facts.readLatestRideDate !== "function" ||
     typeof dependencies.facts.readWindow !== "function" ||
     dependencies.coverage === null ||
     typeof dependencies.coverage !== "object" ||
@@ -616,17 +686,16 @@ export function createTrainingHistorySource(dependencies: {
       const provisionalAnchor = lastRecorded ? (retainedAnchor ?? today) : currentAnchor;
       const provisionalDisplayMode = lastRecorded ? "last-recorded" : "current";
       let windows = expectedWindows(provisionalAnchor, today, provisionalDisplayMode);
-      const factsWindow = discoverSparseHistory
-        ? { start: SPARSE_DISCOVERY_START, end: windows.readWindow.end }
-        : windows.readWindow;
-      let facts: Awaited<ReturnType<TrainingHistoryReader["readWindow"]>>;
-      try {
-        facts = await dependencies.facts.readWindow(factsWindow);
-      } catch (error) {
-        return dependencyFailure(error);
+      let sparseRideDate: string | null = null;
+      if (discoverSparseHistory) {
+        try {
+          sparseRideDate = await dependencies.facts.readLatestRideDate({
+            through: windows.readWindow.end,
+          });
+        } catch (error) {
+          return dependencyFailure(error);
+        }
       }
-      if (facts.scanTruncated && facts.rows.length === 0) return unavailable("invalid-data");
-      const sparseRideDate = latestRideDate(facts.rows);
       if (lastRecorded && retainedAnchor === null && sparseRideDate === null) {
         return unavailable("coverage-unavailable");
       }
@@ -643,6 +712,13 @@ export function createTrainingHistorySource(dependencies: {
       if (mondayOfWeek(anchorDate) !== windows.anchor.start) {
         windows = expectedWindows(anchorDate, today, displayMode);
       }
+      let facts: Awaited<ReturnType<TrainingHistoryReader["readWindow"]>>;
+      try {
+        facts = await dependencies.facts.readWindow(windows.readWindow);
+      } catch (error) {
+        return dependencyFailure(error);
+      }
+      if (facts.scanTruncated && facts.rows.length === 0) return unavailable("invalid-data");
       try {
         assignRows(windows, facts.rows);
         const scanCutoff = scanCutoffDate(facts.rows, facts.scanTruncated);
@@ -650,6 +726,7 @@ export function createTrainingHistorySource(dependencies: {
           windows,
           today,
           coverage,
+          foldedCoverage: folded,
           scanCutoffDate: scanCutoff,
         });
         const anchorWeekWithoutCallout = completedWeek({
@@ -658,6 +735,7 @@ export function createTrainingHistorySource(dependencies: {
           windows,
           today,
           coverage,
+          foldedCoverage: folded,
           scanCutoffDate: scanCutoff,
           trend: ridingTrend,
         });
@@ -667,7 +745,7 @@ export function createTrainingHistorySource(dependencies: {
             selectedWeek: windows.anchor,
             rows: facts.rows,
             returnedRides: anchorWeekWithoutCallout.rides.items,
-            coverage,
+            foldedCoverage: folded,
             scanTruncated: facts.scanTruncated,
             displayMode,
           }),
@@ -685,6 +763,7 @@ export function createTrainingHistorySource(dependencies: {
             windows,
             today,
             coverage,
+            foldedCoverage: folded,
             scanCutoffDate: scanCutoff,
             trend: ridingTrend,
           }),

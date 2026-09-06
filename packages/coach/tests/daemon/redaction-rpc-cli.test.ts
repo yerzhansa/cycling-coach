@@ -456,7 +456,7 @@ describe.skipIf(!hasLoopback)("redaction over real RPC and CLI", () => {
         },
         {
           failure: hostileError(),
-          data: { name: "UnserializableError" },
+          data: { name: "Error", statusCode: "[redacted]" },
         },
       ]) {
         failure = variant.failure;

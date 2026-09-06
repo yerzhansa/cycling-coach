@@ -2,7 +2,7 @@ import { writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { getCoachHome } from "./coach-home.js";
-import { createSubsystemLogger, serializeError } from "./logging/index.js";
+import { createSubsystemLogger } from "./logging/index.js";
 
 const BREADCRUMB_FILE = "last-run.json";
 
@@ -55,9 +55,7 @@ function markUnclean(dataDir: string): void {
 function writeLastGaspLine(dataDir: string, event: string, err: unknown): void {
   try {
     const log = createSubsystemLogger("agent", dataDir);
-    // Delegate redaction to the substrate's serializeError (the single
-    // redaction surface) rather than naming any payload field here.
-    log.error(event, undefined, { err: serializeError(err) });
+    log.error(event, err);
   } catch {
     // The logger never throws by contract, but the handler stays defensive.
   }

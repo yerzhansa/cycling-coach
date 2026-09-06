@@ -578,7 +578,7 @@ describe("coach sync composition", () => {
             return store.get("PRAGMA user_version");
           },
         );
-        expect(value).toEqual({ user_version: 30 });
+        expect(value).toEqual({ user_version: 31 });
         expect(await pathExists(join(home.storeDir, "store.db"))).toBe(true);
         expect(await pathExists(join(home.configDir, LOCKFILE_NAME))).toBe(false);
         expect(await pathExists(join(home.configDir, PORT_FILE_NAME))).toBe(false);
@@ -586,7 +586,7 @@ describe("coach sync composition", () => {
         const reopened = openSqliteStorage(join(home.storeDir, "store.db"));
         try {
           await expect(reopened.get("PRAGMA user_version")).resolves.toEqual({
-            user_version: 30,
+            user_version: 31,
           });
         } finally {
           await reopened.close();
@@ -1063,7 +1063,7 @@ describe("coach sync composition", () => {
       const batch = importBatchWithReport.mock.calls[0]![0];
       expect(batch.platform_records).toEqual([]);
       expect(batch.files).toHaveLength(1);
-      expect(batch.files[0]!.bytes).toBe(bytes);
+      expect(batch.files[0]).toMatchObject({ bytes });
       expect(batch.files[0]!.input_path).toBe(artifact.file.input_path);
     } finally {
       await harness.store.close();

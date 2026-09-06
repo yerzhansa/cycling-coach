@@ -1,7 +1,12 @@
+import { strictUtf8Length } from "../strict-utf8.js";
 import type { Row, SqlReadStore, SqlStore } from "./ports.js";
 
 export type CoverageAuthorityKind = "reference-capture" | "activity-backfill";
-export type CoverageGapState = "none" | "undated-dropped-rows";
+
+export interface CoverageGapEvidence {
+  readonly datedLocalDates: readonly string[];
+  readonly undatedCount: number;
+}
 
 export interface CoverageCommitInput {
   readonly source: "intervals-icu";
@@ -12,7 +17,7 @@ export interface CoverageCommitInput {
   readonly coveredOldest: string;
   readonly coveredNewest: string;
   readonly committedEpochSeconds: number;
-  readonly gapState: CoverageGapState;
+  readonly gaps: CoverageGapEvidence;
 }
 
 export interface CoverageCommitRow extends CoverageCommitInput {
@@ -29,6 +34,7 @@ export interface BackfillCheckpointInput {
   readonly cursorAfter: string;
   readonly droppedSourceRestricted: number;
   readonly droppedOther: number;
+  readonly gaps: CoverageGapEvidence;
   readonly terminal: boolean;
 }
 
@@ -89,6 +95,9 @@ const ROW_KEYS = [
   "covered_newest_date_key",
   "committed_epoch_seconds",
   "gap_state",
+  "dropped_local_dates_json",
+  "undated_dropped_count",
+  "gap_evidence_version",
 ] as const;
 
 const READ_COMMIT_SQL = `SELECT
@@ -101,7 +110,10 @@ const READ_COMMIT_SQL = `SELECT
   covered_oldest_date_key,
   covered_newest_date_key,
   committed_epoch_seconds,
-  gap_state
+  gap_state,
+  dropped_local_dates_json,
+  undated_dropped_count,
+  gap_evidence_version
 FROM training_history_coverage_commit
 WHERE authority_kind = ? AND authority_id = ?`;
 
@@ -116,6 +128,9 @@ const CHECKPOINT_ROW_KEYS = [
   "cursor_after",
   "dropped_source_restricted",
   "dropped_other",
+  "dropped_local_dates_json",
+  "undated_dropped_count",
+  "gap_evidence_version",
   "terminal",
 ] as const;
 
@@ -130,32 +145,12 @@ const READ_CHECKPOINT_SQL = `SELECT
   cursor_after,
   dropped_source_restricted,
   dropped_other,
+  dropped_local_dates_json,
+  undated_dropped_count,
+  gap_evidence_version,
   terminal
 FROM training_history_backfill_checkpoint
 WHERE source_cycle = ? AND cursor_after = ?`;
-
-function strictUtf8Length(value: string): number | undefined {
-  let bytes = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const codeUnit = value.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      if (index + 1 >= value.length) return undefined;
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return undefined;
-      bytes += 4;
-      index += 1;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      return undefined;
-    } else if (codeUnit <= 0x7f) {
-      bytes += 1;
-    } else if (codeUnit <= 0x7ff) {
-      bytes += 2;
-    } else {
-      bytes += 3;
-    }
-  }
-  return bytes;
-}
 
 function civilDateKey(value: unknown): number | undefined {
   if (typeof value !== "string" || !CIVIL_DATE.test(value)) return undefined;
@@ -185,6 +180,75 @@ function invalidRow(): never {
   throw new TrainingCoverageError("invalid_row");
 }
 
+function validateGaps(
+  value: CoverageGapEvidence,
+  oldestKey: number,
+  newestKey: number,
+  name: string,
+): CoverageGapEvidence {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !Array.isArray(value.datedLocalDates) ||
+    !Number.isSafeInteger(value.undatedCount) ||
+    value.undatedCount < 0
+  ) {
+    throw new TypeError(`invalid ${name}`);
+  }
+  const dates = value.datedLocalDates.map((date) => {
+    const key = civilDateKey(date);
+    if (key === undefined || key < oldestKey || key > newestKey) {
+      throw new TypeError(`invalid ${name}`);
+    }
+    return date;
+  });
+  if (dates.some((date, index) => index > 0 && dates[index - 1]! >= date)) {
+    throw new TypeError(`invalid ${name}`);
+  }
+  return Object.freeze({
+    datedLocalDates: Object.freeze([...dates]),
+    undatedCount: value.undatedCount,
+  });
+}
+
+function parseStoredGaps(
+  row: Row,
+  oldestKey: number,
+  newestKey: number,
+  legacyUndatedCount = 0,
+): CoverageGapEvidence {
+  if (
+    typeof row.dropped_local_dates_json !== "string" ||
+    typeof row.undated_dropped_count !== "number" ||
+    !Number.isSafeInteger(row.undated_dropped_count) ||
+    typeof row.gap_evidence_version !== "number" ||
+    !Number.isSafeInteger(row.gap_evidence_version) ||
+    (row.gap_evidence_version !== 0 && row.gap_evidence_version !== 1)
+  ) {
+    invalidRow();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.dropped_local_dates_json);
+  } catch {
+    invalidRow();
+  }
+  const legacyUndated = row.gap_evidence_version === 0 ? legacyUndatedCount : 0;
+  try {
+    return validateGaps(
+      {
+        datedLocalDates: parsed as readonly string[],
+        undatedCount: legacyUndated > 0 ? legacyUndated : row.undated_dropped_count,
+      },
+      oldestKey,
+      newestKey,
+      "stored training coverage gaps",
+    );
+  } catch {
+    invalidRow();
+  }
+}
+
 function validateInput(input: CoverageCommitInput): {
   readonly oldestKey: number;
   readonly newestKey: number;
@@ -212,10 +276,11 @@ function validateInput(input: CoverageCommitInput): {
     oldestKey > newestKey ||
     !Number.isSafeInteger(input.committedEpochSeconds) ||
     input.committedEpochSeconds < 0 ||
-    (input.gapState !== "none" && input.gapState !== "undated-dropped-rows")
+    input.gaps === undefined
   ) {
     throw new TypeError("invalid training coverage commit");
   }
+  validateGaps(input.gaps, oldestKey, newestKey, "training coverage gaps");
   return { oldestKey, newestKey };
 }
 
@@ -251,9 +316,19 @@ function validateCheckpointInput(input: BackfillCheckpointInput): {
     input.droppedSourceRestricted < 0 ||
     !Number.isSafeInteger(input.droppedOther) ||
     input.droppedOther < 0 ||
+    input.gaps === undefined ||
     typeof input.terminal !== "boolean"
   ) {
     throw new TypeError("invalid training history backfill checkpoint");
+  }
+  const gaps = validateGaps(
+    input.gaps,
+    oldestKey,
+    newestKey,
+    "training history checkpoint gaps",
+  );
+  if (gaps.datedLocalDates.length + gaps.undatedCount > input.droppedSourceRestricted + input.droppedOther) {
+    throw new TypeError("invalid training history checkpoint gaps");
   }
   return { oldestKey, newestKey };
 }
@@ -262,6 +337,8 @@ function commitRow(row: Row): CoverageCommitRow {
   if (!hasExactKeys(row, ROW_KEYS)) invalidRow();
   const id = row.coverage_commit_id;
   const committed = row.committed_epoch_seconds;
+  const oldest = civilDateFromKey(row.covered_oldest_date_key);
+  const newest = civilDateFromKey(row.covered_newest_date_key);
   if (
     typeof id !== "number" ||
     !Number.isSafeInteger(id) ||
@@ -288,13 +365,41 @@ function commitRow(row: Row): CoverageCommitRow {
     coveredOldest: civilDateFromKey(row.covered_oldest_date_key),
     coveredNewest: civilDateFromKey(row.covered_newest_date_key),
     committedEpochSeconds: committed,
-    gapState: row.gap_state,
+    gaps: parseStoredGaps(
+      row,
+      civilDateKey(oldest)!,
+      civilDateKey(newest)!,
+      row.gap_state === "undated-dropped-rows" ? 1 : 0,
+    ),
   };
   validateInput(result);
   return Object.freeze(result);
 }
 
-function sameCommit(left: CoverageCommitRow, right: CoverageCommitInput): boolean {
+function storedGapEvidenceVersion(row: Row): 0 | 1 {
+  return row.gap_evidence_version === 1 ? 1 : 0;
+}
+
+function hasGaps(gaps: CoverageGapEvidence): boolean {
+  return gaps.datedLocalDates.length + gaps.undatedCount > 0;
+}
+
+function exactGaps(left: CoverageGapEvidence, right: CoverageGapEvidence): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function legacyCommitGapsCompatible(
+  stored: CoverageGapEvidence,
+  retry: CoverageGapEvidence,
+): boolean {
+  return hasGaps(stored) || !hasGaps(retry);
+}
+
+function sameCommit(
+  left: CoverageCommitRow,
+  right: CoverageCommitInput,
+  version: 0 | 1,
+): boolean {
   return (
     left.source === right.source &&
     left.lane === right.lane &&
@@ -304,7 +409,9 @@ function sameCommit(left: CoverageCommitRow, right: CoverageCommitInput): boolea
     left.coveredOldest === right.coveredOldest &&
     left.coveredNewest === right.coveredNewest &&
     left.committedEpochSeconds === right.committedEpochSeconds &&
-    left.gapState === right.gapState
+    (version === 1
+      ? exactGaps(left.gaps, right.gaps)
+      : legacyCommitGapsCompatible(left.gaps, right.gaps))
   );
 }
 
@@ -342,6 +449,12 @@ function checkpointRow(row: Row): BackfillCheckpointRow {
     cursorAfter: row.cursor_after,
     droppedSourceRestricted: row.dropped_source_restricted,
     droppedOther: row.dropped_other,
+    gaps: parseStoredGaps(
+      row,
+      civilDateKey(civilDateFromKey(row.requested_oldest_key))!,
+      civilDateKey(civilDateFromKey(row.requested_newest_key))!,
+      row.dropped_source_restricted + row.dropped_other,
+    ),
     terminal: terminal === 1,
   };
   validateCheckpointInput(result);
@@ -351,6 +464,7 @@ function checkpointRow(row: Row): BackfillCheckpointRow {
 function sameCheckpoint(
   left: BackfillCheckpointRow,
   right: BackfillCheckpointInput,
+  version: 0 | 1,
 ): boolean {
   return (
     left.authorityId === right.authorityId &&
@@ -362,6 +476,7 @@ function sameCheckpoint(
     left.cursorAfter === right.cursorAfter &&
     left.droppedSourceRestricted === right.droppedSourceRestricted &&
     left.droppedOther === right.droppedOther &&
+    (version === 0 || exactGaps(left.gaps, right.gaps)) &&
     left.terminal === right.terminal
   );
 }
@@ -380,8 +495,11 @@ export function createTrainingCoverageRepository(): TrainingCoverageRepository {
   covered_oldest_date_key,
   covered_newest_date_key,
   committed_epoch_seconds,
-  gap_state
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  gap_state,
+  dropped_local_dates_json,
+  undated_dropped_count,
+  gap_evidence_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (authority_kind, authority_id) DO NOTHING
 RETURNING coverage_commit_id`,
         [
@@ -393,7 +511,10 @@ RETURNING coverage_commit_id`,
           oldestKey,
           newestKey,
           input.committedEpochSeconds,
-          input.gapState,
+          input.gaps.undatedCount > 0 ? "undated-dropped-rows" : "none",
+          JSON.stringify(input.gaps.datedLocalDates),
+          input.gaps.undatedCount,
+          1,
         ],
       );
       if (
@@ -408,7 +529,9 @@ RETURNING coverage_commit_id`,
       const selected = await store.get(READ_COMMIT_SQL, [input.authorityKind, input.authorityId]);
       if (selected === undefined) invalidRow();
       const stored = commitRow(selected);
-      if (!sameCommit(stored, input)) throw new TrainingCoverageError("authority_conflict");
+      if (!sameCommit(stored, input, storedGapEvidenceVersion(selected))) {
+        throw new TrainingCoverageError("authority_conflict");
+      }
       return Object.freeze({
         kind: inserted === undefined ? "already-recorded" : "inserted",
         commitId: stored.coverageCommitId,
@@ -427,8 +550,11 @@ RETURNING coverage_commit_id`,
   cursor_after,
   dropped_source_restricted,
   dropped_other,
+  dropped_local_dates_json,
+  undated_dropped_count,
+  gap_evidence_version,
   terminal
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 RETURNING checkpoint_id`,
         [
@@ -441,6 +567,9 @@ RETURNING checkpoint_id`,
           input.cursorAfter,
           input.droppedSourceRestricted,
           input.droppedOther,
+          JSON.stringify(input.gaps.datedLocalDates),
+          input.gaps.undatedCount,
+          1,
           input.terminal ? 1 : 0,
         ],
       );
@@ -462,7 +591,7 @@ RETURNING checkpoint_id`,
         invalidRow();
       }
       const stored = checkpointRow(selected);
-      if (!sameCheckpoint(stored, input)) {
+      if (!sameCheckpoint(stored, input, storedGapEvidenceVersion(selected))) {
         throw new TrainingCoverageError("authority_conflict");
       }
       return Object.freeze({
@@ -511,7 +640,10 @@ export function createTrainingCoverageReader(
   covered_oldest_date_key,
   covered_newest_date_key,
   committed_epoch_seconds,
-  gap_state
+  gap_state,
+  dropped_local_dates_json,
+  undated_dropped_count,
+  gap_evidence_version
 FROM training_history_coverage_commit
 WHERE source = ? AND lane = ?
 ORDER BY committed_epoch_seconds ASC, coverage_commit_id ASC`,

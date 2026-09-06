@@ -27,7 +27,20 @@ describe("runReferenceCapture", () => {
     const baseFetch: typeof globalThis.fetch = async (input) => {
       const url = String(input); requests.push(url);
       if (url.includes("/streams.json")) return json(streams);
-      if (url.includes("/activities?")) return json(activities);
+      if (url.includes("/activities?")) {
+        return json([
+          ...activities,
+          {
+            id: 43,
+            type: "Ride",
+            start_date: "1998-04-24T10:00:00.000Z",
+            start_date_local: "1998-04-24T12:00:00",
+            moving_time: null,
+            elapsed_time: 3_700,
+            distance: 40_000,
+          },
+        ]);
+      }
       if (url.includes("/wellness?")) return json(wellness);
       return json(profile);
     };
@@ -56,7 +69,7 @@ describe("runReferenceCapture", () => {
     expect(
       await store.get(
         `SELECT authority_kind, authority_id, calendar_timezone, covered_oldest_date_key,
-  covered_newest_date_key, gap_state
+  covered_newest_date_key, gap_state, dropped_local_dates_json, undated_dropped_count
 FROM training_history_coverage_commit`,
       ),
     ).toEqual({
@@ -64,8 +77,10 @@ FROM training_history_coverage_commit`,
       authority_id: CAPTURE_ID,
       calendar_timezone: "UTC",
       covered_oldest_date_key: 19980425,
-      covered_newest_date_key: 19980718,
+      covered_newest_date_key: 19980717,
       gap_state: "none",
+      dropped_local_dates_json: "[]",
+      undated_dropped_count: 0,
     });
     await store.close();
   });

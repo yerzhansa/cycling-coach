@@ -275,23 +275,23 @@ describe("summarizeDroppedMessages failure containment", () => {
         mustPreserveTokens: [],
         memory: EMPTY_SNAPSHOT,
       }),
-    ).rejects.toThrow("Dropped message summarization failed for every chunk");
+    ).rejects.toThrow("Dropped message summarization failed before any chunk was summarized");
   });
 
-  it("requeues the failed chunk's messages when one chunk fails", async () => {
+  it("requeues the failed chunk and all newer messages in order", async () => {
     const firstMessage: ModelMessage = { role: "user", content: "CHUNK-A " + "a".repeat(20_000) };
     const secondMessage: ModelMessage = { role: "user", content: "CHUNK-B " + "b".repeat(20_000) };
-    const llm = createFakeLLM([{ error: new Error("boom") }, VALID_FIVE_SECTION_SUMMARY]);
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY, { error: new Error("boom") }]);
 
     const result = await summarizeDroppedMessages({
-      dropped: [firstMessage, secondMessage],
+      dropped: [firstMessage, secondMessage, ...REPRESENTATIVE_CONVERSATION],
       llm,
       mustPreserveTokens: [],
       memory: EMPTY_SNAPSHOT,
       contextWindowTokens: 30_000,
     });
 
-    expect(result.unsummarized).toEqual([firstMessage]);
+    expect(result.unsummarized).toEqual([secondMessage, ...REPRESENTATIVE_CONVERSATION]);
     expect(result.summary).toContain("## Coach Stance");
   });
 
@@ -304,10 +304,10 @@ describe("summarizeDroppedMessages failure containment", () => {
       { role: "user", content: "CHUNK-B " + "b".repeat(20_000) },
       UNKNOWN,
     );
-    const llm = createFakeLLM([{ error: new Error("boom") }, VALID_FIVE_SECTION_SUMMARY]);
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY, { error: new Error("boom") }]);
 
     const result = await summarizeDroppedMessages({
-      dropped: [failedGarmin, summarizedUnknown],
+      dropped: [summarizedUnknown, failedGarmin],
       llm,
       mustPreserveTokens: [],
       memory: EMPTY_SNAPSHOT,
@@ -386,10 +386,10 @@ describe("staged summary provenance", () => {
       { role: "user", content: "CHUNK-B " + "b".repeat(20_000) },
       UNKNOWN,
     );
-    const llm = createFakeLLM([{ error: new Error("boom") }, VALID_FIVE_SECTION_SUMMARY]);
+    const llm = createFakeLLM([VALID_FIVE_SECTION_SUMMARY, { error: new Error("boom") }]);
 
     const result = await summarizeInStages({
-      messages: [failedGarmin, summarizedUnknown],
+      messages: [summarizedUnknown, failedGarmin],
       llm,
       mustPreserveTokens: [],
       memory: EMPTY_SNAPSHOT,
@@ -399,6 +399,80 @@ describe("staged summary provenance", () => {
 
     expect(result.summaryProvenance).toEqual(UNKNOWN);
     expect(getMessageProvenance(result.messages[0])).toEqual(UNKNOWN);
+  });
+});
+
+describe("staged summarization failure containment", () => {
+  const goal: ModelMessage = {
+    role: "user",
+    content: "Goal: finish the mountain ride. " + "a".repeat(20_000),
+  };
+  const correction: ModelMessage = {
+    role: "user",
+    content: "Correction: no Tuesday training. " + "b".repeat(20_000),
+  };
+  const recent: ModelMessage[] = [
+    { role: "assistant", content: "What changed this week?" },
+    { role: "user", content: "Keep Friday easy." },
+  ];
+
+  it.each([false, true])(
+    "retains every message after total failure (prior summary: %s)",
+    async (withSummary) => {
+      const messages = [
+        ...(withSummary ? [makeSummaryMessage("FTP 247W; protect the knee", UNKNOWN)] : []),
+        goal,
+        correction,
+        ...recent,
+      ];
+      const llm = createFakeLLM([{ error: new Error("summary unavailable") }], {
+        repeatLast: true,
+      });
+      const result = await summarizeInStages({
+        messages,
+        llm,
+        mustPreserveTokens: [],
+        memory: EMPTY_SNAPSHOT,
+        recentToKeep: 2,
+        contextWindowTokens: 30_000,
+      });
+
+      expect(result.messages).toEqual(messages);
+      expect(llm.capturedMessages).toHaveLength(1);
+      expect(result.summary).toBeUndefined();
+    },
+  );
+
+  it("retains failed corrections alongside the successful summary and recent messages", async () => {
+    const summary = VALID_FIVE_SECTION_SUMMARY + "\nGoal: finish the mountain ride.";
+    const newerCorrection: ModelMessage = {
+      role: "user",
+      content: "Update: Tuesday training is possible again. " + "c".repeat(20_000),
+    };
+    const llm = createFakeLLM([summary, { error: new Error("summary unavailable") }]);
+    const result = await summarizeInStages({
+      messages: [
+        makeSummaryMessage("FTP 247W; protect the knee", UNKNOWN),
+        goal,
+        correction,
+        newerCorrection,
+        ...recent,
+      ],
+      llm,
+      mustPreserveTokens: [],
+      memory: EMPTY_SNAPSHOT,
+      recentToKeep: 2,
+      contextWindowTokens: 30_000,
+    });
+
+    expect(result.messages).toEqual([
+      makeSummaryMessage(summary, UNKNOWN),
+      correction,
+      newerCorrection,
+      ...recent,
+    ]);
+    expect(llm.capturedMessages).toHaveLength(2);
+    expect(String(llm.capturedMessages[0][0].content)).toContain("FTP 247W; protect the knee");
   });
 });
 
@@ -417,7 +491,9 @@ describe("shared audit post-step (cap-before-audit)", () => {
     });
 
     expect(spy.capturedOpts).toHaveLength(2);
-    expect(String(spy.capturedMessages[1][0].content)).toContain("Restructure the following summary");
+    expect(String(spy.capturedMessages[1][0].content)).toContain(
+      "Restructure the following summary",
+    );
     for (const opts of spy.capturedOpts) {
       expect(opts.maxOutputTokens).toBe(1000);
     }
@@ -518,4 +594,3 @@ describe("shared audit post-step (cap-before-audit)", () => {
     expect(spy.capturedOpts[1].system).toContain("PRESERVE every fact in it");
   });
 });
-

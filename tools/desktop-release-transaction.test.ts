@@ -100,7 +100,7 @@ describe("advertised npm attestation claims", () => {
     workflow: ".github/workflows/release.yml",
     ref: `refs/tags/cycling-coach@${npmVersion}`,
     releaseTag: `cycling-coach@${npmVersion}`,
-    commit: "a".repeat(40),
+    workflowCommit: "a".repeat(40),
     invocationId: "https://github.com/yerzhansa/enduragent/actions/runs/456/attempts/1",
     eventName: "push",
     repositoryId: "1209631813",
@@ -130,7 +130,11 @@ describe("advertised npm attestation claims", () => {
     };
   }
 
-  function document(commit = expectation.commit) {
+  function document(
+    commit = expectation.workflowCommit,
+    ref = expectation.ref,
+    eventName = expectation.eventName,
+  ) {
     return {
       attestations: [
         attestation("https://slsa.dev/provenance/v1", {
@@ -138,21 +142,21 @@ describe("advertised npm attestation claims", () => {
             buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
             internalParameters: {
               github: {
-                event_name: expectation.eventName,
+                event_name: eventName,
                 repository_id: expectation.repositoryId,
                 repository_owner_id: expectation.repositoryOwnerId,
               },
             },
             externalParameters: {
               workflow: {
-                ref: expectation.ref,
+                ref,
                 repository: expectation.repository,
                 path: expectation.workflow,
               },
             },
             resolvedDependencies: [
               {
-                uri: `git+${expectation.repository}@${expectation.ref}`,
+                uri: `git+${expectation.repository}@${ref}`,
                 digest: { gitCommit: commit },
               },
             ],
@@ -173,6 +177,27 @@ describe("advertised npm attestation claims", () => {
 
   it("accepts statements bound to the exact tarball, workflow, ref, and commit", () => {
     expect(() => inspectNpmAttestationClaims(document(), expectation)).not.toThrow();
+  });
+
+  it("binds main dispatch provenance to the publisher workflow commit independently of source", () => {
+    const sourceCommit = expectation.workflowCommit;
+    const main = {
+      ...expectation,
+      ref: "refs/heads/main",
+      eventName: "workflow_dispatch",
+      workflowCommit: "b".repeat(40),
+    };
+    const metadata = document(main.workflowCommit, main.ref, main.eventName);
+    expect(() => inspectNpmAttestationClaims(metadata, main)).not.toThrow();
+    expect(() =>
+      inspectNpmAttestationClaims(metadata, { ...main, workflowCommit: sourceCommit }),
+    ).toThrow("workflow binding");
+    expect(() =>
+      inspectNpmAttestationClaims(metadata, {
+        ...main,
+        invocationId: "https://github.com/yerzhansa/enduragent/actions/runs/999/attempts/1",
+      }),
+    ).toThrow("workflow binding");
   });
 
   it("accepts workflow_dispatch provenance on the exact release tag ref", () => {

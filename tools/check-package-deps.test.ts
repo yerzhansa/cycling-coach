@@ -57,6 +57,113 @@ const rDesktop = ruleForDir("apps/desktop");
 const rCoach = ruleForDir("packages/coach");
 const rBin = ruleForDir("packages/cycling-coach");
 
+describe("relative workspace imports", () => {
+  it.each([
+    'import { value } from "../../engine/src/index.js";',
+    'import "../../engine/src/index.js";',
+    'export { value } from "../../engine/src/index.js";',
+    'export * from "../../engine/src/index.js";',
+    'export const value = import("../../engine/src/index.js");',
+    'export const value = require("../../engine/src/index.js");',
+  ])("rejects a forbidden relative edge: %s", (source) => {
+    writeJson("packages/engine/package.json", { name: "@enduragent/engine", private: true });
+    write("packages/engine/src/index.ts", "export const value = 1;");
+    const file = write("packages/kernel/src/bad.ts", source);
+    expect(runRulesAgainst(tempDir, [r1]).violations).toEqual([
+      expect.objectContaining({ file, specifier: "../../engine/src/index.js", ruleId: "R1" }),
+    ]);
+    expect(main([tempDir])).toBe(1);
+  });
+
+  it("preserves same-package, shared-file, and allowed workspace imports", () => {
+    writeJson("packages/kernel/package.json", { name: "@enduragent/kernel", private: true });
+    write("packages/kernel/src/index.ts", "export const value = 1;");
+    writeJson("packages/kernel-node/package.json", {
+      name: "@enduragent/kernel-node",
+      private: true,
+    });
+    write(
+      "packages/kernel-node/src/ok.ts",
+      [
+        'import "./helper.js";',
+        'import "../test/helper.js";',
+        'import "../../../tools/helper.js";',
+        'import "../../kernel/src/index.js";',
+      ].join("\n"),
+    );
+    expect(violationsFor(r2)).toBe(0);
+  });
+
+  it("preserves transitional warnings for relative imports", () => {
+    writeJson("packages/engine/package.json", { name: "@enduragent/engine", private: true });
+    write("packages/core/src/shim.ts", 'export * from "../../engine/src/index.js";');
+    const result = runRulesAgainst(tempDir, [rCore]);
+    expect(result.violations).toHaveLength(0);
+    expect(result.warnEdges).toEqual([{ dir: "packages/core", target: "@enduragent/engine" }]);
+  });
+
+  it("resolves imports across workspace groups and normalizes parent segments", () => {
+    writeJson("packages/engine/package.json", { name: "@enduragent/engine", private: true });
+    write(
+      "apps/desktop-renderer/src/bad.tsx",
+      'import "../../../packages/core/../engine/src/index.js";',
+    );
+    expect(violationsFor(rRenderer)).toBe(1);
+  });
+
+  it.each(["src/contracts/sport", "src/contracts/sport/index.js", "dist/contracts/sport/index.js"])(
+    "maps declared export targets independently of their file name: %s",
+    (target) => {
+      writeJson("packages/engine/package.json", {
+        name: "@enduragent/engine",
+        private: true,
+        exports: { "./sport": "./dist/contracts/sport/index.js" },
+      });
+      write("packages/sport-x/src/ok.ts", `export * from "../../engine/${target}";`);
+      expect(violationsFor(r4)).toBe(0);
+    },
+  );
+
+  it("does not infer an allowed sport export from a private file's name", () => {
+    writeJson("packages/engine/package.json", {
+      name: "@enduragent/engine",
+      private: true,
+      exports: { "./sport": "./dist/contracts/sport.js" },
+    });
+    write("packages/sport-x/src/bad.ts", 'export * from "../../engine/src/sport.js";');
+    expect(violationsFor(r4)).toBe(1);
+  });
+
+  it.each(["src/sport.ts", "src/sport.js", "dist/sport.js"])(
+    "allows the declared engine sport entry through %s",
+    (target) => {
+      writeJson("packages/engine/package.json", {
+        name: "@enduragent/engine",
+        private: true,
+        exports: { "./sport": { types: "./dist/sport.d.ts", import: "./dist/sport.js" } },
+      });
+      write("packages/sport-x/src/ok.ts", `export * from "../../engine/${target}";`);
+      expect(violationsFor(r4)).toBe(0);
+    },
+  );
+
+  it.each([
+    "src/index.js",
+    "src/runtime.js",
+    "src/sport-internal.js",
+    "src/sport/private.js",
+    "src/sport/index.js",
+  ])("rejects engine imports outside its declared sport entry: %s", (target) => {
+    writeJson("packages/engine/package.json", {
+      name: "@enduragent/engine",
+      private: true,
+      exports: { "./sport": "./dist/sport.js" },
+    });
+    write("packages/sport-x/src/bad.ts", `export * from "../../engine/${target}";`);
+    expect(violationsFor(r4)).toBe(1);
+  });
+});
+
 describe("R1 kernel purity", () => {
   it("R1 flags a node: prefixed import", () => {
     write("packages/kernel/src/bad.ts", `import { readFileSync } from "node:fs";\n`);

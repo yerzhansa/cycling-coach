@@ -458,7 +458,7 @@ describe("authoritative setup readiness", () => {
         "data-state",
         "none",
       );
-      expect(document.body.textContent).not.toContain("Required · where your rides come from");
+      expect(document.body.textContent).not.toContain("Connect or import ride files.");
       expect(document.body.textContent).not.toContain("Required — Enduragent doesn't include one");
       expect(readinessBadge()).toHaveTextContent("Checking setup…");
       expect(readinessBadge()).not.toHaveTextContent("0 of 3 required ready");

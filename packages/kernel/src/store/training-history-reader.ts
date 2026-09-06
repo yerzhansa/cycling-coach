@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseActivityLandingEnvelope } from "../ingest/source-ledger.js";
 import { ActivitySchema } from "../reference/schemas/inputs.js";
+import { strictUtf8Length } from "../strict-utf8.js";
 import type { Row, SqlReadStore } from "./ports.js";
 
 export type RecordedFactRejectionReason =
@@ -52,6 +53,7 @@ export class TrainingHistoryReadError extends Error {
 }
 
 export interface TrainingHistoryReader {
+  readLatestRideDate(input: { readonly through: string }): Promise<string | null>;
   readWindow(input: {
     readonly start: string;
     readonly end: string;
@@ -94,6 +96,11 @@ interface InvalidPayloadEnvelope {
   readonly kind: "invalid-envelope";
 }
 
+interface PayloadCacheEntry {
+  readonly revisionId: string;
+  readonly facts: ParsedPayloadFacts | InvalidPayloadEnvelope;
+}
+
 interface ParseBudget {
   bytes: number;
   exhausted: boolean;
@@ -112,6 +119,7 @@ const PAYLOAD_PAGE_SIZE = 100;
 const SESSION_LIMIT = 1_000;
 const PAYLOAD_ROW_BYTES = 65_536;
 const PAYLOAD_PROJECTION_BYTES = 16 * 1_024 * 1_024;
+const PAYLOAD_CACHE_ENTRIES = 2_048;
 
 const PICKED_ACTIVITY_SCHEMA = z
   .object({
@@ -143,29 +151,6 @@ function rejectedFact(reason: RecordedFactRejectionReason): RecordedFact<number>
 
 function recordedFact(value: number): RecordedFact<number> {
   return Object.freeze({ kind: "recorded", value });
-}
-
-function strictUtf8Length(value: string): number | undefined {
-  let bytes = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const codeUnit = value.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      if (index + 1 >= value.length) return undefined;
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return undefined;
-      bytes += 4;
-      index += 1;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      return undefined;
-    } else if (codeUnit <= 0x7f) {
-      bytes += 1;
-    } else if (codeUnit <= 0x7ff) {
-      bytes += 2;
-    } else {
-      bytes += 3;
-    }
-  }
-  return bytes;
 }
 
 function civilDateEpoch(value: unknown): number {
@@ -389,6 +374,19 @@ function applyParsedPayload(row: PendingFactRow, parsed: ParsedPayloadFacts): vo
   row.energyKilojoules = parsed.energyKilojoules;
 }
 
+function retainPayloadFacts(
+  cache: Map<string, PayloadCacheEntry>,
+  sessionId: string,
+  entry: PayloadCacheEntry,
+): void {
+  cache.delete(sessionId);
+  cache.set(sessionId, entry);
+  if (cache.size <= PAYLOAD_CACHE_ENTRIES) return;
+  const oldest = cache.keys().next().value;
+  if (typeof oldest !== "string") invalidRow();
+  cache.delete(oldest);
+}
+
 function publicFact(row: PendingFactRow): TrainingHistoryFactRow {
   return Object.freeze({
     id: row.id,
@@ -412,6 +410,7 @@ async function applyPayloadPage(
   store: Pick<SqlReadStore, "all">,
   rows: readonly PendingFactRow[],
   budget: ParseBudget,
+  cache: Map<string, PayloadCacheEntry>,
 ): Promise<void> {
   if (budget.exhausted) {
     for (const row of rows) rejectPayloadFacts(row, "payload-budget-exhausted");
@@ -422,6 +421,7 @@ async function applyPayloadPage(
     `WITH ranked_source AS (
   SELECT
     s.session_key,
+    r.revision_id,
     r.payload_json,
     count(*) OVER (PARTITION BY s.session_key) AS source_count,
     row_number() OVER (
@@ -447,6 +447,12 @@ SELECT
     ELSE NULL
   END AS session_key,
   source_count,
+  CASE
+    WHEN source_count = 1
+      AND typeof(revision_id) = 'text'
+      AND length(CAST(revision_id AS BLOB)) BETWEEN 1 AND 128 THEN revision_id
+    ELSE NULL
+  END AS revision_id,
   CASE WHEN source_count = 1 AND typeof(payload_json) = 'text' THEN 1 ELSE 0 END
     AS payload_text_valid,
   CASE
@@ -506,18 +512,31 @@ LIMIT 100`,
       rejectPayloadFacts(row, "oversized-payload");
       continue;
     }
+    const revisionId = readBoundedNullableString(payloadRow, "revision_id", 128, false);
+    if (revisionId === null) invalidRow();
     const payloadBytes = readNonnegativeInteger(payloadRow, "payload_bytes");
-    if (payloadBytes > PAYLOAD_ROW_BYTES || typeof payloadRow.payload_json !== "string")
-      invalidRow();
-    const measured = strictUtf8Length(payloadRow.payload_json);
-    if (measured === undefined || measured !== payloadBytes) invalidRow();
+    if (payloadBytes > PAYLOAD_ROW_BYTES) invalidRow();
     if (budget.bytes + payloadBytes > PAYLOAD_PROJECTION_BYTES) {
       budget.exhausted = true;
       rejectPayloadFacts(row, "payload-budget-exhausted");
       continue;
     }
     budget.bytes += payloadBytes;
+    const cached = cache.get(row.id);
+    if (cached?.revisionId === revisionId) {
+      retainPayloadFacts(cache, row.id, cached);
+      if (cached.facts.kind === "invalid-envelope") {
+        rejectPayloadFacts(row, "invalid-envelope");
+      } else {
+        applyParsedPayload(row, cached.facts);
+      }
+      continue;
+    }
+    if (typeof payloadRow.payload_json !== "string") invalidRow();
+    const measured = strictUtf8Length(payloadRow.payload_json);
+    if (measured === undefined || measured !== payloadBytes) invalidRow();
     const parsed = parsePayloadFacts(payloadRow.payload_json);
+    retainPayloadFacts(cache, row.id, { revisionId, facts: parsed });
     if (parsed.kind === "invalid-envelope") {
       rejectPayloadFacts(row, "invalid-envelope");
     } else {
@@ -530,16 +549,43 @@ async function applyPayloads(
   store: Pick<SqlReadStore, "all">,
   rows: readonly PendingFactRow[],
   budget: ParseBudget,
+  cache: Map<string, PayloadCacheEntry>,
 ): Promise<void> {
   for (let index = 0; index < rows.length; index += PAYLOAD_PAGE_SIZE) {
-    await applyPayloadPage(store, rows.slice(index, index + PAYLOAD_PAGE_SIZE), budget);
+    await applyPayloadPage(
+      store,
+      rows.slice(index, index + PAYLOAD_PAGE_SIZE),
+      budget,
+      cache,
+    );
   }
 }
 
 export function createTrainingHistoryReader(
   store: Pick<SqlReadStore, "all">,
 ): TrainingHistoryReader {
+  const payloadCache = new Map<string, PayloadCacheEntry>();
   return {
+    async readLatestRideDate(input) {
+      if (input === null || typeof input !== "object") invalidInput();
+      civilDateEpoch(input.through);
+      const throughKey = dateKey(input.through);
+      const selected = await store.all(
+        `SELECT max(s.local_date_key) AS local_date_key
+FROM session AS s
+WHERE s.local_date_key <= ?
+  AND s.sport = 'cycling'
+  AND s.is_transition = 0`,
+        [throughKey],
+      );
+      if (selected.length !== 1) invalidRow();
+      const row = selected[0];
+      if (row === undefined) invalidRow();
+      if (row.local_date_key === null) return null;
+      const date = readLocalDate(row);
+      if (date > input.through) invalidRow();
+      return date;
+    },
     async readWindow(input) {
       if (input === null || typeof input !== "object") invalidInput();
       const startEpoch = civilDateEpoch(input.start);
@@ -633,7 +679,7 @@ LIMIT ?`,
           boundary = { startEpochSeconds: row.startEpochSeconds, id: row.id };
         }
         const page = mapped.slice(0, CORE_PAGE_SIZE).map(pendingFact);
-        await applyPayloads(store, page, budget);
+        await applyPayloads(store, page, budget, payloadCache);
         facts.push(...page.map(publicFact));
         if (facts.length === SESSION_LIMIT && mapped.length > CORE_PAGE_SIZE) {
           scanTruncated = true;

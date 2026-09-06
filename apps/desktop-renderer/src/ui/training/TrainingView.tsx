@@ -13,7 +13,9 @@ import {
   useState,
   type ReactElement,
   type ReactNode,
+  type Ref,
 } from "react";
+import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { formatCivilDate } from "../../lib/date";
 import { rideImportStatusCopy } from "../../ride-import";
@@ -25,9 +27,8 @@ import {
   formatWholeNumber,
 } from "../../training-context/format";
 import { Page } from "../shared/Page";
-import { TRAINING_HISTORY_COPY } from "./copy";
+import { TRAINING_DEGRADED_COPY, TRAINING_HISTORY_COPY, trainingStatusCopy } from "./copy";
 import { overviewStyles as styles } from "./overviewStyles";
-import { PowerProgressContent } from "./PowerProgressPanel";
 import { RideDetailView, trainingRideDateTime, trainingRideKind } from "./RideReview";
 
 type Period = "anchor" | "previous";
@@ -64,13 +65,10 @@ function dataWarning(
 ): string | null {
   if (panel.kind === "stale") return TRAINING_HISTORY_COPY.refreshFailure;
   if (history.coverage.kind === "sparse") return TRAINING_HISTORY_COPY.sparse;
-  const through = coverageDate(history);
-  if (history.displayMode === "last-recorded" && through !== null) {
+  if (history.displayMode === "last-recorded") {
     return history.coverage.kind === "incomplete"
-      ? `Training may be out of date, and some rides may be missing. Showing recorded rides through ${formatCivilDate(
-          through,
-        )}.`
-      : `Training may be out of date. Showing recorded rides through ${formatCivilDate(through)}.`;
+      ? TRAINING_HISTORY_COPY.outOfDateIncomplete
+      : TRAINING_HISTORY_COPY.outOfDate;
   }
   if (week.coverage.kind === "complete") return null;
   if (week.coverage.reason === "coverage-lag") return TRAINING_HISTORY_COPY.coverageLag;
@@ -92,6 +90,33 @@ function rideCountCopy(value: number): string {
   return `${formatWholeNumber(value)} ${value === 1 ? "ride" : "rides"}`;
 }
 
+function weekRangeLabel(week: CompletedActivityWeek): string {
+  const year =
+    week.window.start.slice(0, 4) === week.window.end.slice(0, 4) ? undefined : "numeric";
+  const startMonth = formatCivilDate(week.window.start, { month: "short" });
+  const endMonth = formatCivilDate(week.window.end, { month: "short" });
+  const start = formatCivilDate(week.window.start, { day: "numeric", month: "short", year });
+  const end = formatCivilDate(
+    week.window.end,
+    startMonth === endMonth ? { day: "numeric", year } : { day: "numeric", month: "short", year },
+  );
+  return `${start}–${end}`;
+}
+
+function noticeCoverage(
+  panel: TrainingHistoryPanel,
+  history: TrainingHistoryComputed,
+  week: CompletedActivityWeek,
+): string | null {
+  const through =
+    week.coverage.kind === "incomplete"
+      ? week.coverage.recordedThrough
+      : panel.kind === "stale" || history.displayMode === "last-recorded"
+        ? coverageDate(history)
+        : null;
+  return through === null ? null : `${TRAINING_HISTORY_COPY.coverage} ${formatCivilDate(through)}`;
+}
+
 function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
   const trend = props.week.trend;
   if (trend.kind === "unavailable") {
@@ -103,7 +128,8 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
     return (
       <figure className={styles.trend} aria-labelledby="training-trend-title">
         <figcaption id="training-trend-title" className={styles.trendCaption}>
-          {TRAINING_HISTORY_COPY.trendTitle}
+          <span>{TRAINING_HISTORY_COPY.trendLabel}</span>{" "}
+          <span>{TRAINING_HISTORY_COPY.trendPeriod}</span>
         </figcaption>
         <p className={styles.trendUnavailable}>{TRAINING_HISTORY_COPY.trendUnavailable}</p>
         <p className={styles.trendReason}>{reason}</p>
@@ -114,14 +140,15 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
   return (
     <figure className={styles.trend} aria-labelledby="training-trend-title">
       <figcaption id="training-trend-title" className={styles.trendCaption}>
-        {TRAINING_HISTORY_COPY.trendTitle}
+        <span>{TRAINING_HISTORY_COPY.trendLabel}</span>{" "}
+        <span>{TRAINING_HISTORY_COPY.trendPeriod}</span>
       </figcaption>
       <div className={styles.trendBars} aria-hidden="true">
         {trend.buckets.map((bucket) => (
           <span className={styles.trendColumn} key={bucket.window.start}>
             <span
               className={styles.trendBar}
-              style={{ height: `${(bucket.ridingSeconds / maximum) * 100}%` }}
+              style={{ height: `${(bucket.ridingSeconds / maximum) * 75}%` }}
             />
             <span className={styles.trendLabel}>
               {formatCivilDate(bucket.window.start, { day: "numeric", month: "numeric" })}
@@ -130,7 +157,9 @@ function Trend(props: { readonly week: CompletedActivityWeek }): ReactElement {
         ))}
       </div>
       <table className={styles.srOnly}>
-        <caption>{TRAINING_HISTORY_COPY.trendTitle} data</caption>
+        <caption>
+          {TRAINING_HISTORY_COPY.trendLabel} {TRAINING_HISTORY_COPY.trendPeriod}
+        </caption>
         <thead>
           <tr>
             <th scope="col">Week</th>
@@ -163,47 +192,38 @@ function WeeklySummary(props: {
 }): ReactElement {
   const ridesExist = props.week.rides.items.length > 0 || props.week.rides.count.value > 0;
   const label = periodLabel(props.history, props.period, props.retained);
-  const recordedThrough = coverageDate(props.history);
   return (
     <section
       className={styles.weekSection}
       data-panel="weekly-summary"
       aria-labelledby="weekly-summary-title"
     >
-      <div className={styles.weekHeading}>
-        <h2 id="weekly-summary-title">Weekly summary</h2>
-        {recordedThrough === null ? null : (
-          <p>
-            {TRAINING_HISTORY_COPY.coverage} {formatCivilDate(recordedThrough)}
-          </p>
-        )}
-      </div>
+      <h2 id="weekly-summary-title" className={styles.srOnly}>
+        Weekly summary
+      </h2>
       <div className={styles.weekHero}>
         <div className={styles.weekFacts}>
           <p className={styles.weekEyebrow}>{label}</p>
           <p className={styles.weekTime} data-summary-metric="riding-time">
             {metricCopy(props.week.totals.ridingSeconds, formatRidingDuration, ridesExist)}
           </p>
-          <dl className={styles.weekMetrics}>
-            <div data-summary-metric="ride-count">
-              <dt>Rides</dt>
-              <dd>{metricCopy(props.week.totals.rideCount, rideCountCopy, ridesExist)}</dd>
-            </div>
-            <div data-summary-metric="distance">
-              <dt>Distance</dt>
-              <dd>
-                {metricCopy(
-                  props.week.totals.distanceMeters,
-                  (value) => formatDistance(value, props.units),
-                  ridesExist,
-                )}
-              </dd>
-            </div>
-            <div data-summary-metric="load">
-              <dt>Load</dt>
-              <dd>{metricCopy(props.week.totals.load, formatWholeNumber, ridesExist)}</dd>
-            </div>
-          </dl>
+          <p className={styles.weekMetrics}>
+            <span data-summary-metric="ride-count">
+              {metricCopy(props.week.totals.rideCount, rideCountCopy, ridesExist)}
+            </span>
+            {" · "}
+            <span data-summary-metric="distance">
+              {metricCopy(
+                props.week.totals.distanceMeters,
+                (value) => formatDistance(value, props.units),
+                ridesExist,
+              )}
+            </span>
+            {" · "}
+            <span data-summary-metric="load">
+              Load {metricCopy(props.week.totals.load, formatWholeNumber, ridesExist)}
+            </span>
+          </p>
         </div>
         <Trend week={props.week} />
       </div>
@@ -217,6 +237,12 @@ function calloutReason(week: CompletedActivityWeek, rideId: string): string | nu
   return `Longest recorded ride in the 28 days ending ${formatCivilDate(callout.window.end)}`;
 }
 
+function historyRideMeta(ride: TrainingHistoryRide, units: UnitsPreference): string {
+  if (ride.distanceMeters === null) return trainingRideDateTime(ride);
+  const kind = trainingRideKind(ride).replace(/ ride$/u, "");
+  return `${kind} · ${formatDistance(ride.distanceMeters, units)}`;
+}
+
 function RideRow(props: {
   readonly ride: TrainingHistoryRide;
   readonly reason: string | null;
@@ -226,6 +252,8 @@ function RideRow(props: {
 }): ReactElement {
   const title = props.ride.title ?? trainingRideKind(props.ride);
   const dateTime = trainingRideDateTime(props.ride);
+  const weekday = formatCivilDate(props.ride.localDate, { weekday: "short" });
+  const day = formatCivilDate(props.ride.localDate, { day: "numeric" });
   return (
     <li
       className={styles.historyRideItem}
@@ -238,27 +266,36 @@ function RideRow(props: {
         aria-label={`Open ride review: ${title}, ${dateTime}`}
         onClick={props.onOpen}
       >
+        <time
+          className={styles.historyRideDate}
+          data-parity="ride-day"
+          dateTime={props.ride.localDate}
+        >
+          <span>{weekday}</span>
+          <strong>{day}</strong>
+        </time>
         <span className={styles.historyRideMain}>
           <span className={styles.historyRideTitle}>
             <strong>{title}</strong>
             {props.reason === null ? null : <span>Worth a look</span>}
           </span>
-          <time dateTime={props.ride.localDate}>{dateTime}</time>
+          <span className={styles.historyRideMeta} data-parity="ride-meta">
+            {historyRideMeta(props.ride, props.units)}
+          </span>
           {props.reason === null ? null : (
-            <span className={styles.historyRideReason}>{props.reason}</span>
+            <span className={styles.historyRideReason} title={props.reason}>
+              {props.reason}
+            </span>
           )}
         </span>
-        <span className={styles.historyRideStats}>
+        <span className={styles.historyRideStats} data-parity="ride-stats">
           {props.ride.ridingSeconds === null ? null : (
-            <span>{formatRidingDuration(props.ride.ridingSeconds)}</span>
+            <strong>{formatRidingDuration(props.ride.ridingSeconds)}</strong>
           )}
-          {props.ride.distanceMeters === null ? null : (
-            <span>{formatDistance(props.ride.distanceMeters, props.units)}</span>
+          {props.ride.load === null ? null : (
+            <span>Load {formatWholeNumber(props.ride.load)}</span>
           )}
         </span>
-        {props.ride.load === null ? null : (
-          <span className={styles.historyRideLoad}>Load {formatWholeNumber(props.ride.load)}</span>
-        )}
         <span className={styles.historyRideArrow} aria-hidden="true">
           →
         </span>
@@ -285,8 +322,14 @@ function RecentRides(props: {
   readonly week: CompletedActivityWeek;
   readonly units: UnitsPreference;
   readonly onOpen: (ride: TrainingHistoryRide) => void;
+  readonly onPreviousWeek: () => void;
   readonly registerButton: (id: string, node: HTMLButtonElement | null) => void;
 }): ReactElement {
+  const heading = props.retained
+    ? TRAINING_HISTORY_COPY.recordedRides
+    : props.history.coverage.kind === "incomplete"
+      ? TRAINING_HISTORY_COPY.latestAvailableRides
+      : TRAINING_HISTORY_COPY.recentRides;
   const truncation =
     props.week.rides.truncated && props.week.rides.items.length > 0
       ? props.week.rides.count.kind === "at-least"
@@ -299,7 +342,12 @@ function RecentRides(props: {
       data-panel="recent-rides"
       aria-labelledby="recent-rides-title"
     >
-      <h2 id="recent-rides-title">Recent rides</h2>
+      <div className={styles.ridesHeading}>
+        <h2 id="recent-rides-title">{heading}</h2>
+        {props.week.rides.items.length === 0 ? null : (
+          <span>{TRAINING_HISTORY_COPY.newestFirst}</span>
+        )}
+      </div>
       {props.week.rides.items.length === 0 ? (
         <p className={styles.historyEmpty}>
           {emptyRidesCopy(props.history, props.retained, props.period)}
@@ -319,20 +367,94 @@ function RecentRides(props: {
         </ol>
       )}
       {truncation === null ? null : <p className={styles.truncation}>{truncation}</p>}
+      {props.period !== "anchor" || props.retained || props.history.previousWeek === null ? null : (
+        <div className={styles.moreHistory}>
+          <Button
+            type="button"
+            variant="outline"
+            className={styles.moreHistoryButton}
+            data-parity="rides-previous-week"
+            onClick={props.onPreviousWeek}
+          >
+            {TRAINING_HISTORY_COPY.previous}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
 
-function PowerProgressStatePanel(props: {
-  readonly panel: Parameters<typeof PowerProgressContent>[0]["panel"];
+function PeriodNavigation(props: {
+  readonly history: TrainingHistoryComputed;
+  readonly period: Period;
+  readonly retained: boolean;
+  readonly currentButtonRef: Ref<HTMLButtonElement>;
+  readonly onChange: (period: Period) => void;
 }): ReactElement {
   return (
-    <section className={styles.panel} data-panel="power-progress" aria-label="Power progress">
-      <h2 className={styles.panelTitle}>Power progress</h2>
-      <div className={styles.panelBody}>
-        <PowerProgressContent panel={props.panel} />
-      </div>
-    </section>
+    <div className={styles.periodGroup} role="group" aria-label="Completed riding period">
+      {props.retained ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className={styles.periodButton}
+          disabled
+        >
+          {TRAINING_HISTORY_COPY.lastRecorded}
+        </Button>
+      ) : (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            className={styles.periodButton}
+            aria-label={TRAINING_HISTORY_COPY.previous}
+            disabled={props.period === "previous" || props.history.previousWeek === null}
+            onClick={() => props.onChange("previous")}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </Button>
+          <Button
+            ref={props.currentButtonRef}
+            type="button"
+            variant="outline"
+            size="xs"
+            className={styles.periodButton}
+            aria-pressed={props.period === "anchor"}
+            onClick={() => props.onChange("anchor")}
+          >
+            {periodLabel(props.history, "anchor", props.retained)}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            className={styles.periodButton}
+            aria-label={TRAINING_HISTORY_COPY.next}
+            disabled={props.period === "anchor"}
+            onClick={() => props.onChange("anchor")}
+          >
+            <ChevronRight aria-hidden="true" />
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DataNotice(props: {
+  readonly coverage: string | null;
+  readonly notice: string;
+}): ReactElement {
+  return (
+    <p className={styles.dataNotice}>
+      {props.coverage === null ? null : (
+        <strong className={styles.dataNoticeCoverage}>{props.coverage}</strong>
+      )}
+      <span>{props.notice}</span>
+    </p>
   );
 }
 
@@ -343,11 +465,15 @@ function RideImportAction(): ReactElement {
     <Button
       type="button"
       variant="outline"
+      size="icon-xs"
+      className={styles.periodButton}
+      aria-label="Import ride files"
+      title="Import ride files"
       disabled={actions === null || state.status === "running"}
       aria-describedby={state.status === "idle" ? undefined : "ride-import-status"}
       onClick={() => actions?.choose()}
     >
-      Import ride files
+      <Upload aria-hidden="true" />
     </Button>
   );
 }
@@ -355,9 +481,10 @@ function RideImportAction(): ReactElement {
 function RideImportStatus(): ReactElement {
   const state = useEnduragentStore((store) => store.rideImport);
   const suppressed = useEnduragentStore(rideImportStatusSuppressed);
-  const visible = state.status !== "idle" && !suppressed;
+  const active = state.status !== "idle" && !suppressed;
+  const visible = active && (state.status !== "running" || state.stage !== "choosing");
   const progress = visible && state.status === "running" ? state.progress : null;
-  const copy = visible ? rideImportStatusCopy(state) : "";
+  const copy = active ? rideImportStatusCopy(state) : "";
   return (
     <>
       {visible ? (
@@ -380,7 +507,7 @@ function RideImportStatus(): ReactElement {
       <p
         id="ride-import-status"
         className={`${styles.srOnly} ride-import-status`}
-        data-state={visible ? state.status : "idle"}
+        data-state={active ? state.status : "idle"}
         role="status"
         aria-live="polite"
         aria-atomic="true"
@@ -399,9 +526,9 @@ function UnavailableHistory(): ReactElement {
         data-panel="weekly-summary"
         aria-labelledby="weekly-summary-title"
       >
-        <div className={styles.weekHeading}>
-          <h2 id="weekly-summary-title">Weekly summary</h2>
-        </div>
+        <h2 id="weekly-summary-title" className={styles.srOnly}>
+          Weekly summary
+        </h2>
         <p className={styles.historyEmpty}>{TRAINING_HISTORY_COPY.unavailable}</p>
       </section>
       <section
@@ -409,22 +536,12 @@ function UnavailableHistory(): ReactElement {
         data-panel="recent-rides"
         aria-labelledby="recent-rides-title"
       >
-        <h2 id="recent-rides-title">Recent rides</h2>
+        <div className={styles.ridesHeading}>
+          <h2 id="recent-rides-title">{TRAINING_HISTORY_COPY.recentRides}</h2>
+        </div>
         <p className={styles.historyEmpty}>{TRAINING_HISTORY_COPY.unknownRides}</p>
       </section>
     </>
-  );
-}
-
-function historyRide(
-  history: TrainingHistoryComputed | null,
-  rideId: string | null,
-): TrainingHistoryRide | null {
-  if (history === null || rideId === null) return null;
-  return (
-    history.anchorWeek.rides.items.find((ride) => ride.id === rideId) ??
-    history.previousWeek?.rides.items.find((ride) => ride.id === rideId) ??
-    null
   );
 }
 
@@ -445,18 +562,15 @@ export function TrainingView(): ReactElement {
   const rideButtons = useRef(new Map<string, HTMLButtonElement>());
   const previousRideId = useRef<string | null>(null);
   const title = useRef<HTMLHeadingElement>(null);
+  const currentPeriodButton = useRef<HTMLButtonElement>(null);
   const panel = training.trainingContext.trainingHistory;
   const history = effectiveHistory(panel);
   const retained = panel.kind === "stale";
-  const resolvedRide = historyRide(history, selectedRide?.id ?? null);
+  const resolvedRide = selectedRide;
 
   useEffect(() => {
     if (period === "previous" && history?.previousWeek === null) setPeriod("anchor");
   }, [history?.previousWeek, period]);
-
-  useEffect(() => {
-    if (selectedRide !== null && resolvedRide === null) closeRide();
-  }, [closeRide, resolvedRide, selectedRide]);
 
   useLayoutEffect(() => {
     const currentRideId = resolvedRide?.id ?? null;
@@ -480,20 +594,34 @@ export function TrainingView(): ReactElement {
   const activeWeek = history === null ? null : selectedWeek(history, period);
   const warning =
     history === null || activeWeek === null ? null : dataWarning(panel, history, activeWeek);
+  const statusWarning =
+    training.status === "unavailable" || training.status === "refresh-unavailable"
+      ? trainingStatusCopy(training.status)
+      : null;
+  const notice =
+    statusWarning ??
+    warning ??
+    (training.metadata?.degraded === true ? TRAINING_DEGRADED_COPY : null);
+  const coverage =
+    history === null || activeWeek === null ? null : noticeCoverage(panel, history, activeWeek);
   const label = history === null ? null : periodLabel(history, period, retained);
   const announcement = useMemo(
-    () => (label === null ? null : warning === null ? label : `${label}. ${warning}`),
-    [label, warning],
+    () => (label === null ? null : notice === null ? label : `${label}. ${notice}`),
+    [label, notice],
   );
+  const changePeriod = (nextPeriod: Period): void => {
+    setPeriod(nextPeriod);
+    currentPeriodButton.current?.focus();
+  };
 
-  if (resolvedRide !== null && history !== null) {
+  if (resolvedRide !== null) {
     return (
       <RideDetailView
         key={resolvedRide.id}
         ride={resolvedRide}
         units={training.unitsPreference.value}
         analysis={rideAnalysis}
-        calloutReason={reviewCalloutReason(history, resolvedRide.id)}
+        calloutReason={history === null ? null : reviewCalloutReason(history, resolvedRide.id)}
         onStartAnalysis={rideAnalysisActions === null ? null : () => rideAnalysisActions.start()}
         onRefreshAnalysis={
           rideAnalysisActions === null ? null : (sections) => rideAnalysisActions.refresh(sections)
@@ -506,31 +634,19 @@ export function TrainingView(): ReactElement {
 
   let historyContent: ReactNode;
   if (history === null || activeWeek === null) {
-    historyContent = <UnavailableHistory />;
+    historyContent = (
+      <>
+        {notice === null ? null : <DataNotice coverage={coverage} notice={notice} />}
+        <UnavailableHistory />
+      </>
+    );
   } else {
     historyContent = (
       <>
-        <div className={styles.periodGroup} role="group" aria-label="Completed riding period">
-          <button
-            type="button"
-            aria-pressed={period === "anchor"}
-            onClick={() => setPeriod("anchor")}
-          >
-            {periodLabel(history, "anchor", retained)}
-          </button>
-          <button
-            type="button"
-            aria-pressed={period === "previous"}
-            disabled={history.previousWeek === null}
-            onClick={() => setPeriod("previous")}
-          >
-            {TRAINING_HISTORY_COPY.previous}
-          </button>
-        </div>
         <p className={styles.srOnly} role="status" aria-live="polite" aria-atomic="true">
           {announcement}
         </p>
-        {warning === null ? null : <p className={styles.dataNotice}>{warning}</p>}
+        {notice === null ? null : <DataNotice coverage={coverage} notice={notice} />}
         <WeeklySummary
           history={history}
           retained={retained}
@@ -545,6 +661,7 @@ export function TrainingView(): ReactElement {
           week={activeWeek}
           units={training.unitsPreference.value}
           onOpen={openRide}
+          onPreviousWeek={() => changePeriod("previous")}
           registerButton={(id, node) => {
             if (node === null) rideButtons.current.delete(id);
             else rideButtons.current.set(id, node);
@@ -557,13 +674,25 @@ export function TrainingView(): ReactElement {
   return (
     <Page
       title="Training"
-      subtitle="Completed riding and recent rides"
+      subtitle={activeWeek === null ? undefined : weekRangeLabel(activeWeek)}
       titleRef={title}
       busy={training.status === "loading"}
-      action={<RideImportAction />}
+      action={
+        <>
+          {history === null ? null : (
+            <PeriodNavigation
+              history={history}
+              period={period}
+              retained={retained}
+              currentButtonRef={currentPeriodButton}
+              onChange={changePeriod}
+            />
+          )}
+          <RideImportAction />
+        </>
+      }
     >
       {historyContent}
-      <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
       <RideImportStatus />
     </Page>
   );

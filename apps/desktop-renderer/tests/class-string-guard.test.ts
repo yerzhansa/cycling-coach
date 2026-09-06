@@ -86,7 +86,6 @@ const BASELINE: readonly Usage[] = [
   { file: "ui/settings/TrainingAccountSection.tsx", className: "text-[10px]" },
   { file: "ui/settings/TrainingAccountSection.tsx", className: "text-[12.5px]" },
   { file: "ui/training/overviewStyles.ts", className: "[&_tbody_th::before]:h-[18px]" },
-  { file: "ui/training/overviewStyles.ts", className: "h-[30px]" },
   { file: "ui/training/overviewStyles.ts", className: "leading-[1.45]" },
   { file: "ui/training/overviewStyles.ts", className: "max-[761px]:min-h-[76px]" },
   { file: "ui/training/overviewStyles.ts", className: "min-h-[78px]" },

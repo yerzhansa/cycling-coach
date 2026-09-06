@@ -1,8 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import {
-  _resolveSecretRefWithOverrides,
-  resolveSecretRef,
-} from "../../src/secrets/resolve.js";
+import { _resolveSecretRefWithOverrides, resolveSecretRef } from "../../src/secrets/resolve.js";
 import { SecretResolutionError } from "../../src/secrets/types.js";
 
 function expectRejection(p: Promise<unknown>): Promise<SecretResolutionError> {
@@ -66,7 +63,7 @@ describe("resolveSecretRef", () => {
     expect(err.code).toBe("EMPTY");
   });
 
-  it("throws EXIT_NONZERO with stderr tail in message", async () => {
+  it("keeps the exit code and guidance without helper stderr", async () => {
     const err = await expectRejection(
       resolveSecretRef({
         source: "exec",
@@ -76,7 +73,8 @@ describe("resolveSecretRef", () => {
     );
     expect(err).toBeInstanceOf(SecretResolutionError);
     expect(err.code).toBe("EXIT_NONZERO");
-    expect(err.message).toContain("boom");
+    expect(err.message).not.toContain("boom");
+    expect(err.message).toContain("Check the secret helper configuration");
     expect(err.message).toContain("2");
   });
 

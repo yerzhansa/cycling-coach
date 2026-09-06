@@ -158,7 +158,7 @@ export const TRAINING_ROW_TITLE = "Intervals.icu";
 
 export const TRAINING_ROW_SUBTITLES = {
   connected: "Connected · where your rides come from",
-  missing: "Required · where your rides come from",
+  missing: "Connect or import ride files.",
 } as const;
 
 export const TRAINING_ROW_TOOLTIP = {

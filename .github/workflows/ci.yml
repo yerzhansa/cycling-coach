@@ -32,6 +32,7 @@ jobs:
           elif ! git diff --quiet "$BASE_SHA" HEAD -- \
             apps/desktop \
             apps/desktop-renderer \
+            tools/ui-verification \
             packages/coach \
             packages/coach-cli \
             packages/coach-client \
@@ -107,22 +108,6 @@ jobs:
           else
             echo "::warning::No changeset found for this PR. Behavioral/user-facing changes should ship a .changeset/*.md (see .changeset/README.md). chore:/ci: PRs are exempt."
           fi
-      - id: desktop_e2e
-        name: Test Desktop E2E on Linux
-        if: needs.desktop-scope.outputs.native == 'true'
-        continue-on-error: true
-        run: |
-          pnpm --filter @enduragent/desktop exec playwright install-deps chromium
-          xvfb-run -a pnpm --filter @enduragent/desktop test:e2e
-      - name: Upload Desktop E2E artifacts
-        if: steps.desktop_e2e.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-e2e-linux-artifacts
-          path: |
-            apps/desktop/playwright-report/
-            apps/desktop/test-results/
-          if-no-files-found: warn
 
   test:
     needs: check
@@ -216,6 +201,10 @@ jobs:
         run: pnpm --filter @enduragent/desktop exec vitest run tests/onboarding-first-run.integration.test.ts tests/spend-meter.integration.test.ts tests/chat-panels.integration.test.ts --maxWorkers=1
       - name: Test Desktop E2E on macOS
         run: pnpm --filter @enduragent/desktop test:e2e
+      - name: Install pinned UI preview browser
+        run: pnpm --filter @enduragent/desktop exec playwright install chromium
+      - name: Verify production component previews
+        run: pnpm check:ui-previews
       - name: Upload Desktop E2E artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

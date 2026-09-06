@@ -1,4 +1,4 @@
-import type { ActivityExportFormat, WorkoutArchiveFormat } from "@enduragent/coach-contract";
+import type { WorkoutArchiveFormat } from "@enduragent/coach-contract";
 import { useId, useState, type ReactElement } from "react";
 import { Button } from "../../components/ui/button";
 import {
@@ -14,11 +14,6 @@ import {
   type TrainingExportTarget,
 } from "../../training-export/controller";
 import { overviewStyles as styles } from "./overviewStyles";
-
-const ACTIVITY_FORMATS = [
-  { value: "fit", label: "FIT" },
-  { value: "gpx", label: "GPX" },
-] as const;
 
 const WORKOUT_FORMATS = [
   { value: "zwo", label: "ZWO" },
@@ -44,61 +39,6 @@ function Status(props: { readonly target: TrainingExportTarget }): ReactElement 
   );
 }
 
-export function ActivityExportControl(props: {
-  readonly canonicalActivityId: string;
-  readonly localDate: string;
-}): ReactElement {
-  const id = useId();
-  const [format, setFormat] = useState<ActivityExportFormat>("fit");
-  const state = useEnduragentStore((store) => store.trainingExport);
-  const actions = useEnduragentStore((store) => store.trainingExportActions);
-  const busy = state.status === "running";
-  return (
-    <section className={styles.analysisPanel} aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`} className={styles.analysisTitle}>
-        Export ride
-      </h2>
-      <p className={styles.analysisIntro}>
-        Save a copy to your computer. Exporting does not change this ride or your training account.
-      </p>
-      <div className={styles.exportControls}>
-        <label htmlFor={`${id}-format`}>File format</label>
-        <Select
-          items={ACTIVITY_FORMATS}
-          value={format}
-          disabled={busy}
-          onValueChange={(value) => {
-            if (value !== null) setFormat(value as ActivityExportFormat);
-          }}
-        >
-          <SelectTrigger id={`${id}-format`} className="min-w-[86px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="start">
-            {ACTIVITY_FORMATS.map((entry) => (
-              <SelectItem key={entry.value} value={entry.value}>
-                {entry.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={actions === null || busy}
-          aria-busy={busy ? "true" : undefined}
-          onClick={() => {
-            void actions?.exportActivity({ ...props, format });
-          }}
-        >
-          Export ride
-        </Button>
-      </div>
-      <Status target="activity" />
-    </section>
-  );
-}
-
 export function WorkoutArchiveExportControl(props: {
   readonly oldest: string;
   readonly newest: string;
@@ -114,7 +54,9 @@ export function WorkoutArchiveExportControl(props: {
         Save the visible planned workouts as a ZIP. Exporting does not change your plan.
       </p>
       <div className={styles.exportControls}>
-        <label htmlFor={`${id}-format`}>Workout format</label>
+        <label className="font-medium" htmlFor={`${id}-format`}>
+          Workout format
+        </label>
         <Select
           items={WORKOUT_FORMATS}
           value={format}

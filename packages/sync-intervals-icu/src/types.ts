@@ -38,9 +38,16 @@ export interface DroppedActivityRowCounts {
   readonly other: number;
 }
 
-export const ZERO_DROPPED_ACTIVITY_ROWS: DroppedActivityRowCounts = Object.freeze({
+export interface DroppedActivityRowEvidence extends DroppedActivityRowCounts {
+  readonly datedLocalDates: readonly string[];
+  readonly undatedCount: number;
+}
+
+export const ZERO_DROPPED_ACTIVITY_ROWS: DroppedActivityRowEvidence = Object.freeze({
   sourceRestricted: 0,
   other: 0,
+  datedLocalDates: Object.freeze([]),
+  undatedCount: 0,
 });
 
 export type IntervalsHttpFactory = (args: {
@@ -91,7 +98,7 @@ export type IntervalsIcuArtifact =
   | IntervalsIcuCheckpoint;
 
 export type IntervalsIcuCheckpoint = SourceCheckpoint & {
-  readonly droppedActivityRows?: DroppedActivityRowCounts;
+  readonly droppedActivityRows?: DroppedActivityRowEvidence;
 };
 
 export interface IntervalsIcuSource extends SyncSource {
@@ -149,5 +156,5 @@ export interface ReferenceCaptureBatch {
   };
   readonly selected_stream_ids: readonly string[];
   readonly captured_stream_ids: readonly string[];
-  readonly dropped_activity_rows: DroppedActivityRowCounts;
+  readonly dropped_activity_rows: DroppedActivityRowEvidence;
 }

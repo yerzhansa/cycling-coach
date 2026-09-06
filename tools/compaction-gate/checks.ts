@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { UsageLedgerLine } from "../../packages/core/src/usage-ledger.js";
 import { TIER_J_FACT_THRESHOLD, TIER_J_MAX_FABRICATIONS } from "./rubric.js";
 
@@ -20,8 +21,11 @@ export function median(values: number[]): number {
 export function factScore(run: JudgeVerdict, inventoryIds: readonly string[]): number {
   if (inventoryIds.length === 0) return 0;
   const inventory = new Set(inventoryIds);
-  const preserved = run.factsPreserved.filter((id) => inventory.has(id));
-  return preserved.length / inventoryIds.length;
+  const missing = new Set(run.factsMissing);
+  const preserved = new Set(
+    run.factsPreserved.filter((id) => inventory.has(id) && !missing.has(id)),
+  );
+  return preserved.size / inventory.size;
 }
 
 /** Tier-J verdict for one transcript from its 3 judge runs. */
@@ -96,24 +100,28 @@ export function cacheEvidence(lines: UsageLedgerLine[]): { ok: boolean; reason: 
   return { ok: true, reason: "cache written on first call and read on a later call" };
 }
 
-/** Strict-JSON extraction for judge replies: parse the first {...} block; throw on failure. */
-export function parseJudgeVerdict(text: string): JudgeVerdict {
+const judgeVerdictSchema = z.object({
+  factsPreserved: z.array(z.string().trim().min(1)),
+  factsMissing: z.array(z.string().trim().min(1)),
+  fabrications: z.array(z.string().trim().min(1)),
+});
+
+export function parseJudgeVerdict(text: string, inventoryIds: readonly string[]): JudgeVerdict {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end < start) {
     throw new Error("no JSON object found in judge reply");
   }
-  const parsed = JSON.parse(text.slice(start, end + 1)) as Partial<JudgeVerdict>;
-  if (
-    !Array.isArray(parsed.factsPreserved) ||
-    !Array.isArray(parsed.factsMissing) ||
-    !Array.isArray(parsed.fabrications)
-  ) {
-    throw new Error("judge reply JSON missing required array fields");
+  const parsed = judgeVerdictSchema.parse(JSON.parse(text.slice(start, end + 1)));
+  const inventory = new Set(inventoryIds);
+  const factsPreserved = [...new Set(parsed.factsPreserved)];
+  const factsMissing = [...new Set(parsed.factsMissing)];
+  for (const id of [...factsPreserved, ...factsMissing]) {
+    if (!inventory.has(id)) throw new Error(`judge reply contains unknown fact ID: ${id}`);
   }
-  return {
-    factsPreserved: parsed.factsPreserved,
-    factsMissing: parsed.factsMissing,
-    fabrications: parsed.fabrications,
-  };
+  const missing = new Set(factsMissing);
+  if (factsPreserved.some((id) => missing.has(id))) {
+    throw new Error("judge reply declares a fact both preserved and missing");
+  }
+  return { factsPreserved, factsMissing, fabrications: parsed.fabrications };
 }

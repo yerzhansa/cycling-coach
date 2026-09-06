@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AthleteStateSchema } from "./athlete-state.js";
+import { isActiveIanaZone } from "./time-zone.js";
 import {
   ChatRequestSchema,
   ChatResponseSchema,
@@ -1002,15 +1003,6 @@ const RuntimeIntervalsSchema = z
     }
   });
 
-function isValidTimeZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const RuntimeHistoryTokenBudgetRatioSchema = z.number().finite().positive().max(1);
 const RuntimeNonnegativeSafeIntegerSchema = z
   .number()
@@ -1018,7 +1010,7 @@ const RuntimeNonnegativeSafeIntegerSchema = z
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER);
 const RuntimeDailyResetHourSchema = z.number().int().min(0).max(23);
-const RuntimeTimezoneSchema = z.string().trim().min(1).max(512).refine(isValidTimeZone);
+const RuntimeTimezoneSchema = z.string().trim().min(1).max(512).refine(isActiveIanaZone);
 
 const RuntimeSessionSchema = z
   .object({

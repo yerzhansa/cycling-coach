@@ -72,7 +72,7 @@ describe("subsystem logger — file sink", () => {
 });
 
 describe("born-redacted invariant", () => {
-  it("redacts payload/requestBodyValues/responseBody and denylisted keys while keeping name/message/statusCode", () => {
+  it("redacts payload/requestBodyValues/responseBody and denylisted keys while keeping name/statusCode", () => {
     const err = Object.assign(new Error("upstream blew up"), {
       name: "APICallError",
       statusCode: 429,
@@ -98,7 +98,7 @@ describe("born-redacted invariant", () => {
     expect(raw).not.toContain("sk-SECRET");
 
     expect(raw).toContain("APICallError");
-    expect(raw).toContain("upstream blew up");
+    expect(raw).not.toContain("upstream blew up");
     expect(raw).toContain("429");
   });
 });
@@ -183,15 +183,29 @@ describe("never throws on an unwritable target", () => {
 });
 
 describe("serializeError unit cases", () => {
-  it("keeps name and message for a plain Error", () => {
-    const out = serializeError(new Error("plain failure"));
-    expect(out.name).toBe("Error");
-    expect(out.message).toBe("plain failure");
+  it.each([TypeError, RangeError, SyntaxError])("keeps the safe built-in error name", (ErrorType) => {
+    expect(serializeError(new ErrorType("marker"))).toEqual({ name: ErrorType.name });
   });
 
-  it("returns { value } for a non-Error without deep inspection", () => {
+  it("does not inspect a proxied error prototype", () => {
+    const callback = vi.fn(() => { throw new Error("marker"); });
+    const error = Object.setPrototypeOf(new Error("marker"), new Proxy(TypeError.prototype, {
+      get: callback,
+      getOwnPropertyDescriptor: callback,
+    }));
+    expect(serializeError(error)).toEqual({ name: "Error" });
+    expect(callback).not.toHaveBeenCalled();
+  });
+  it("keeps name without message or stack for a plain Error", () => {
+    const out = serializeError(new Error("plain failure"));
+    expect(out.name).toBe("Error");
+    expect(out).not.toHaveProperty("message");
+    expect(out).not.toHaveProperty("stack");
+  });
+
+  it("returns a fixed name for a non-Error without deep inspection", () => {
     const out = serializeError({ not: "an error" });
-    expect(out).toEqual({ value: "[object Object]" });
+    expect(out).toEqual({ name: "NonError" });
   });
 
   it("does not throw and yields a sentinel for a circular error", () => {
@@ -202,7 +216,7 @@ describe("serializeError unit cases", () => {
       out = serializeError(err);
     }).not.toThrow();
     expect(out.name).toBe("Error");
-    expect(out.message).toBe("cyclic");
+    expect(out).not.toHaveProperty("message");
     // The circular field is replaced by a sentinel, never recursed into.
     expect(JSON.stringify(out)).toContain("[redacted]");
   });
@@ -221,5 +235,83 @@ describe("serializeError unit cases", () => {
     expect(out).not.toHaveProperty("requestBodyValues");
     expect(out).not.toHaveProperty("responseBody");
     expect(out).not.toHaveProperty("payload");
+  });
+});
+
+describe("final diagnostic sinks", () => {
+  it("sanitizes raw root fields, nested errors and URL text before persistence and console output", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const root = createRootLogger(dir);
+    root.emit("error", {
+      component: "agent",
+      event: "request_failed https://marker@example.invalid/marker?token=marker#marker",
+      err: Object.assign(new Error("marker"), { statusCode: 503, code: "ECONNRESET", path: "marker", cause: new Error("marker") }),
+      nested: [{ apiKey: "marker", message: "marker", url: "marker" }],
+      note: "Bearer marker",
+      requestUrl: "marker",
+    });
+    const raw = readLines(dir).join("\n");
+    expect(raw).not.toContain("marker");
+    expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain("marker");
+    expect(JSON.parse(raw).err).toMatchObject({
+      name: "Error",
+      statusCode: 503,
+      code: "ECONNRESET",
+    });
+  });
+
+  it.each(["debug", "info", "warn", "error"] as const)("protects canonical %s fields", (level) => {
+    const log = createSubsystemLogger("agent", dir, { threshold: "error" });
+    const fields = {
+      component: "marker",
+      event: "marker",
+      err: { token: "marker" },
+      ts: "marker",
+      level: "marker",
+    };
+    if (level === "warn" || level === "error")
+      log[level]("request_failed", new Error("marker"), fields);
+    else log[level]("request_failed", fields);
+    const raw = readLines(dir).join("\n");
+    expect(raw).not.toContain("marker");
+    expect(JSON.parse(raw)).toMatchObject({ component: "agent", event: "request_failed", level });
+  });
+
+  it("never invokes field getters, proxy traps, toJSON or error coercion", () => {
+    const callback = vi.fn(() => {
+      throw new Error("marker");
+    });
+    const hostile = new Proxy({}, { ownKeys: callback, get: callback });
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    const fields = Object.defineProperty(
+      { hostile, revoked: revoked.proxy, toJSON: callback, bigint: 1n },
+      "getter",
+      { enumerable: true, get: callback },
+    );
+    const log = createSubsystemLogger("agent", dir);
+    expect(() => log.error("request_failed", { toString: callback }, fields)).not.toThrow();
+    expect(() => log.info("request_failed", hostile)).not.toThrow();
+    expect(() =>
+      createRootLogger(dir).emit(
+        "info",
+        Object.defineProperty({ component: "agent", event: "request_failed" }, "getter", {
+          enumerable: true,
+          get: callback,
+        }),
+      ),
+    ).not.toThrow();
+    expect(callback).not.toHaveBeenCalled();
+    expect(readLines(dir)).toHaveLength(3);
+    expect(readLines(dir).join("\n")).not.toContain("marker");
+  });
+
+  it("does not throw if timestamp generation fails", () => {
+    const root = createRootLogger(dir, {
+      now: () => {
+        throw new Error("marker");
+      },
+    });
+    expect(() => root.emit("info", { component: "agent", event: "request_failed" })).not.toThrow();
   });
 });

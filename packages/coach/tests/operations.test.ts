@@ -653,7 +653,7 @@ describe("coach operations", () => {
       pages: 0,
       artifacts: 0,
       reports: [],
-      droppedActivityRows: { sourceRestricted: 0, other: 0 },
+      droppedActivityRows: { sourceRestricted: 0, other: 0, datedLocalDates: [], undatedCount: 0 },
     }));
     const pending = { value: true };
     const operations = createCoachOperations(
@@ -699,7 +699,7 @@ describe("coach operations", () => {
         pages: 1,
         artifacts: 1,
         reports: [],
-        droppedActivityRows: { sourceRestricted: 60, other: 2 },
+        droppedActivityRows: { sourceRestricted: 60, other: 2, datedLocalDates: [], undatedCount: 62 },
       };
     });
     const runWindowAfter = vi.fn(async (work: (signal: AbortSignal) => Promise<void>) => {
@@ -813,7 +813,7 @@ describe("coach operations", () => {
         pages: 1,
         artifacts: 0,
         reports: [],
-        droppedActivityRows: { sourceRestricted: 0, other: 0 },
+        droppedActivityRows: { sourceRestricted: 0, other: 0, datedLocalDates: [], undatedCount: 0 },
       }));
       const refresh = vi.fn();
       const runtime = {
@@ -870,7 +870,7 @@ describe("coach operations", () => {
           pages: 1,
           artifacts: 1,
           reports: [],
-          droppedActivityRows: { sourceRestricted: 60, other: 2 },
+          droppedActivityRows: { sourceRestricted: 60, other: 2, datedLocalDates: [], undatedCount: 62 },
         };
       });
       const runtime = {
@@ -932,7 +932,7 @@ describe("coach operations", () => {
           pages: 1,
           artifacts: 0,
           reports: [],
-          droppedActivityRows: { sourceRestricted: 0, other: 0 },
+          droppedActivityRows: { sourceRestricted: 0, other: 0, datedLocalDates: [], undatedCount: 0 },
         };
       });
       const runtime = {

@@ -1,3 +1,4 @@
+import { readImportArtifact } from "./import-report.js";
 import { assertValidAddress } from "../archive/paths.js";
 import { sortKeys } from "../store/canonical-json.js";
 import { createDedupConfirmationRepository } from "../store/dedup-confirmation-repository.js";
@@ -171,7 +172,8 @@ export async function importArtifactsIncrementally(batch: ImportBatch, deps: Imp
   const inputPaths = new Set<string>();
   const incomingAddresses = new Map<string, PreparedAddress>();
   const fileReports: { readonly report: FileReport; readonly address: string }[] = [];
-  for (const file of [...batch.files].sort((a, b) => compareText(a.input_path, b.input_path))) {
+  for (const input of [...batch.files].sort((a, b) => compareText(a.input_path, b.input_path))) {
+    const file = await readImportArtifact(input);
     if (typeof file.input_path !== "string" || file.input_path.length === 0 || inputPaths.has(file.input_path)) throw new TypeError("duplicate or invalid input path");
     inputPaths.add(file.input_path);
     const result = await phase(deps, "archive-decode", () => deps.prepareFile({ ...file, bytes: new Uint8Array(file.bytes) }, settings));

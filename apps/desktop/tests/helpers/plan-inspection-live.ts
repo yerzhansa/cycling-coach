@@ -6,10 +6,18 @@ import { launchDesktopFixture } from "./desktop-fixture.js";
 import { PLAN_QA_ATHLETE_STATE } from "./inspection-athlete-states.js";
 import { createPlanQaFixtureScript } from "./plan-qa-live.js";
 import { TRAINING_CURRENT_ATHLETE_STATE } from "./training-current-athlete-state.js";
+import { TRAINING_INCOMPLETE_ATHLETE_STATE } from "./training-incomplete-athlete-state.js";
+import { TRAINING_LIMITED_ATHLETE_STATE } from "./training-limited-athlete-state.js";
+import { TRAINING_NO_POWER_ATHLETE_STATE } from "./training-no-power-athlete-state.js";
+import { TRAINING_STALE_ATHLETE_STATE } from "./training-stale-athlete-state.js";
 
 export const PLAN_INSPECTION_SCENARIO_ID = "PL-S004";
 export const PLAN_CURRENT_INSPECTION_FIXTURE = "plan-current";
 export const TRAINING_CURRENT_INSPECTION_FIXTURE = "training-current";
+export const TRAINING_NO_POWER_INSPECTION_FIXTURE = "training-no-power";
+export const TRAINING_LIMITED_INSPECTION_FIXTURE = "training-limited";
+export const TRAINING_INCOMPLETE_INSPECTION_FIXTURE = "training-incomplete";
+export const TRAINING_STALE_INSPECTION_FIXTURE = "training-stale";
 
 export const PLAN_INSPECTION_TURNS = Object.freeze([
   Object.freeze({
@@ -85,6 +93,18 @@ export function inspectionAthleteState(inspectionFixture: string | undefined): A
   }
   if (inspectionFixture === TRAINING_CURRENT_INSPECTION_FIXTURE) {
     return TRAINING_CURRENT_ATHLETE_STATE;
+  }
+  if (inspectionFixture === TRAINING_NO_POWER_INSPECTION_FIXTURE) {
+    return TRAINING_NO_POWER_ATHLETE_STATE;
+  }
+  if (inspectionFixture === TRAINING_LIMITED_INSPECTION_FIXTURE) {
+    return TRAINING_LIMITED_ATHLETE_STATE;
+  }
+  if (inspectionFixture === TRAINING_INCOMPLETE_INSPECTION_FIXTURE) {
+    return TRAINING_INCOMPLETE_ATHLETE_STATE;
+  }
+  if (inspectionFixture === TRAINING_STALE_INSPECTION_FIXTURE) {
+    return TRAINING_STALE_ATHLETE_STATE;
   }
   throw new TypeError("unknown desktop inspection fixture");
 }

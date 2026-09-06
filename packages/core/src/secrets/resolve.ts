@@ -14,16 +14,10 @@ export async function resolveSecretRef(ref: SecretRef): Promise<string> {
 function resolveEnvRef(name: string): string {
   const value = process.env[name];
   if (value === undefined) {
-    throw new SecretResolutionError(
-      "ENOENT",
-      `Secret env var '${name}' is not set.`,
-    );
+    throw new SecretResolutionError("ENOENT", `Secret env var '${name}' is not set.`);
   }
   if (value === "") {
-    throw new SecretResolutionError(
-      "EMPTY",
-      `Secret env var '${name}' is set but empty.`,
-    );
+    throw new SecretResolutionError("EMPTY", `Secret env var '${name}' is set but empty.`);
   }
   return value;
 }
@@ -47,7 +41,6 @@ export async function _resolveSecretRefWithOverrides(
 
     let settled = false;
     let stdout = "";
-    let stderr = "";
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
@@ -80,7 +73,6 @@ export async function _resolveSecretRefWithOverrides(
           }
           return;
         }
-        stderr += text;
       }
     };
 
@@ -99,7 +91,7 @@ export async function _resolveSecretRefWithOverrides(
         reject(
           new SecretResolutionError(
             "EXIT_NONZERO",
-            `Secret resolver command '${cmd}' failed to spawn: ${err.message}`,
+            `Secret resolver command '${cmd}' failed to spawn. Check its executable path and access permissions.`,
           ),
         );
       }
@@ -132,11 +124,10 @@ export async function _resolveSecretRefWithOverrides(
         return;
       }
       if (code !== 0) {
-        const tail = stderr.slice(-200).trim();
         reject(
           new SecretResolutionError(
             "EXIT_NONZERO",
-            `Secret resolver '${cmd}' exited with code ${code}${tail ? `: ${tail}` : "."}`,
+            `Secret resolver '${cmd}' exited with code ${code}. Check the secret helper configuration and access permissions.`,
           ),
         );
         return;
@@ -145,10 +136,7 @@ export async function _resolveSecretRefWithOverrides(
       const trimmed = stdout.replace(/\r?\n$/, "");
       if (trimmed.length === 0) {
         reject(
-          new SecretResolutionError(
-            "EMPTY",
-            `Secret resolver '${cmd}' produced empty output.`,
-          ),
+          new SecretResolutionError("EMPTY", `Secret resolver '${cmd}' produced empty output.`),
         );
         return;
       }

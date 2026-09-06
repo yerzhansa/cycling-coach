@@ -126,7 +126,6 @@ import {
 import { projectAnalyticsCurveEvidence } from "@enduragent/sync-intervals-icu";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
-import { createRecentRidesSource } from "./recent-rides.js";
 import { createTrainingHistorySource } from "./training-history.js";
 import {
   assertRuntimeAthleteOwner,
@@ -1277,7 +1276,6 @@ export async function createLocalCoachComposition(
       cyclingFtpAnchorResolver,
       now: () => new Date(now()),
       powerProgressSource: powerProgress,
-      recentRidesSource: createRecentRidesSource(canonicalActivities),
       trainingHistorySource: trainingHistory,
       sourceOwner: () => approvedConfig().intervals.athleteId,
       calendarTimeZone: () => resolveUserTimezone(approvedConfig().session.timezone),

@@ -598,7 +598,7 @@ describe("coach-dev import --report", () => {
     expect(await exists(databasePath)).toBe(true);
     const store = openSqliteStorage(databasePath);
     try {
-      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 30 });
+      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 31 });
       expect(await store.get("SELECT count(*) AS c FROM raw_file")).toEqual({ c: 1 });
       expect(await store.get("SELECT count(*) AS c FROM source_record")).toEqual({ c: 0 });
       expect(
@@ -1409,7 +1409,7 @@ describe("coach-dev import --report", () => {
               expect(archived).toBe(3);
               readsAtImport = readCalls;
               for (const file of batch.files) {
-                expect(file.bytes).toEqual(expected.get(file.input_path));
+                expect(file).toMatchObject({ bytes: expected.get(file.input_path) });
               }
               await Promise.all(paths.map((path) => rm(path)));
               return runtime.importBatchWithReport(batch);

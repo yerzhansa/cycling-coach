@@ -317,7 +317,7 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
 
     for (const variant of [
       { failure: NON_ERROR_SECRET, data: { name: "NonError" } },
-      { failure: hostileError(), data: { name: "UnserializableError" } },
+      { failure: hostileError(), data: { name: "Error", statusCode: "[redacted]" } },
     ]) {
       failure = variant.failure;
       const stdout = capture();

@@ -293,15 +293,16 @@ describe("CoachAgent selective Garmin attribution", () => {
 
   it("does not count source fields hidden by the result cap", async () => {
     const execute = vi.fn(async () => [
-      { id: "synthetic", source: "GARMIN_CONNECT", samples: "x".repeat(20_000) },
+      { id: "synthetic", source: "GARMIN_CONNECT", samples: "x".repeat(100_000) },
     ]);
     let calls = 0;
     const complete = vi.fn(async () =>
       ++calls === 1 ? toolCall() : assistant("Capped guidance."),
     );
-    const agent = await setupAgent(complete, activitySport(execute), 2_000);
+    const agent = await setupAgent(complete, activitySport(execute), 40_000);
 
     expect(await agent.chat("capped", "Use the activity.")).toBe("Capped guidance.");
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it("does not carry Garmin evidence across a failed outer attempt", async () => {
@@ -419,7 +420,7 @@ describe("CoachAgent selective Garmin attribution", () => {
     });
   });
 
-  it("does not attribute history dropped before the generation boundary", async () => {
+  it("attributes retained history after dropped-message summarization fails", async () => {
     const complete = vi.fn(async (params: { messages: unknown }) => {
       if (JSON.stringify(params.messages).includes("Incorporate the older conversation")) {
         throw new Error("summary unavailable");
@@ -427,7 +428,7 @@ describe("CoachAgent selective Garmin attribution", () => {
       return assistant("Visible-history guidance.");
     });
     const { agent } = await setupAgentWithStore(complete, syntheticSport, {
-      contextWindowTokens: 8_000,
+      contextWindowTokens: 40_000,
       seed: [
         {
           role: "assistant",
@@ -442,7 +443,15 @@ describe("CoachAgent selective Garmin attribution", () => {
       ],
     });
 
-    expect(await agent.chat("dropped-history", "What now?")).toBe("Visible-history guidance.");
+    expect(await agent.chat("dropped-history", "What now?")).toBe(
+      `Visible-history guidance.\n\n${GARMIN_DATA_ATTRIBUTION}`,
+    );
+    expect(
+      complete.mock.calls.some(([params]) =>
+        JSON.stringify(params.messages).includes("Incorporate the older conversation"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(complete.mock.calls.at(-1)?.[0].messages)).toContain("x".repeat(30_000));
   });
 
   it("isolates concurrent chats", async () => {

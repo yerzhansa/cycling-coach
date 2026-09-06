@@ -1,6 +1,14 @@
-import { appendFileSync, mkdirSync, renameSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  renameSync,
+  statSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
+import { redactObject, REDACTION_SENTINEL } from "./redact.js";
 import { type LogLevel, normalizeLogLevel, isLevelEnabled } from "./levels.js";
 
 export const LOG_FILE = "log.jsonl";
@@ -29,7 +37,7 @@ export interface LogInput {
 }
 
 export interface RootLogger {
-  emit(level: LogLevel, line: LogInput): void;
+  emit(level: LogLevel, line: LogInput, fields?: Record<string, unknown>): void;
 }
 
 export interface RootLoggerOptions {
@@ -112,14 +120,35 @@ export function createRootLogger(dataDir: string, options: RootLoggerOptions = {
   }
 
   return {
-    emit(level, line) {
-      const record: LogLine = {
-        ...line,
-        ts: new Date(now()).toISOString(),
-        level,
-        component: line.component,
-        event: line.event,
-      };
+    emit(level, line, fields) {
+      let record: LogLine;
+      try {
+        const sanitized = redactObject(line);
+        const extra = redactObject(fields);
+        const safeLine = sanitized !== null && typeof sanitized === "object" ? sanitized : {};
+        const safeFields = extra !== null && typeof extra === "object" ? extra : {};
+        const component =
+          "component" in safeLine && typeof safeLine.component === "string"
+            ? safeLine.component
+            : REDACTION_SENTINEL;
+        const event =
+          "event" in safeLine && typeof safeLine.event === "string"
+            ? safeLine.event
+            : REDACTION_SENTINEL;
+        record = {
+          ...safeFields,
+          ...safeLine,
+          ts: new Date(now()).toISOString(),
+          level,
+          component,
+          event,
+        };
+        delete record.err;
+        const error = Object.getOwnPropertyDescriptor(safeLine, "err");
+        if (error && "value" in error) record.err = error.value;
+      } catch {
+        return;
+      }
 
       if (isLevelEnabled(level, threshold)) {
         const sink = consoleSink(level);

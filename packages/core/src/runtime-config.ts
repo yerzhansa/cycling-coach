@@ -559,6 +559,9 @@ export function resolveRuntimeConfig(
     : current !== undefined && !providerChanged
       ? current.llm.model
       : DEFAULT_MODELS[provider];
+  if (model === "gpt-6-astra" && (provider === "openai-codex" || provider === "codex-agent")) {
+    throw new TypeError("GPT-6 Astra is not enabled for this connection; use the public OpenAI API.");
+  }
   const selectionChanged = current === undefined || providerChanged || model !== current.llm.model;
   const keyless = isKeylessProvider(provider);
   const apiKey = keyless
@@ -592,25 +595,32 @@ export function resolveRuntimeConfig(
         )
       : undefined;
 
+  const astra = provider === "openai" && model === "gpt-6-astra";
+  const backgroundModel = astra
+    ? current !== undefined && !providerChanged && current.llm.model !== "gpt-6-astra"
+      ? current.llm.model
+      : DEFAULT_MODELS.openai
+    : model;
   const requestedFlushModel = optionalModel(llmPatch, "flushModel");
   const flushModel =
     requestedFlushModel === null
       ? undefined
       : (requestedFlushModel ??
-        (current !== undefined && !providerChanged ? current.llm.flushModel : undefined));
+        (current !== undefined && !providerChanged ? current.llm.flushModel : undefined) ??
+        (astra ? backgroundModel : undefined));
 
   const requestedCompactModel = optionalModel(llmPatch, "compactModel");
   const compactModel =
     provider === "openai-codex"
       ? model
       : requestedCompactModel === null
-        ? (compactModelDefault(provider) ?? model)
+        ? (compactModelDefault(provider) ?? backgroundModel)
         : (requestedCompactModel ??
           (current !== undefined && !providerChanged
             ? model !== current.llm.model && current.llm.compactModel === current.llm.model
-              ? model
+              ? backgroundModel
               : current.llm.compactModel
-            : (compactModelDefault(provider) ?? model)));
+            : (compactModelDefault(provider) ?? backgroundModel)));
 
   let baseUrl: string | undefined;
   if (

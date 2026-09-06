@@ -113,7 +113,7 @@ export interface NpmAttestationExpectation {
   readonly repository: string;
   readonly workflow: string;
   readonly ref: string;
-  readonly commit: string;
+  readonly workflowCommit: string;
   readonly invocationId: string;
   readonly allowPriorInvocation?: boolean;
   readonly releaseTag: string;
@@ -480,7 +480,7 @@ export function inspectNpmAttestationClaims(
   const matchingDependencies = dependencies.filter((dependency) => {
     if (!exactObject(dependency) || !exactObject(dependency.digest)) return false;
     return (
-      dependency.digest.gitCommit === expected.commit &&
+      dependency.digest.gitCommit === expected.workflowCommit &&
       dependency.uri === `git+${expected.repository}@${workflowRef}`
     );
   });
@@ -2418,7 +2418,7 @@ async function main(): Promise<void> {
         repository: argument("repository"),
         workflow: argument("workflow"),
         ref: argument("ref"),
-        commit: argument("commit"),
+        workflowCommit: argument("workflow-commit"),
         invocationId: argument("invocation-id"),
         allowPriorInvocation: argument("allow-prior-invocation") === "true",
         releaseTag: argument("release-tag"),

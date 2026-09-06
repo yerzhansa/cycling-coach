@@ -236,7 +236,7 @@ describe("persisted athlete state source", () => {
       cyclingFtpAnchorResolver: resolver,
       trainingHistorySource: {
         readTrainingHistory: async () => {
-          if (fail) throw new Error("synthetic");
+          if (fail) return { kind: "unavailable", reason: "temporary-failure" };
           return computedTrainingHistory();
         },
       },
@@ -272,7 +272,7 @@ describe("persisted athlete state source", () => {
     });
   });
 
-  it("passes domain unavailable projections through without consuming last-good history", async () => {
+  it("uses last-good history for returned temporary failures only", async () => {
     const root = await home();
     await writeJson(root, "latest.json", latest("fresh", T1));
     let response: TrainingHistoryProjection | "throw" = computedTrainingHistory();
@@ -287,19 +287,23 @@ describe("persisted athlete state source", () => {
       },
       sourceOwner: () => "synthetic-athlete",
       calendarTimeZone: () => "UTC",
+      now: () => new Date(T1),
     });
 
     await reader.getAthleteState();
-    for (const reason of [
-      "coverage-unavailable",
-      "temporary-failure",
-      "invalid-data",
-    ] as const) {
+    for (const reason of ["coverage-unavailable", "invalid-data"] as const) {
       response = { kind: "unavailable", reason };
       expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toEqual(
         response,
       );
     }
+    response = { kind: "unavailable", reason: "temporary-failure" };
+    expect((await reader.getAthleteState()).trainingContext?.trainingHistory).toMatchObject({
+      kind: "stale",
+      failedAt: T1,
+      reason: "temporary-failure",
+      lastGood: { anchorWeek: { callout: null }, previousWeek: { callout: null } },
+    });
     response = "throw";
     expect((await reader.getAthleteState()).trainingContext?.trainingHistory.kind).toBe(
       "stale",
@@ -324,16 +328,11 @@ describe("persisted athlete state source", () => {
     const root = await home();
     const now = new Date("1998-07-18T12:00:00.000Z");
     const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
-    const readRecentRides = vi.fn(async () => ({
-      kind: "unknown" as const,
-      reason: "not-synced" as const,
-    }));
 
     const state = await createPersistedAthleteStateSource({
       dataDir: root,
       cyclingFtpAnchorResolver: resolver,
       now: () => now,
-      recentRidesSource: { readRecentRides },
       trainingHistorySource: { readTrainingHistory },
       sourceOwner: () => "synthetic-athlete",
       calendarTimeZone: () => "UTC",
@@ -347,7 +346,38 @@ describe("persisted athlete state source", () => {
       freshness: "fresh",
       sourceRestricted: false,
     });
+    expect(state.trainingContext?.recentRides).toEqual({
+      kind: "unknown",
+      reason: "not-synced",
+    });
     expect(state.trainingContext?.trainingHistory).toMatchObject({ kind: "computed" });
+  });
+
+  it("derives canonical-store training-history freshness from the successful sync marker", async () => {
+    const root = await home();
+    const now = new Date("1998-07-23T00:00:00.000Z");
+    await writeJson(root, ".scheduler.json", schedulerState(T1));
+    const readTrainingHistory = vi.fn(async () => computedTrainingHistory());
+
+    const state = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      trainingHistorySource: { readTrainingHistory },
+      sourceOwner: () => "synthetic-athlete",
+      calendarTimeZone: () => "UTC",
+    }).getAthleteState();
+
+    expect(readTrainingHistory).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+      calendarTimeZone: "UTC",
+      freshness: "stale",
+      sourceRestricted: false,
+    });
+    expect(state.freshness).toBe("stale");
+    expect(state.lastUpdated).toBe(T1);
+    expect(state.lastSynced).toBe(T1);
   });
 
   it("evaluates training history now and prefers the successful sync marker for freshness", async () => {

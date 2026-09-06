@@ -331,8 +331,11 @@ describe("StoreRuntime", () => {
       level: "warn",
       component: "sync",
       event: "analytics_curve_refresh_failed",
-      err: { name: "Error", message: "curve adapter failed", authorization: "[redacted]" },
+      err: { name: "Error", authorization: "[redacted]" },
     });
+    expect(raw).not.toContain("curve adapter failed");
+    expect(JSON.parse(raw.trim()).err).not.toHaveProperty("message");
+    expect(JSON.parse(raw.trim()).err).not.toHaveProperty("stack");
     expect(raw).not.toContain("SECRET-CURVE-KEY");
     expect(raw).not.toContain("Basic SECRET");
     await runtime.close();
@@ -403,10 +406,12 @@ describe("StoreRuntime", () => {
       event: "scheduled_store_refresh_failed",
       err: {
         name: "Error",
-        message: "capture failed",
         authorization: "[redacted]",
       },
     });
+    expect(raw).not.toContain("capture failed");
+    expect(JSON.parse(lines[0]!).err).not.toHaveProperty("message");
+    expect(JSON.parse(lines[0]!).err).not.toHaveProperty("stack");
     expect(raw).not.toContain("SECRET-API-KEY");
     expect(raw).not.toContain("Bearer SECRET");
     expect(runtime.currentSnapshot()).toBe(produced);

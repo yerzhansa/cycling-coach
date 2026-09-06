@@ -20,7 +20,7 @@ const commit: CoverageCommitInput = {
   coveredOldest: "1998-04-13",
   coveredNewest: "1998-07-06",
   committedEpochSeconds: 899_712_000,
-  gapState: "none",
+  gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 0 },
 };
 
 describe("training history coverage", () => {
@@ -111,6 +111,7 @@ describe("training history coverage", () => {
       cursorAfter,
       droppedSourceRestricted: 2,
       droppedOther: 1,
+      gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 1 },
       terminal: false,
     } as const;
 
@@ -131,6 +132,42 @@ describe("training history coverage", () => {
     ).rejects.toEqual(
       expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
     );
+  });
+
+  it("preserves explicit empty gap evidence across checkpoint retries", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+    const cursorAfter = JSON.stringify({
+      v: 1,
+      cycle: 8,
+      window_start: "1998-01-01",
+      window_end: "1998-07-18",
+      last_key: "1998-07-17T12:00:00Z\u001fsynthetic",
+      complete: false,
+    });
+    const checkpoint = {
+      authorityId: "filtered-gap-backfill-cycle",
+      sourceCycle: 8,
+      pageOrdinal: 0,
+      requestedOldest: "1998-01-01",
+      requestedNewest: "1998-07-18",
+      calendarTimeZone: "Asia/Almaty",
+      cursorAfter,
+      droppedSourceRestricted: 2,
+      droppedOther: 1,
+      gaps: { datedLocalDates: [], undatedCount: 0 },
+      terminal: false,
+    } as const;
+
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, checkpoint),
+    ).resolves.toEqual({ kind: "inserted", checkpointId: 1 });
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, checkpoint),
+    ).resolves.toEqual({ kind: "already-recorded", checkpointId: 1 });
+    await expect(
+      repository.readBackfillCheckpoint(store, { sourceCycle: 8, cursorAfter }),
+    ).resolves.toEqual({ checkpointId: 1, ...checkpoint });
   });
 
   it("enforces append-only commit and checkpoint rows", async () => {
@@ -192,5 +229,239 @@ describe("training history coverage", () => {
       "capture-later-12345",
     ]);
     expect(rows.map(({ coverageCommitId }) => coverageCommitId)).toEqual([2, 3, 1]);
+    expect(rows.at(-1)?.gaps).toEqual({
+      datedLocalDates: ["1998-07-01"],
+      undatedCount: 0,
+    });
+  });
+
+  it("maps pre-migration gap rows to conservative undated evidence", async () => {
+    const store = openStore();
+    database!
+      .prepare(
+        `INSERT INTO training_history_coverage_commit (
+  source, lane, authority_kind, authority_id, calendar_timezone,
+  covered_oldest_date_key, covered_newest_date_key, committed_epoch_seconds, gap_state
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "intervals-icu",
+        "activities",
+        "reference-capture",
+        CAPTURE_ID,
+        "Asia/Almaty",
+        19980413,
+        19980706,
+        899_712_000,
+        "undated-dropped-rows",
+      );
+    database!
+      .prepare(
+        `INSERT INTO training_history_backfill_checkpoint (
+  authority_id, source_cycle, page_ordinal, requested_oldest_key, requested_newest_key,
+  calendar_timezone, cursor_after, dropped_source_restricted, dropped_other, terminal
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-backfill-cycle",
+        9,
+        0,
+        19980413,
+        19980706,
+        "Asia/Almaty",
+        "legacy-cursor",
+        2,
+        1,
+        0,
+      );
+
+    await expect(
+      createTrainingCoverageReader(store).listCommits({
+        source: "intervals-icu",
+        lane: "activities",
+      }),
+    ).resolves.toMatchObject([{ gaps: { datedLocalDates: [], undatedCount: 1 } }]);
+    await expect(
+      createTrainingCoverageRepository().readBackfillCheckpoint(store, {
+        sourceCycle: 9,
+        cursorAfter: "legacy-cursor",
+      }),
+    ).resolves.toMatchObject({ gaps: { datedLocalDates: [], undatedCount: 3 } });
+  });
+
+  it("rejects unsorted or out-of-window dated gap evidence", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        gaps: {
+          datedLocalDates: ["1998-07-02", "1998-07-01"],
+          undatedCount: 0,
+        },
+      }),
+    ).rejects.toThrow("invalid training coverage gaps");
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        gaps: { datedLocalDates: ["1998-07-07"], undatedCount: 0 },
+      }),
+    ).rejects.toThrow("invalid training coverage gaps");
+  });
+
+  it("accepts a compatible retry over a version-0 commit row", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+    const seedLegacyCommit = (authorityId: string, gapState: string) =>
+      database!
+        .prepare(
+          `INSERT INTO training_history_coverage_commit (
+  source, lane, authority_kind, authority_id, calendar_timezone,
+  covered_oldest_date_key, covered_newest_date_key, committed_epoch_seconds, gap_state
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "intervals-icu",
+          "activities",
+          "reference-capture",
+          authorityId,
+          "Asia/Almaty",
+          19980413,
+          19980706,
+          899_712_000,
+          gapState,
+        );
+    seedLegacyCommit(CAPTURE_ID, "undated-dropped-rows");
+    seedLegacyCommit("legacy-clean-capture", "none");
+
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 0 },
+      }),
+    ).resolves.toEqual({ kind: "already-recorded", commitId: 1 });
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        gaps: { datedLocalDates: [], undatedCount: 0 },
+      }),
+    ).resolves.toEqual({ kind: "already-recorded", commitId: 1 });
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        authorityId: "legacy-clean-capture",
+        gaps: { datedLocalDates: [], undatedCount: 0 },
+      }),
+    ).resolves.toEqual({ kind: "already-recorded", commitId: 2 });
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        authorityId: "legacy-clean-capture",
+        gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 0 },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        authorityId: "legacy-clean-capture",
+        gaps: { datedLocalDates: [], undatedCount: 1 },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        calendarTimeZone: "Europe/Berlin",
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+  });
+
+  it("keeps exact gap comparison for version-1 rows", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+    const checkpoint = {
+      authorityId: "exact-backfill-cycle",
+      sourceCycle: 11,
+      pageOrdinal: 0,
+      requestedOldest: "1998-04-13",
+      requestedNewest: "1998-07-06",
+      calendarTimeZone: "Asia/Almaty",
+      cursorAfter: "exact-cursor",
+      droppedSourceRestricted: 2,
+      droppedOther: 1,
+      gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 1 },
+      terminal: false,
+    } as const;
+    await repository.appendCommitInTransaction(store, commit);
+    await repository.appendBackfillCheckpointInTransaction(store, checkpoint);
+
+    await expect(
+      repository.appendCommitInTransaction(store, {
+        ...commit,
+        gaps: { datedLocalDates: [], undatedCount: 0 },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, {
+        ...checkpoint,
+        gaps: { datedLocalDates: [], undatedCount: 0 },
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+  });
+
+  it("accepts a compatible retry over a version-0 checkpoint row", async () => {
+    const store = openStore();
+    const repository = createTrainingCoverageRepository();
+    database!
+      .prepare(
+        `INSERT INTO training_history_backfill_checkpoint (
+  authority_id, source_cycle, page_ordinal, requested_oldest_key, requested_newest_key,
+  calendar_timezone, cursor_after, dropped_source_restricted, dropped_other, terminal
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("legacy-backfill-cycle", 9, 0, 19980413, 19980706, "Asia/Almaty", "legacy-cursor", 2, 1, 0);
+    const checkpoint = {
+      authorityId: "legacy-backfill-cycle",
+      sourceCycle: 9,
+      pageOrdinal: 0,
+      requestedOldest: "1998-04-13",
+      requestedNewest: "1998-07-06",
+      calendarTimeZone: "Asia/Almaty",
+      cursorAfter: "legacy-cursor",
+      droppedSourceRestricted: 2,
+      droppedOther: 1,
+      gaps: { datedLocalDates: ["1998-07-01"], undatedCount: 1 },
+      terminal: false,
+    } as const;
+
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, checkpoint),
+    ).resolves.toEqual({ kind: "already-recorded", checkpointId: 1 });
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, {
+        ...checkpoint,
+        droppedOther: 2,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
+    await expect(
+      repository.appendBackfillCheckpointInTransaction(store, {
+        ...checkpoint,
+        terminal: true,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({ name: "TrainingCoverageError", code: "authority_conflict" }),
+    );
   });
 });
