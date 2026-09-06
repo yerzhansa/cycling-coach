@@ -4,6 +4,10 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type { Plugin } from "vite";
+import {
+  assertPreviewInputsCovered,
+  previewWorkspaceDirectories,
+} from "../../tools/ui-verification/preview-scope";
 
 interface SourceHash {
   readonly path: string;
@@ -26,6 +30,7 @@ export function previewSourceIdentity(options: { readonly root: string }): Plugi
     encoding: "utf8",
   }).trim();
   const require = createRequire(resolve(root, "package.json"));
+  const previewDirectories = previewWorkspaceDirectories(repository);
   const moduleSources = new Map<string, string>();
   const capturedFiles = new Map<string, string>();
   let building = false;
@@ -79,6 +84,7 @@ export function previewSourceIdentity(options: { readonly root: string }): Plugi
 
   async function verifyFiles(): Promise<void> {
     const paths = [...capturedFiles.keys()];
+    assertPreviewInputsCovered(paths.map(identify), previewDirectories);
     for (let start = 0; start < paths.length; start += 64) {
       await Promise.all(paths.slice(start, start + 64).map(captureFile));
     }
@@ -92,6 +98,8 @@ export function previewSourceIdentity(options: { readonly root: string }): Plugi
     const paths = new Set([
       resolve(repository, "pnpm-lock.yaml"),
       resolve(repository, "package.json"),
+      resolve(repository, "pnpm-workspace.yaml"),
+      resolve(repository, "apps/desktop/package.json"),
       resolve(root, "package.json"),
       resolve(root, "vite.config.ts"),
       resolve(root, "tsconfig.json"),

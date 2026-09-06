@@ -5,7 +5,7 @@ export default defineConfig({
   testIgnore: "**/previews/**",
   outputDir: "./test-results/e2e",
   fullyParallel: false,
-  workers: 1,
+  workers: process.env.CI ? 2 : 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
