@@ -1,3 +1,4 @@
+import { planReadModel } from "./plan-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   CoachClientCallAbortedError,
@@ -8,18 +9,33 @@ import {
   type CoachClientCallOptions,
 } from "@enduragent/coach-client";
 import type {
+  GetPlanStateRpcResult,
   ChatAttachmentComposerReadModel,
   ChatQueueSnapshot,
+  CoachDecisionReadModel,
   CoachTurnEventNotificationEnvelope,
   CreatePlanningRequestRpcParams,
   CreateWorkoutPlanningRequestRpcParams,
+  PlanCreationActivateRpcParams,
+  PlanCreationActivateRpcResult,
+  PlanCreationAnswerRpcParams,
+  PlanCreationAnswerRpcResult,
+  PlanCreationAnswerSummary,
   PlanningRequestDelivery,
+  PlanCreationCardModel,
+  PlanCreationDiscardRpcParams,
+  PlanCreationDiscardRpcResult,
+  PlanCreationPreviewRpcParams,
+  PlanCreationPreviewRpcResult,
+  PlanCreationStartRpcParams,
+  PlanCreationStartRpcResult,
   QueuedChatMessage,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import {
   CHAT_CONNECTION_INTERRUPTED_COPY,
   CHAT_EMPTY_RESPONSE_COPY,
+  CHAT_PLAN_CREATION_FAILURE_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
   CHAT_RESPONSE_STOPPED_COPY,
   NEW_CONVERSATION_MEMORY_WARNING_COPY,
@@ -30,7 +46,92 @@ import {
 } from "../src/chat/controller";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits";
 import type { DesktopCoachClientProvider } from "../src/coach-client";
+import { planCreationDraft } from "./plan-creation-draft-fixtures";
 import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state";
+
+const questionStep = { current: 1, total: 9 } as const;
+
+function goalQuestion(
+  prompt: string,
+): Extract<NonNullable<PlanCreationCardModel["openQuestion"]>, { readonly kind: "goal-question" }> {
+  return {
+    kind: "goal-question",
+    step: questionStep,
+    prompt,
+    candidates: [],
+    eventNotListedOption: {
+      label: "Event not listed",
+      detail: "Tell me the event name and its exact date.",
+      editorLabel: "Name the event.",
+      placeholder: "Event name",
+      nameLabel: "Event name",
+      dateLabel: "Event date",
+    },
+    fitnessOption: {
+      label: "Improve without an event",
+      detail: "Build fitness.",
+    },
+    authoredOption: {
+      label: "Something else",
+      detail: "Name an event.",
+      editorLabel: "Name the event.",
+      placeholder: "Event name",
+    },
+  };
+}
+
+function startTimingQuestion(): Extract<
+  NonNullable<PlanCreationCardModel["openQuestion"]>,
+  { readonly kind: "start-timing-question" }
+> {
+  return {
+    kind: "start-timing-question",
+    step: { current: 5, total: 9 },
+    prompt: "When could this Plan start?",
+    earliestAllowed: "1998-10-01",
+    options: [
+      {
+        timing: "as-soon-as-possible",
+        label: "As soon as possible",
+        detail: "Start at the earliest suitable week.",
+      },
+      { timing: "earliest", label: "From a date", detail: "Set an earliest date." },
+    ],
+    dateLabel: "Earliest start date",
+  };
+}
+
+function planLengthSummary(weeks: 4 | 8 | 12 | 16): PlanCreationAnswerSummary {
+  return {
+    answerKey: "plan-length",
+    title: "Plan length",
+    detail: `${weeks} weeks`,
+    source: { kind: "athlete" },
+    question: {
+      kind: "plan-length-question",
+      step: { current: 2, total: 9 },
+      prompt: "How long should this Fitness Plan be?",
+      options: [
+        { weeks: 4, label: "4 weeks", detail: "A short block." },
+        { weeks: 8, label: "8 weeks", detail: "One training cycle." },
+        { weeks: 12, label: "12 weeks", detail: "Steady progression." },
+        { weeks: 16, label: "16 weeks", detail: "The longest build." },
+      ],
+    },
+    answer: { kind: "plan-length", weeks },
+  };
+}
+
+function fitnessGoalSummary(outcome: string): PlanCreationAnswerSummary {
+  return {
+    answerKey: "goal",
+    title: "Goal",
+    detail: outcome,
+    source: { kind: "athlete" },
+    question: goalQuestion("Goal?"),
+    answer: { kind: "goal", goal: { kind: "fitness", outcome } },
+  };
+}
 
 function envelope(
   event: TurnEvent,
@@ -235,8 +336,23 @@ function client(
       method: "removeChatAttachment" | "retryChatAttachment" | "selectChatAttachmentWorkout",
     ) => Promise<ChatAttachmentComposerReadModel>;
     readonly clearAttachmentDraft?: () => Promise<ChatAttachmentComposerReadModel>;
+    readonly getChatQueue?: () => Promise<ChatQueueSnapshot>;
+    readonly enqueueChatMessage?: (request: {
+      readonly chatId: string;
+      readonly submissionId: string;
+      readonly text: string;
+      readonly attachmentIds?: readonly string[];
+    }) => Promise<ChatQueueSnapshot>;
+    readonly resumeChatQueue?: () => Promise<{
+      readonly snapshot: ChatQueueSnapshot;
+      readonly response?: { readonly text: string };
+    }>;
+    readonly getCoachDecision?: () => Promise<{
+      readonly decision: CoachDecisionReadModel | null;
+    }>;
     readonly listPlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
+      readonly planCreation?: PlanCreationCardModel | null;
     }>;
     readonly resumePlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
@@ -257,6 +373,22 @@ function client(
       | { readonly status: "found"; readonly delivery: PlanningRequestDelivery }
       | { readonly status: "missing" }
     >;
+    readonly previewPlanCreation?: (
+      request: PlanCreationPreviewRpcParams,
+    ) => Promise<PlanCreationPreviewRpcResult>;
+    readonly startPlanCreation?: (
+      request: PlanCreationStartRpcParams,
+    ) => Promise<PlanCreationStartRpcResult>;
+    readonly answerPlanCreation?: (
+      request: PlanCreationAnswerRpcParams,
+    ) => Promise<PlanCreationAnswerRpcResult>;
+    readonly getPlanState?: () => Promise<GetPlanStateRpcResult>;
+    readonly activatePlanCreation?: (
+      request: PlanCreationActivateRpcParams,
+    ) => Promise<PlanCreationActivateRpcResult>;
+    readonly discardPlanCreation?: (
+      request: PlanCreationDiscardRpcParams,
+    ) => Promise<PlanCreationDiscardRpcResult>;
   } = {},
 ): CoachClient {
   let queueRevision = 0;
@@ -314,7 +446,10 @@ function client(
     }
     if (method === "listPlanningRequests") {
       hideQueueCall();
-      return (sessions.listPlanningRequests?.() ?? Promise.resolve({ deliveries: [] })) as never;
+      return (sessions
+        .listPlanningRequests?.()
+        .then((result) => ({ planCreation: null, ...result })) ??
+        Promise.resolve({ deliveries: [], planCreation: null })) as never;
     }
     if (method === "resumePlanningRequests") {
       hideQueueCall();
@@ -331,6 +466,42 @@ function client(
     }
     if (method === "retryPlanningRequest") {
       return (sessions.retryPlanningRequest?.() ?? Promise.resolve({ status: "missing" })) as never;
+    }
+    if (method === "plan_creation.preview") {
+      return (sessions.previewPlanCreation?.(request as PlanCreationPreviewRpcParams) ??
+        Promise.resolve({
+          status: "rejected",
+          reason: "no-unfinished-creation",
+          planCreation: null,
+        })) as never;
+    }
+    if (method === "plan_creation.start") {
+      return (sessions.startPlanCreation?.(request as PlanCreationStartRpcParams) ??
+        Promise.resolve({ status: "rejected", reason: "command-conflict" })) as never;
+    }
+    if (method === "plan_creation.answer") {
+      return (sessions.answerPlanCreation?.(request as PlanCreationAnswerRpcParams) ??
+        Promise.resolve({
+          status: "rejected",
+          reason: "no-unfinished-creation",
+          planCreation: null,
+        })) as never;
+    }
+    if (method === "getPlanState") {
+      return (sessions.getPlanState?.() ??
+        Promise.resolve({ status: "ready", state: planReadModel() })) as never;
+    }
+    if (method === "plan_creation.activate") {
+      return (sessions.activatePlanCreation?.(request as PlanCreationActivateRpcParams) ??
+        Promise.reject(new Error("No activation configured"))) as never;
+    }
+    if (method === "plan_creation.discard") {
+      return (sessions.discardPlanCreation?.(request as PlanCreationDiscardRpcParams) ??
+        Promise.resolve({
+          status: "rejected",
+          reason: "no-unfinished-creation",
+          planCreation: null,
+        })) as never;
     }
     if (method === "saveChatAttachmentDraftText") {
       hideQueueCall();
@@ -355,15 +526,20 @@ function client(
     }
     if (method === "getChatQueue") {
       hideQueueCall();
+      if (sessions.getChatQueue !== undefined) return sessions.getChatQueue() as never;
       return Promise.resolve(snapshot()) as never;
     }
     if (method === "enqueueChatMessage") {
       hideQueueCall();
       const value = request as {
+        chatId: string;
         submissionId: string;
         text: string;
         attachmentIds?: readonly string[];
       };
+      if (sessions.enqueueChatMessage !== undefined) {
+        return sessions.enqueueChatMessage(value) as never;
+      }
       if (!queued.some((item) => item.submissionId === value.submissionId)) {
         queued.push({
           queuedMessageId: `queued-${value.submissionId}`,
@@ -391,6 +567,9 @@ function client(
       method === "retryQueuedTurn"
     ) {
       hideQueueCall();
+      if (method === "resumeChatQueue" && sessions.resumeChatQueue !== undefined) {
+        return sessions.resumeChatQueue() as never;
+      }
       const group = (() => {
         if (method === "retryQueuedTurn") {
           const claimId = (request as { claimId: string }).claimId;
@@ -453,7 +632,9 @@ function client(
         request as { chatId: string; turnId: string },
       ) as never;
     }
-    if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
+    if (method === "getCoachDecision") {
+      return (sessions.getCoachDecision?.() ?? Promise.resolve({ decision: null })) as never;
+    }
     if (method !== "chat") throw new TypeError();
     return implementation(
       request as { chatId: string; message: string },
@@ -499,12 +680,15 @@ function subject(
   canChat: () => boolean = () => true,
   settleSubmissions = true,
   openPlanningRequest = vi.fn(),
+  initialQueueSnapshot: ChatQueueSnapshot = { schemaVersion: 1, revision: 0, items: [] },
 ) {
   const states: ChatState[] = [];
   const controls: ChatViewControls[] = [];
   const settlements = new Set<{ remaining: number; resolve: () => void }>();
   const refresh = vi.fn(refreshImplementation);
   const refreshSpend = vi.fn(spendRefreshImplementation);
+  const refreshPlan = vi.fn(async () => {});
+  const openChat = vi.fn();
   const provider: DesktopCoachClientProvider = {
     getClient: vi.fn(async () => first),
     reconnect: vi.fn(async () => reconnected),
@@ -528,9 +712,11 @@ function subject(
       },
     },
     refreshTrainingContext: refresh,
+    refreshPlan,
+    openChat,
     refreshSpend,
     canChat,
-    initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
+    initialQueueSnapshot,
     openPlanningRequest,
   });
   const submittedController = {
@@ -557,6 +743,8 @@ function subject(
     controls,
     refresh,
     refreshSpend,
+    refreshPlan,
+    openChat,
     openPlanningRequest,
   };
 }
@@ -1626,6 +1814,1078 @@ describe("chat controller", () => {
     });
   });
 
+  it("gates coaching work only while a Plan Creation Card is visible", async () => {
+    const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: goalQuestion("Goal?"),
+    };
+    const ready: PlanCreationCardModel = {
+      ...planCreation,
+      version: 2,
+      readiness: "ready",
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: ready });
+    const fake = client(replies(), {
+      listPlanningRequests,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ loaded: true, value: planCreation });
+    await expect(controller.submit("blocked")).resolves.toBe(false);
+
+    controller.pausePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: true, editingKey: null });
+    await expect(controller.submit("paused")).resolves.toBe(true);
+
+    controller.continuePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+    await expect(controller.submit("blocked again")).resolves.toBe(false);
+
+    controller.editPlanCreation("plan-length");
+    controller.pausePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: true, editingKey: null });
+    await expect(controller.submit("paused after edit")).resolves.toBe(true);
+    controller.continuePlanCreation();
+
+    controller.pausePlanCreation();
+    controller.editPlanCreation("plan-length");
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      paused: false,
+      editingKey: "plan-length",
+    });
+    await expect(controller.submit("blocked by edit")).resolves.toBe(false);
+    controller.cancelPlanCreationEdit();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: true, editingKey: null });
+
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(controls.at(-1)?.planCreation?.value).toEqual(ready));
+    await expect(controller.submit("ready")).resolves.toBe(true);
+
+    controller.editPlanCreation("plan-length");
+    await expect(controller.submit("ready edit blocks")).resolves.toBe(false);
+    controller.pausePlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+    controller.continuePlanCreation();
+    await expect(controller.submit("ready after Later")).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual([
+      "paused",
+      "paused after edit",
+      "ready",
+      "ready after Later",
+    ]);
+  });
+
+  it.each(["missing", "stale", "empty"] as const)(
+    "does not open activation for a %s Draft",
+    async (kind) => {
+      const draft = planCreationDraft();
+      const card: PlanCreationCardModel = {
+        creationId: "01J00000000000000000000000",
+        version: 3,
+        status: "review",
+        readiness: "ready",
+        answeredSummaries: [],
+        openQuestion: null,
+        draft:
+          kind === "missing"
+            ? null
+            : kind === "empty"
+              ? { ...draft, weeks: draft.weeks.map((week) => ({ ...week, workouts: [] })) }
+              : draft,
+        draftStale: kind === "stale",
+      };
+      const activatePlanCreation =
+        vi.fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>();
+      const { controller, controls } = subject(
+        client(replies(), {
+          listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+          activatePlanCreation,
+        }),
+      );
+      await controller.start();
+      await controller.openPlanCreationActivate();
+      await controller.confirmPlanCreationActivate();
+      expect(controls.at(-1)?.planCreation).toMatchObject({
+        value: card,
+        activateConfirmationOpen: false,
+      });
+      expect(activatePlanCreation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never sends activation while the fresh Plan read is pending or rejected", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    let rejectRead!: (error: Error) => void;
+    const read = new Promise<GetPlanStateRpcResult>((_, reject) => {
+      rejectRead = reject;
+    });
+    const getPlanState = vi.fn(() => read);
+    const activatePlanCreation =
+      vi.fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>();
+    const { controller, controls } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+        getPlanState,
+        activatePlanCreation,
+      }),
+    );
+    await controller.start();
+    const opening = controller.openPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      activateConfirmationOpen: false,
+      activePlanKnowledge: { kind: "unknown" },
+      busy: true,
+    });
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+    rejectRead(
+      new Error("Activation could not be saved locally. Your previous Plan is unchanged."),
+    );
+    await opening;
+    expect(getPlanState).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      activePlanKnowledge: { kind: "unknown" },
+      error: "Activation could not be saved locally. Your previous Plan is unchanged.",
+      activateConfirmationOpen: false,
+      busy: false,
+    });
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+    controller.cancelPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation?.activateConfirmationOpen).toBe(false);
+  });
+
+  it("activates only after confirmation, blocks duplicate submission, and refreshes the Plan", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    let finishActivation!: (result: PlanCreationActivateRpcResult) => void;
+    const pending = new Promise<PlanCreationActivateRpcResult>((resolve) => {
+      finishActivation = resolve;
+    });
+    const activatePlanCreation = vi.fn(async (_request: PlanCreationActivateRpcParams) => pending);
+    const { controller, controls, refreshPlan } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+        activatePlanCreation,
+      }),
+    );
+    await controller.start();
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+    await controller.openPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation?.activateConfirmationOpen).toBe(true);
+    await expect(controller.submit("blocked by confirmation")).resolves.toBe(false);
+    const first = controller.confirmPlanCreationActivate();
+    const second = controller.confirmPlanCreationActivate();
+    await vi.waitFor(() => expect(activatePlanCreation).toHaveBeenCalledOnce());
+    expect(activatePlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      busy: true,
+      activateConfirmationOpen: true,
+    });
+    finishActivation({
+      creationId: card.creationId,
+      planId: "01J00000000000000000000001",
+      closedPlanId: null,
+      activatedAt: "1998-09-07",
+    });
+    await Promise.all([first, second]);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      busy: false,
+      activateConfirmationOpen: false,
+      notice: "Plan activated locally.",
+    });
+    expect(refreshPlan).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed activation open and retries with a fresh command id", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    const activatePlanCreation = vi
+      .fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>()
+      .mockRejectedValueOnce(
+        new Error("Activation could not be saved locally. Your previous Plan is unchanged."),
+      )
+      .mockResolvedValueOnce({
+        creationId: card.creationId,
+        planId: "01J00000000000000000000001",
+        closedPlanId: null,
+        activatedAt: "1998-09-07",
+      });
+    const { controller, controls, refreshPlan } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+        activatePlanCreation,
+      }),
+    );
+    await controller.start();
+    await controller.openPlanCreationActivate();
+    await controller.confirmPlanCreationActivate();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      busy: false,
+      activateConfirmationOpen: true,
+      error: "Activation could not be saved locally. Your previous Plan is unchanged.",
+    });
+    expect(refreshPlan).not.toHaveBeenCalled();
+    await controller.confirmPlanCreationActivate();
+    expect(activatePlanCreation).toHaveBeenCalledTimes(2);
+    expect(activatePlanCreation.mock.calls[1]?.[0].commandId).not.toEqual(
+      activatePlanCreation.mock.calls[0]?.[0].commandId,
+    );
+    expect(controls.at(-1)?.planCreation?.value).toBeNull();
+    expect(refreshPlan).toHaveBeenCalledOnce();
+  });
+
+  it("cancels activation without changing the Draft and does not restore a dialog after relaunch", async () => {
+    const card: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+      draft: planCreationDraft(),
+      draftStale: false,
+    };
+    const activatePlanCreation =
+      vi.fn<(request: PlanCreationActivateRpcParams) => Promise<PlanCreationActivateRpcResult>>();
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+      activatePlanCreation,
+    });
+    const first = subject(fake);
+    await first.controller.start();
+    await first.controller.openPlanCreationActivate();
+    first.controller.cancelPlanCreationActivate();
+    expect(first.controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      activateConfirmationOpen: false,
+      focusRequest: { target: "activate" },
+    });
+    await first.controller.openPlanCreationActivate();
+    const relaunched = subject(fake);
+    await relaunched.controller.start();
+    expect(relaunched.controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      activateConfirmationOpen: false,
+    });
+    expect(activatePlanCreation).not.toHaveBeenCalled();
+  });
+
+  it("guards an in-flight discard, sends the displayed revision, and clears the Card", async () => {
+    const completeCard: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const nextCard: PlanCreationCardModel = {
+      ...completeCard,
+      creationId: "01J00000000000000000000001",
+      version: 1,
+      readiness: "incomplete",
+      answeredSummaries: [],
+      openQuestion: goalQuestion("Next goal?"),
+    };
+    let finishDiscard!: (result: PlanCreationDiscardRpcResult) => void;
+    const discardResult = new Promise<PlanCreationDiscardRpcResult>((resolve) => {
+      finishDiscard = resolve;
+    });
+    const discardPlanCreation = vi.fn(
+      async (_request: PlanCreationDiscardRpcParams) => discardResult,
+    );
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: completeCard }),
+      discardPlanCreation,
+      startPlanCreation: async () => ({
+        status: "started",
+        outcome: "created",
+        planCreation: nextCard,
+      }),
+    });
+    const { controller, controls, openChat } = subject(fake);
+    await controller.start();
+
+    controller.openPlanCreationDiscard();
+    expect(controls.at(-1)?.planCreation?.discardConfirmationOpen).toBe(true);
+    await expect(controller.submit("blocked by confirmation")).resolves.toBe(false);
+
+    const first = controller.confirmPlanCreationDiscard();
+    const second = controller.confirmPlanCreationDiscard();
+    await vi.waitFor(() => expect(discardPlanCreation).toHaveBeenCalledOnce());
+    expect(discardPlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: completeCard.creationId,
+      expectedVersion: completeCard.version,
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      busy: true,
+      discardConfirmationOpen: true,
+    });
+
+    expect(openChat).not.toHaveBeenCalled();
+    const focusRequest = controls.at(-1)?.planCreation?.focusRequest;
+    openChat.mockImplementation(() => {
+      expect(controls.at(-1)?.planCreation?.focusRequest).toEqual(focusRequest);
+    });
+    finishDiscard({ status: "discarded" });
+    await Promise.all([first, second]);
+    expect(openChat).toHaveBeenCalledOnce();
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      busy: false,
+      discardConfirmationOpen: false,
+      discardEvents: [{ eventId: completeCard.creationId, afterMessageId: null }],
+      focusRequest: { target: "start", revision: 1 },
+    });
+    await expect(controller.submit("Chat continues")).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual(["Chat continues"]);
+    await controller.startPlanCreation();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: nextCard,
+      discardEvents: [{ eventId: completeCard.creationId, afterMessageId: null }],
+    });
+  });
+
+  it("retries a failed discard with the identical command and no premature consequence", async () => {
+    const card: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    const discardPlanCreation = vi
+      .fn<(request: PlanCreationDiscardRpcParams) => Promise<PlanCreationDiscardRpcResult>>()
+      .mockRejectedValueOnce(new Error("Synthetic response loss"))
+      .mockResolvedValueOnce({ status: "discarded" });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+      discardPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    controller.openPlanCreationDiscard();
+    await controller.confirmPlanCreationDiscard();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: card,
+      busy: false,
+      discardConfirmationOpen: true,
+      discardEvents: [],
+      error: expect.any(String),
+    });
+    const request = discardPlanCreation.mock.calls[0]?.[0];
+    expect(request).toMatchObject({ creationId: card.creationId, expectedVersion: card.version });
+    await controller.confirmPlanCreationDiscard();
+    expect(discardPlanCreation).toHaveBeenCalledTimes(2);
+    expect(discardPlanCreation.mock.calls[1]?.[0]).toEqual(request);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      busy: false,
+      discardConfirmationOpen: false,
+      error: null,
+      discardEvents: [{ eventId: card.creationId, afterMessageId: null }],
+      focusRequest: { target: "start" },
+    });
+  });
+
+  it("cancels discard with focus restoration and keeps Chat gated only while open", async () => {
+    const completeCard: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: completeCard }),
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.openPlanCreationDiscard();
+    await expect(controller.submit("blocked")).resolves.toBe(false);
+    controller.cancelPlanCreationDiscard();
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: completeCard,
+      discardConfirmationOpen: false,
+      focusRequest: { target: "discard", revision: 1 },
+    });
+    await expect(controller.submit("allowed")).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual(["allowed"]);
+  });
+
+  it("installs the returned Card and publishes an inline notice after discard rejection", async () => {
+    const card: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [],
+      openQuestion: startTimingQuestion(),
+    };
+    const returned = { ...card, version: 4 };
+    const discardPlanCreation = vi
+      .fn<(request: PlanCreationDiscardRpcParams) => Promise<PlanCreationDiscardRpcResult>>()
+      .mockResolvedValueOnce({
+        status: "rejected",
+        reason: "stale-version",
+        planCreation: returned,
+      })
+      .mockResolvedValueOnce({
+        status: "rejected",
+        reason: "no-unfinished-creation",
+        planCreation: null,
+      });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: card }),
+      discardPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    const questionFocusRevision = controls.at(-1)?.planCreation?.focusRevision;
+
+    controller.openPlanCreationDiscard();
+    await controller.confirmPlanCreationDiscard();
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: returned,
+      busy: false,
+      discardConfirmationOpen: false,
+      notice: "Plan Creation changed before it could be discarded. The latest version is shown.",
+      focusRequest: { target: "discard", revision: 1 },
+      focusRevision: questionFocusRevision,
+    });
+
+    controller.openPlanCreationDiscard();
+    await controller.confirmPlanCreationDiscard();
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      busy: false,
+      discardConfirmationOpen: false,
+      notice: "There is no unfinished Plan Creation to discard.",
+      focusRequest: { target: "start", revision: 2 },
+    });
+  });
+
+  it("returns focus to Start when refresh removes a Card behind its discard dialog", async () => {
+    const card: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 3,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: card })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null });
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.openPlanCreationDiscard();
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: null,
+      discardConfirmationOpen: false,
+      notice: "There is no unfinished Plan Creation to discard.",
+      focusRequest: { target: "start", revision: 1 },
+    });
+  });
+
+  it("restores a paused question by creation and answer identity after relaunch", async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key),
+    });
+    const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 4,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: startTimingQuestion(),
+    };
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [], planCreation }));
+    const fake = client(replies(), { listPlanningRequests });
+    const first = subject(fake);
+    await first.controller.start();
+    first.controller.pausePlanCreation();
+    first.controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+    expect(first.controls.at(-1)?.planCreation).toMatchObject({
+      paused: true,
+      editingKey: null,
+    });
+    first.controller.dispose();
+
+    const relaunched = subject(fake);
+    await relaunched.controller.start();
+    expect(relaunched.controls.at(-1)?.planCreation).toMatchObject({
+      value: planCreation,
+      paused: true,
+      editingKey: null,
+    });
+    await expect(relaunched.controller.submit("Composer remains available")).resolves.toBe(true);
+    relaunched.controller.continuePlanCreation();
+    expect(relaunched.controls.at(-1)?.planCreation).toMatchObject({ paused: false });
+    await expect(relaunched.controller.submit("Question blocks again")).resolves.toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not start Plan Creation while a Coach decision blocks work", async () => {
+    const startPlanCreation =
+      vi.fn<(request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>>();
+    const fake = client(replies(), {
+      getCoachDecision: async () => ({
+        decision: {
+          decisionId: "decision-1",
+          chatId: "desktop",
+          messageId: "message-1",
+          question: "Choose tomorrow's priority.",
+          status: "unanswered",
+          options: [],
+        },
+      }),
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: null }),
+      startPlanCreation,
+    });
+    const { controller } = subject(fake);
+
+    await controller.start();
+    await controller.startPlanCreation();
+
+    expect(startPlanCreation).not.toHaveBeenCalled();
+  });
+
+  it("waits for Plan Creation restoration before queue drains and submissions", async () => {
+    const restoredMessage: QueuedChatMessage = {
+      queuedMessageId: "queued-restored",
+      messageId: "message-restored",
+      submissionId: "submission-restored",
+      text: "Keep this queued",
+      kind: "ordinary",
+      attachmentIds: [],
+      position: 0,
+      restored: true,
+    };
+    const restoredQueue: ChatQueueSnapshot = {
+      schemaVersion: 1,
+      revision: 4,
+      items: [restoredMessage],
+    };
+    const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: goalQuestion("Goal?"),
+    };
+    let finishPlanningLoad!: (result: {
+      deliveries: readonly PlanningRequestDelivery[];
+      planCreation: PlanCreationCardModel | null;
+    }) => void;
+    const planningLoad = new Promise<{
+      deliveries: readonly PlanningRequestDelivery[];
+      planCreation: PlanCreationCardModel | null;
+    }>((resolve) => {
+      finishPlanningLoad = resolve;
+    });
+    const getChatQueue = vi.fn(async () => restoredQueue);
+    const getCoachDecision = vi.fn(async () => ({ decision: null }));
+    const resumeChatQueue = vi.fn(async () => ({
+      snapshot: { schemaVersion: 1 as const, revision: 5, items: [] },
+    }));
+    const enqueueChatMessage = vi.fn(async () => restoredQueue);
+    const fake = client(replies(), {
+      getChatQueue,
+      getCoachDecision,
+      resumeChatQueue,
+      enqueueChatMessage,
+      listPlanningRequests: async () => planningLoad,
+    });
+    const { controller, states, controls } = subject(
+      fake,
+      fake,
+      async () => {},
+      async () => {},
+      () => true,
+      true,
+      vi.fn(),
+      restoredQueue,
+    );
+
+    const starting = controller.start();
+    const submission = controller.submit("Do not enqueue this yet");
+    await vi.waitFor(() => {
+      expect(getChatQueue).toHaveBeenCalledOnce();
+      expect(getCoachDecision).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(resumeChatQueue).not.toHaveBeenCalled();
+    expect(enqueueChatMessage).not.toHaveBeenCalled();
+
+    finishPlanningLoad({ deliveries: [], planCreation });
+    await expect(submission).resolves.toBe(false);
+    await starting;
+
+    expect(resumeChatQueue).not.toHaveBeenCalled();
+    expect(enqueueChatMessage).not.toHaveBeenCalled();
+    expect(states.at(-1)?.queued).toEqual([
+      {
+        id: "queued-restored",
+        text: "Keep this queued",
+        command: false,
+        restored: true,
+        attachmentIds: [],
+      },
+    ]);
+    expect(controls.at(-1)?.planCreation).toMatchObject({ loaded: true, value: planCreation });
+  });
+
+  it("retries Card commands with stable ids, installs monotonically, and unblocks Chat", async () => {
+    const goalCard: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [],
+      openQuestion: goalQuestion("Goal?"),
+    };
+    const completeCard: PlanCreationCardModel = {
+      ...goalCard,
+      version: 2,
+      readiness: "ready",
+      answeredSummaries: [fitnessGoalSummary("Build power")],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null })
+      .mockResolvedValue({ deliveries: [], planCreation: goalCard });
+    const startPlanCreation = vi
+      .fn<(request: PlanCreationStartRpcParams) => Promise<PlanCreationStartRpcResult>>()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue({ status: "started", outcome: "created", planCreation: goalCard });
+    const answerPlanCreation = vi
+      .fn<(request: PlanCreationAnswerRpcParams) => Promise<PlanCreationAnswerRpcResult>>()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue({ status: "answered", planCreation: completeCard });
+    const fake = client(replies(), {
+      listPlanningRequests,
+      startPlanCreation,
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    await controller.startPlanCreation();
+    await controller.startPlanCreation();
+    expect(startPlanCreation.mock.calls[0]?.[0].commandId).toBe(
+      startPlanCreation.mock.calls[1]?.[0].commandId,
+    );
+    const answer = {
+      kind: "goal" as const,
+      goal: { kind: "fitness" as const, outcome: "Build power" },
+    };
+    await controller.answerPlanCreation(answer);
+    await controller.answerPlanCreation(answer);
+    expect(answerPlanCreation.mock.calls[0]?.[0].commandId).toBe(
+      answerPlanCreation.mock.calls[1]?.[0].commandId,
+    );
+    expect(controls.at(-1)?.planCreation?.value).toEqual(completeCard);
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+    expect(controls.at(-1)?.planCreation?.value).toEqual(completeCard);
+    await expect(controller.submit("Chat continues")).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual(["Chat continues"]);
+  });
+
+  it("retries Draft preview with a stable command and restores review on relaunch", async () => {
+    const ready: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(4)],
+      openQuestion: null,
+      draft: null,
+      draftStale: false,
+    };
+    const review: PlanCreationCardModel = {
+      ...ready,
+      version: 11,
+      status: "review",
+      draft: planCreationDraft(ready.answeredSummaries),
+    };
+    const previewPlanCreation = vi
+      .fn<(request: PlanCreationPreviewRpcParams) => Promise<PlanCreationPreviewRpcResult>>()
+      .mockRejectedValueOnce(new Error("interrupted"))
+      .mockResolvedValue({ status: "previewed", planCreation: review });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      previewPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+    await controller.buildPlanCreationDraft();
+    expect(controls.at(-1)?.planCreation?.value).toEqual(ready);
+    await controller.buildPlanCreationDraft();
+    expect(previewPlanCreation).toHaveBeenCalledTimes(2);
+    expect(previewPlanCreation.mock.calls[0]?.[0]).toEqual({
+      commandId: expect.any(String),
+      creationId: ready.creationId,
+      expectedVersion: ready.version,
+    });
+    expect(previewPlanCreation.mock.calls[1]?.[0]).toEqual(previewPlanCreation.mock.calls[0]?.[0]);
+    expect(controls.at(-1)?.planCreation?.value).toEqual(review);
+    await expect(controller.submit("Chat continues during review")).resolves.toBe(true);
+
+    const relaunched = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: review }),
+      }),
+    );
+    await relaunched.controller.start();
+    expect(relaunched.controls.at(-1)?.planCreation?.value).toEqual(review);
+  });
+
+  it("retains the previous stale Draft when no Workouts fit a rebuild", async () => {
+    const draft = planCreationDraft([planLengthSummary(4)]);
+    const review: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 12,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(8)],
+      openQuestion: null,
+      draft,
+      draftStale: true,
+    };
+    const previewPlanCreation = vi
+      .fn<(request: PlanCreationPreviewRpcParams) => Promise<PlanCreationPreviewRpcResult>>()
+      .mockResolvedValue({
+        status: "rejected",
+        reason: "no-workouts",
+        explanation: "Confirmed limits leave no Workouts.",
+        planCreation: review,
+      });
+    const { controller, controls } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: review }),
+        previewPlanCreation,
+      }),
+    );
+    await controller.start();
+    await controller.buildPlanCreationDraft();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: review,
+      notice:
+        "No Workouts fit anywhere in this Plan under your confirmed limits. Edit those limits to continue.",
+      busy: false,
+    });
+    expect(controls.at(-1)?.planCreation?.value?.draft).toEqual(draft);
+  });
+
+  it("submits an edited answer at the current version and closes the editor", async () => {
+    const ready: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const changed: PlanCreationCardModel = {
+      ...ready,
+      version: 11,
+      answeredSummaries: [planLengthSummary(16)],
+    };
+    const answerPlanCreation = vi.fn(async () => ({
+      status: "answered" as const,
+      planCreation: changed,
+    }));
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 16 });
+
+    expect(answerPlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: ready.creationId,
+      expectedVersion: 10,
+      answer: { kind: "plan-length", weeks: 16 },
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: changed,
+      paused: false,
+      editingKey: null,
+    });
+  });
+
+  it("installs changed review answers without changing the Draft snapshot", async () => {
+    const originalAnswers = [planLengthSummary(4)];
+    const review: PlanCreationCardModel = {
+      creationId: "01J00000000000000000000000",
+      version: 11,
+      status: "review",
+      readiness: "ready",
+      answeredSummaries: originalAnswers,
+      openQuestion: null,
+      draft: planCreationDraft(originalAnswers),
+      draftStale: false,
+    };
+    const changed: PlanCreationCardModel = {
+      ...review,
+      version: 12,
+      answeredSummaries: [planLengthSummary(8)],
+      draftStale: true,
+    };
+    const answerPlanCreation = vi
+      .fn<(request: PlanCreationAnswerRpcParams) => Promise<PlanCreationAnswerRpcResult>>()
+      .mockResolvedValue({ status: "answered", planCreation: changed });
+    const { controller, controls } = subject(
+      client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: review }),
+        answerPlanCreation,
+      }),
+    );
+    await controller.start();
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 8 });
+
+    expect(answerPlanCreation).toHaveBeenCalledWith({
+      commandId: expect.any(String),
+      creationId: review.creationId,
+      expectedVersion: review.version,
+      answer: { kind: "plan-length", weeks: 8 },
+    });
+    expect(controls.at(-1)?.planCreation).toMatchObject({ value: changed, editingKey: null });
+    expect(controls.at(-1)?.planCreation?.value?.draft?.answeredSummaries).toEqual(originalAnswers);
+  });
+
+  it("preserves Edit and focus state when an identical Plan Creation model is restored", async () => {
+    const ready: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [], planCreation: ready }));
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    const focusRevision = controls.at(-1)?.planCreation?.focusRevision;
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: ready,
+      paused: false,
+      editingKey: "plan-length",
+      focusRevision,
+    });
+  });
+
+  it("keeps a rejected Edit open with its error and current answer", async () => {
+    const ready: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 10,
+      status: "in-progress",
+      readiness: "ready",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: null,
+    };
+    const answerPlanCreation = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "stale-version" as const,
+      planCreation: ready,
+    }));
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [], planCreation: ready }),
+      answerPlanCreation,
+    });
+    const { controller, controls } = subject(fake);
+    await controller.start();
+
+    controller.editPlanCreation("plan-length");
+    await controller.answerPlanCreation({ kind: "plan-length", weeks: 16 });
+
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: ready,
+      paused: false,
+      editingKey: "plan-length",
+      error: CHAT_PLAN_CREATION_FAILURE_COPY,
+    });
+    expect(controls.at(-1)?.planCreation?.value?.answeredSummaries[0]?.answer).toEqual({
+      kind: "plan-length",
+      weeks: 12,
+    });
+  });
+
+  it("clears and replaces server-authoritative Plan Creation cards", async () => {
+    const first: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 4,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [planLengthSummary(12)],
+      openQuestion: goalQuestion("First goal?"),
+    };
+    const replacement: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000001",
+      version: 1,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [],
+      openQuestion: goalQuestion("Replacement goal?"),
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: first })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: replacement })
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null });
+    const fake = client(replies(), { listPlanningRequests });
+    const { controller, controls } = subject(fake);
+
+    await controller.start();
+    expect(controls.at(-1)?.planCreation?.value).toEqual(first);
+    controller.pausePlanCreation();
+    controller.editPlanCreation("plan-length");
+    expect(controls.at(-1)?.planCreation).toMatchObject({ editingKey: "plan-length" });
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(2));
+    expect(controls.at(-1)?.planCreation?.value).toEqual(replacement);
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+    controller.pausePlanCreation();
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(listPlanningRequests).toHaveBeenCalledTimes(3));
+    expect(controls.at(-1)?.planCreation?.value).toBeNull();
+    expect(controls.at(-1)?.planCreation).toMatchObject({ paused: false, editingKey: null });
+  });
+
+  it("keeps interrupted recovery inert while a Plan Creation question is open", async () => {
+    const planCreation: PlanCreationCardModel = {
+      draft: null,
+      draftStale: false,
+      creationId: "01J00000000000000000000000",
+      version: 1,
+      status: "in-progress",
+      readiness: "incomplete",
+      answeredSummaries: [],
+      openQuestion: goalQuestion("Goal?"),
+    };
+    const listPlanningRequests = vi
+      .fn()
+      .mockResolvedValueOnce({ deliveries: [], planCreation: null })
+      .mockResolvedValueOnce({ deliveries: [], planCreation });
+    const resumeChatQueue = vi.fn(async () =>
+      Promise.reject(new CoachClientDisconnectedError(1006, "synthetic")),
+    );
+    const fake = client(replies(), { listPlanningRequests, resumeChatQueue });
+    const { controller, provider, states, controls } = subject(fake);
+
+    await controller.start();
+    await controller.submit("Interrupt this message");
+    expect(states.at(-1)).toMatchObject({ status: "interrupted", retryRequired: null });
+    controller.refreshPlanningRequests();
+    await vi.waitFor(() => expect(controls.at(-1)?.planCreation?.value).toEqual(planCreation));
+
+    await controller.retryInterrupted();
+
+    expect(provider.reconnect).not.toHaveBeenCalled();
+    expect(resumeChatQueue).toHaveBeenCalledOnce();
+  });
+
   it("keeps the last safe Plan cards when relaunch recovery cannot deliver", async () => {
     const restored = planningDelivery("failed");
     const resumePlanningRequests = vi.fn(async () => {
@@ -2347,5 +3607,122 @@ describe("chat controller", () => {
     expect(
       vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession"),
     ).toHaveLength(1);
+  });
+});
+
+describe("Plan library Chat entry", () => {
+  const creation: PlanCreationCardModel = {
+    creationId: "library-creation",
+    version: 1,
+    status: "in-progress",
+    readiness: "incomplete",
+    answeredSummaries: [planLengthSummary(12)],
+    openQuestion: goalQuestion("Goal?"),
+    draft: null,
+    draftStale: false,
+  };
+
+  it.each([null, { ...creation, creationId: "replacement-creation" }])(
+    "keeps a stale library entry out of Chat and refreshes its result",
+    async (current) => {
+      const fake = client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: current }),
+      });
+      const { controller, controls, openChat, refreshPlan } = subject(fake);
+      controller.resumeCreation(creation);
+      await controller.continueCreationFromLibrary(creation.creationId);
+      expect(openChat).not.toHaveBeenCalled();
+      expect(refreshPlan).toHaveBeenCalledOnce();
+      expect(controls.at(-1)?.planCreation).toMatchObject({
+        value: current,
+        busy: false,
+        notice:
+          "This creation is no longer unfinished. Open the Plan library for its current result.",
+      });
+      controller.dispose();
+    },
+  );
+
+  it("opens Chat only after checking the unfinished creation and uses its current version", async () => {
+    let resolve!: (value: { deliveries: []; planCreation: PlanCreationCardModel }) => void;
+    const pending = new Promise<{ deliveries: []; planCreation: PlanCreationCardModel }>((done) => {
+      resolve = done;
+    });
+    const fake = client(replies(), { listPlanningRequests: () => pending });
+    const { controller, controls, openChat } = subject(fake);
+    controller.resumeCreation(creation);
+    const focusRevision = controls.at(-1)?.planCreation?.focusRevision;
+    openChat.mockImplementation(() => {
+      expect(controls.at(-1)?.planCreation?.focusRevision).toBe(focusRevision);
+    });
+    const continuing = controller.continueCreationFromLibrary(creation.creationId);
+    expect(openChat).not.toHaveBeenCalled();
+    const current = { ...creation, version: 2 };
+    resolve({ deliveries: [], planCreation: current });
+    await continuing;
+    expect(openChat).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: current,
+      paused: false,
+      busy: false,
+    });
+    controller.dispose();
+  });
+
+  it("installs a library creation before Chat hydration and focuses its open question", () => {
+    const { controller, controls } = subject(client(replies()));
+    controller.resumeCreation(creation);
+    const resumed = controls.at(-1)?.planCreation;
+    expect(resumed).toMatchObject({
+      loaded: true,
+      value: creation,
+      paused: false,
+      editingKey: null,
+    });
+    expect(resumed?.focusRevision).toBeGreaterThan(0);
+    controller.editPlanCreation("plan-length");
+    controller.pausePlanCreation();
+    controller.resumeCreation(creation);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: creation,
+      paused: false,
+      editingKey: null,
+    });
+    expect(controls.at(-1)?.planCreation?.focusRevision).toBeGreaterThan(
+      resumed?.focusRevision ?? 0,
+    );
+    controller.dispose();
+  });
+
+  it("focuses Activate when the resumed creation already has a Draft", () => {
+    const { controller, controls } = subject(client(replies()));
+    const draft = { ...creation, draft: planCreationDraft(), openQuestion: null };
+    controller.resumeCreation(draft);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: draft,
+      focusRequest: { target: "activate" },
+    });
+    controller.dispose();
+  });
+
+  it("prepares an empty library entry to start before Chat hydration", async () => {
+    const start = vi.fn(
+      async (): Promise<PlanCreationStartRpcResult> => ({
+        status: "started",
+        outcome: "created",
+        planCreation: creation,
+      }),
+    );
+    const fake = client(replies(), { startPlanCreation: start });
+    const { controller, controls } = subject(fake);
+    controller.resumeCreation(null);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      loaded: true,
+      value: null,
+      paused: false,
+    });
+    await controller.startPlanCreation();
+    expect(start).toHaveBeenCalledOnce();
+    controller.dispose();
   });
 });

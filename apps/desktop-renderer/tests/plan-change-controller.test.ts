@@ -1,0 +1,303 @@
+import type { CoachClient } from "@enduragent/coach-client";
+import type {
+  ListPlansResult,
+  PlanChangeModel,
+  PlanChangeIntent,
+} from "@enduragent/coach-contract";
+import { describe, expect, it, vi } from "vitest";
+import { createChatController } from "../src/chat/controller";
+import { EMPTY_PLAN_CHANGE_SURFACE, type PlanChangeSurfaceState } from "../src/state/chat-slice";
+
+const change: PlanChangeModel = {
+  changeId: "change-preview",
+  planId: "plan-active",
+  baseRevisionNumber: 1,
+  status: "pending",
+  title: "Limit weekday duration",
+  intent: { kind: "weekday-duration", day: 2, minutes: 45 },
+  diff: [],
+  totals: {
+    before: { plan: 120, weeks: [{ number: 1, minutes: 120 }] },
+    after: { plan: 90, weeks: [{ number: 1, minutes: 90 }] },
+  },
+  supersedes: null,
+  supersededBy: null,
+  resultRevisionNumber: null,
+  confidence: "High",
+  premises: [],
+};
+
+function harness(result: unknown, changes: PlanChangeModel[] = [change]) {
+  let surface: PlanChangeSurfaceState = EMPTY_PLAN_CHANGE_SURFACE;
+  let library: ListPlansResult = {
+    calendarConnected: false,
+    active: {
+      planId: "plan-active",
+      version: 7,
+      name: "Build fitness",
+      start: "1998-09-07",
+      end: "1998-10-04",
+      weeks: 4,
+      status: "active",
+      closeReason: null,
+      closedAt: null,
+      activatedAt: "1998-09-07",
+      calendar: { status: "pending", window: null, currentThrough: null, error: null },
+      creationId: null,
+    },
+    creation: null,
+    closed: [],
+    changes,
+  };
+  const call = vi.fn(async (_method: string, _request: unknown): Promise<never> => {
+    if (result instanceof Error) throw result;
+    return result as never;
+  });
+  const client: CoachClient = {
+    handshake: {} as CoachClient["handshake"],
+    call,
+    close: vi.fn(async () => {}),
+  };
+  const refresh = vi.fn(async () => {});
+  const controller = createChatController({
+    clients: {
+      getClient: async () => client,
+      reconnect: async () => client,
+      close: async () => {},
+    },
+    view: { render: vi.fn() },
+    refreshTrainingContext: async () => {},
+    refreshSpend: async () => {},
+    readPlanLibrary: () => library,
+    readPlanChange: () => surface,
+    publishPlanChange: (next) => {
+      surface = next;
+    },
+    refreshPlanLibrary: refresh,
+  });
+  return {
+    controller,
+    call,
+    refresh,
+    surface: () => surface,
+    updateVersion(version: number) {
+      if (library.active) library = { ...library, active: { ...library.active, version } };
+    },
+  };
+}
+
+describe("Plan Change controller", () => {
+  it("opens and backs out of the editor with explicit focus requests", () => {
+    const h = harness(null);
+    h.controller.openPlanChangeEditor();
+    expect(h.surface()).toMatchObject({
+      open: true,
+      planId: "plan-active",
+      editorOpen: true,
+      focusRequest: { target: "editor", revision: 1 },
+    });
+    h.controller.backFromPlanChangeEditor();
+    expect(h.surface()).toMatchObject({
+      editorOpen: false,
+      focusRequest: { target: "change", revision: 2 },
+    });
+  });
+
+  it("previews with the summary version, refreshes, and focuses the preview", async () => {
+    const h = harness({ status: "previewed", change, version: 8 }, []);
+    h.controller.openPlanChangeEditor();
+    await h.controller.previewPlanChange(change.intent);
+    expect(h.call).toHaveBeenCalledWith("plan_change.preview", {
+      planId: "plan-active",
+      expectedVersion: 7,
+      intent: change.intent,
+      commandId: expect.any(String),
+    });
+    expect(h.refresh).toHaveBeenCalledOnce();
+    expect(h.surface()).toMatchObject({
+      editorOpen: false,
+      busy: false,
+      error: null,
+      notice: "Review the exact changes before confirming.",
+      focusRequest: { target: "preview" },
+    });
+  });
+
+  it("names the superseded preview", async () => {
+    const h = harness({
+      status: "previewed",
+      change: { ...change, changeId: "new-change", supersedes: change.changeId },
+      version: 8,
+    });
+    await h.controller.previewPlanChange(change.intent);
+    expect(h.surface().notice).toBe(
+      "This preview supersedes “Limit weekday duration”. Training is unchanged until confirmation.",
+    );
+  });
+
+  it.each([
+    [
+      "stale-version",
+      change.intent,
+      "This request used an older Plan revision. Request a fresh preview.",
+    ],
+    [
+      "invalid-intent",
+      { kind: "weekday-duration", day: 2, minutes: 45 },
+      "Enter a duration above zero.",
+    ],
+    [
+      "invalid-intent",
+      { kind: "weekly-duration", hours: 6 },
+      "Enter a weekly duration above zero.",
+    ],
+    ["invalid-intent", { kind: "weekday-unavailable", day: 2 }, "Choose the weekday to change."],
+  ] satisfies [string, PlanChangeIntent, string][])(
+    "shows %s preview rejection for %j",
+    async (reason, intent, error) => {
+      const h = harness({ status: "rejected", reason });
+      h.controller.openPlanChangeEditor();
+      await h.controller.previewPlanChange(intent);
+      expect(h.surface()).toMatchObject({ editorOpen: true, busy: false, error });
+      expect(h.refresh).toHaveBeenCalledTimes(reason === "stale-version" ? 1 : 0);
+    },
+  );
+
+  it.each([
+    [
+      "apply",
+      { status: "applied", changeId: change.changeId, revisionNumber: 2, version: 8 },
+      "Change applied locally. Training now matches the confirmed preview.",
+    ],
+    [
+      "cancel",
+      { status: "cancelled", changeId: change.changeId, version: 8 },
+      "Change cancelled. Training is unchanged; the preview remains in history.",
+    ],
+  ] as const)("sends %s and refreshes both Plan projections", async (decision, result, notice) => {
+    const h = harness(result);
+    await h.controller.applyPlanChange(decision);
+    expect(h.call).toHaveBeenCalledWith("plan_change.apply", {
+      planId: "plan-active",
+      changeId: change.changeId,
+      expectedVersion: 7,
+      decision,
+      commandId: expect.any(String),
+    });
+    expect(h.refresh).toHaveBeenCalledOnce();
+    expect(h.surface()).toMatchObject({ busy: false, notice, focusRequest: { target: "change" } });
+  });
+
+  it.each([
+    [
+      "stale-version",
+      "This preview is stale because the Plan or its sources changed. Request a fresh preview; no training changed.",
+    ],
+    ["not-pending", "This preview is no longer pending. Training is unchanged."],
+    [
+      "command-conflict",
+      "This Change could not be applied. Training and the pending preview are unchanged.",
+    ],
+    [
+      "no-active-plan",
+      "This Change could not be applied. Training and the pending preview are unchanged.",
+    ],
+  ])("shows %s apply rejection", async (reason, notice) => {
+    const h = harness({ status: "rejected", reason });
+    await h.controller.applyPlanChange("apply");
+    expect(h.surface()).toMatchObject({ busy: false, notice });
+    expect(h.refresh).toHaveBeenCalledTimes(
+      reason === "stale-version" || reason === "not-pending" ? 1 : 0,
+    );
+  });
+
+  it.each(["stale-version", "not-pending"])(
+    "refreshes after %s apply so the next preview uses the new version",
+    async (reason) => {
+      const h = harness({ status: "rejected", reason });
+      h.refresh.mockImplementation(async () => h.updateVersion(8));
+      await h.controller.applyPlanChange("apply");
+      expect(h.refresh).toHaveBeenCalledOnce();
+      h.controller.openPlanChangeEditor();
+      await h.controller.previewPlanChange(change.intent);
+      expect(h.call).toHaveBeenNthCalledWith(2, "plan_change.preview", {
+        planId: "plan-active",
+        expectedVersion: 8,
+        intent: change.intent,
+        commandId: expect.any(String),
+      });
+    },
+  );
+
+  it("refreshes a stale preview before another preview", async () => {
+    const h = harness({ status: "rejected", reason: "stale-version" });
+    h.refresh.mockImplementation(async () => h.updateVersion(8));
+    await h.controller.previewPlanChange(change.intent);
+    expect(h.refresh).toHaveBeenCalledOnce();
+    await h.controller.previewPlanChange(change.intent);
+    expect(h.call).toHaveBeenNthCalledWith(2, "plan_change.preview", {
+      planId: "plan-active",
+      expectedVersion: 8,
+      intent: change.intent,
+      commandId: expect.any(String),
+    });
+  });
+
+  it.each(["apply", "preview"] as const)(
+    "preserves stale %s copy if the library refresh fails",
+    async (action) => {
+      const h = harness({ status: "rejected", reason: "stale-version" });
+      h.refresh.mockRejectedValue(new Error("unavailable"));
+      if (action === "apply") await h.controller.applyPlanChange("apply");
+      else await h.controller.previewPlanChange(change.intent);
+      expect(h.refresh).toHaveBeenCalledOnce();
+      expect(h.surface().busy).toBe(false);
+      expect(action === "apply" ? h.surface().notice : h.surface().error).toBe(
+        action === "apply"
+          ? "This preview is stale because the Plan or its sources changed. Request a fresh preview; no training changed."
+          : "This request used an older Plan revision. Request a fresh preview.",
+      );
+    },
+  );
+
+  it("keeps the pending preview on transport failure", async () => {
+    const h = harness(new Error("offline"));
+    await h.controller.applyPlanChange("apply");
+    expect(h.surface()).toMatchObject({
+      busy: false,
+      notice: "This Change could not be applied. Training and the pending preview are unchanged.",
+    });
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ kind: "weekday-duration", day: 2, minutes: 0 }, "Enter a duration above zero."],
+    [{ kind: "longest-workout", minutes: Number.NaN }, "Enter a duration above zero."],
+    [{ kind: "weekly-duration", hours: -1 }, "Enter a weekly duration above zero."],
+    [{ kind: "weekday-unavailable", day: 8 }, "Choose the weekday to change."],
+  ] satisfies [PlanChangeIntent, string][])(
+    "validates parameters before the RPC for %j",
+    async (intent, error) => {
+      const h = harness(null);
+      await h.controller.previewPlanChange(intent);
+      expect(h.surface().error).toBe(error);
+      expect(h.call).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not submit a retired preview", async () => {
+    const h = harness(null, [{ ...change, status: "cancelled" }]);
+    await h.controller.applyPlanChange("apply");
+    expect(h.call).not.toHaveBeenCalled();
+    expect(h.surface().notice).toBe("This preview is no longer pending. Training is unchanged.");
+  });
+
+  it("ignores actions and late responses after disposal", async () => {
+    const h = harness(null);
+    h.controller.dispose();
+    await h.controller.previewPlanChange(change.intent);
+    await h.controller.applyPlanChange("cancel");
+    expect(h.call).not.toHaveBeenCalled();
+    expect(h.surface()).toEqual(EMPTY_PLAN_CHANGE_SURFACE);
+  });
+});

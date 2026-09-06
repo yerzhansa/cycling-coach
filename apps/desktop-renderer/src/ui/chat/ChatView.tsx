@@ -27,6 +27,12 @@ import { QueuedMessages } from "./QueuedMessages";
 import { SpendNotice } from "./SpendNotice";
 import { TrainingContextPanel } from "./TrainingContextPanel";
 import { Transcript } from "./Transcript";
+import { PlanChangeCards } from "./PlanChangeCards";
+import {
+  PlanCreationActivateDialog,
+  PlanCreationDiscardDialog,
+  PlanCreationDock,
+} from "./PlanCreationCards";
 
 const CHAT_DISCLAIMER =
   "Not medical advice, and not a substitute for a doctor or a certified coach.";
@@ -49,10 +55,12 @@ export function ChatView(): ReactElement {
   const surface = useRef<HTMLElement>(null);
   const conversation = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const composerDraft = useRef("");
   const [contextOpen, setContextOpen] = useState(true);
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [compact, setCompact] = useState(false);
   const [decisionCustomOpen, setDecisionCustomOpen] = useState(false);
+  const [planCreationEditorOpen, setPlanCreationEditorOpen] = useState(false);
   const activeView = useEnduragentStore((state) => state.activeView);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
@@ -61,6 +69,15 @@ export function ChatView(): ReactElement {
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
   const planningRequestFocusId = useEnduragentStore((state) => state.chat.planningRequestFocusId);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const changeSurfaceVisible = useEnduragentStore((state) => {
+    const library = state.planLibrary.value;
+    return (
+      library?.active !== null &&
+      library?.active !== undefined &&
+      ((state.planChange.open && state.planChange.planId === library.active.planId) ||
+        library.changes.some((change) => change.status === "pending"))
+    );
+  });
   const mountedView = useRef(activeView);
 
   useLayoutEffect(() => {
@@ -135,6 +152,9 @@ export function ChatView(): ReactElement {
   const setCustomDecisionOpen = useCallback((open: boolean): void => {
     setDecisionCustomOpen(open);
   }, []);
+  const setPlanEditorOpen = useCallback((open: boolean): void => {
+    setPlanCreationEditorOpen(open);
+  }, []);
 
   return (
     <section
@@ -181,7 +201,7 @@ export function ChatView(): ReactElement {
       <div
         className={`chat-layout row-start-2 grid min-h-0 min-w-0 ${contextOpen && !compact ? "grid-cols-[minmax(0,1fr)_300px]" : "grid-cols-[minmax(0,1fr)]"}`}
       >
-        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]">
+        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] has-[[data-parity='question.card']]:grid-rows-[minmax(calc(var(--ctl-h-lg)*4),1fr)_minmax(0,auto)]">
           <main
             className="conversation overflow-auto pt-[calc(var(--inset)*4)] pb-[calc(var(--inset)*3)] [overflow-anchor:none] max-[760px]:pt-[calc(var(--inset)*3)]"
             aria-label="Coaching conversation"
@@ -190,6 +210,7 @@ export function ChatView(): ReactElement {
           >
             <div className="thread mx-auto w-[min(720px,calc(100%-48px))] max-[760px]:w-[calc(100%-32px)]">
               <Transcript />
+              <PlanChangeCards />
               <CoachProgress />
               <FirstSyncCard />
             </div>
@@ -208,14 +229,19 @@ export function ChatView(): ReactElement {
                 <Notice />
                 <RetryBar />
               </div>
-              <div className="mb-2.5 empty:hidden">
+              <div className="mb-2.5 grid gap-2.5 empty:hidden">
                 <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
+                <PlanCreationDock onEditorOpenChange={setPlanEditorOpen} />
               </div>
               <AttachmentPanel />
               <QueuedMessages />
             </div>
-            <Composer handle={composer} hidden={decisionCustomOpen} />
-            <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
+            {decisionCustomOpen || planCreationEditorOpen ? null : (
+              <Composer handle={composer} draftMemory={composerDraft} />
+            )}
+            <p className="mt-inset mb-0 text-center text-xs text-ink-3">
+              {changeSurfaceVisible ? "Training changes need your confirmation." : CHAT_DISCLAIMER}
+            </p>
           </div>
         </div>
         {contextOpen && !compact ? <TrainingContextPanel /> : null}
@@ -225,6 +251,8 @@ export function ChatView(): ReactElement {
           composer.current?.reset();
         }}
       />
+      <PlanCreationDiscardDialog />
+      <PlanCreationActivateDialog />
       <FollowLatest />
     </section>
   );

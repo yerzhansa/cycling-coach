@@ -1,0 +1,206 @@
+import type { ListPlansResult } from "@enduragent/coach-contract";
+import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_CHAT_SURFACE } from "../src/state/chat-slice";
+import { useEnduragentStore } from "../src/state/store";
+import { PlanCreationActivateDialog } from "../src/ui/chat/PlanCreationCards";
+
+const summary: NonNullable<ListPlansResult["active"]> = {
+  planId: "calendar-plan",
+  version: 1,
+  name: "Steady riding",
+  start: "1998-09-07",
+  end: "1998-10-04",
+  weeks: 4,
+  status: "active",
+  closeReason: null,
+  closedAt: null,
+  activatedAt: "1998-09-07",
+  calendar: { status: "pending", window: null, currentThrough: null, error: null },
+  creationId: null,
+};
+
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(new Date("1998-09-07T12:00:00").getTime());
+  useEnduragentStore.setState({
+    chat: {
+      ...EMPTY_CHAT_SURFACE,
+      planCreationActivateConfirmationOpen: true,
+      planCreationActivePlanKnowledge: { kind: "none" },
+    },
+    planLibrary: { status: "loading", value: null },
+    planLibraryActions: {
+      closePlan: vi.fn(),
+      readPlanHistory: vi.fn(),
+      refresh: vi.fn(async () => {}),
+      startCreation: vi.fn(),
+      continueCreation: vi.fn(),
+      changeInChat: vi.fn(),
+    } as never,
+    chatActions: null,
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe("activation calendar consequence", () => {
+  it.each([false, true])(
+    "shows the connected window when closing an active Plan is %s",
+    async (closing) => {
+      useEnduragentStore.setState({
+        chat: {
+          ...useEnduragentStore.getState().chat,
+          planCreationActivePlanKnowledge: closing
+            ? { kind: "active", name: summary.name }
+            : { kind: "none" },
+        },
+        planLibrary: {
+          status: "ready",
+          value: {
+            calendarConnected: true,
+            creation: null,
+            active: closing ? summary : null,
+            closed: closing ? [] : [{ ...summary, status: "closed" }],
+            changes: [],
+          },
+        },
+      });
+      render(<PlanCreationActivateDialog />);
+      expect(
+        await screen.findByText(
+          `Dated Workouts sync from ${closing ? "tomorrow" : "today"} through 13 Sept 1998.`,
+        ),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          closing
+            ? "Steady riding closes. Today’s calendar Workout stays. The new Plan activates now."
+            : "The new Plan activates now.",
+        ),
+      ).toBeVisible();
+    },
+  );
+
+  it.each(["unloaded", "empty", "not-connected", "verified"])(
+    "waits for connection when the disconnected library is %s",
+    async (kind) => {
+      if (kind !== "unloaded")
+        useEnduragentStore.setState({
+          planLibrary: {
+            status: "ready",
+            value: {
+              calendarConnected: false,
+              creation: null,
+              active:
+                kind === "empty"
+                  ? null
+                  : {
+                      ...summary,
+                      calendar:
+                        kind === "verified"
+                          ? {
+                              status: "verified",
+                              window: null,
+                              currentThrough: "1998-09-13",
+                              error: null,
+                            }
+                          : {
+                              status: "not-connected",
+                              window: null,
+                              currentThrough: null,
+                              error: null,
+                            },
+                    },
+              closed: [],
+              changes: [],
+            },
+          },
+        });
+      render(<PlanCreationActivateDialog />);
+      expect(
+        await screen.findByText("Calendar updates wait until intervals.icu is connected."),
+      ).toBeVisible();
+      expect(screen.queryByText(/Dated Workouts sync/)).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    "uses connection availability before the first Plan: %s",
+    async (calendarConnected) => {
+      useEnduragentStore.setState({
+        planLibrary: {
+          status: "ready",
+          value: { calendarConnected, creation: null, active: null, closed: [], changes: [] },
+        },
+      });
+      render(<PlanCreationActivateDialog />);
+      expect(
+        await screen.findByText(
+          calendarConnected
+            ? "Dated Workouts sync from today through 13 Sept 1998."
+            : "Calendar updates wait until intervals.icu is connected.",
+        ),
+      ).toBeVisible();
+    },
+  );
+
+  it("shows no sync line until the library read confirms the connection", async () => {
+    let finish: () => void = () => {};
+    const refresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    useEnduragentStore.setState({
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: true, creation: null, active: null, closed: [], changes: [] },
+      },
+      planLibraryActions: {
+        ...useEnduragentStore.getState().planLibraryActions,
+        refresh,
+      } as never,
+    });
+    render(<PlanCreationActivateDialog />);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Dated Workouts sync/)).toBeNull();
+    expect(screen.queryByText(/Calendar updates wait/)).toBeNull();
+    useEnduragentStore.setState({
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: false, creation: null, active: null, closed: [], changes: [] },
+      },
+    });
+    finish();
+    expect(
+      await screen.findByText("Calendar updates wait until intervals.icu is connected."),
+    ).toBeVisible();
+    expect(screen.queryByText(/Dated Workouts sync/)).toBeNull();
+  });
+
+  it("treats a failed library read as disconnected even with a cached connected library", async () => {
+    const refresh = vi.fn(async () => {
+      useEnduragentStore.setState({
+        planLibrary: {
+          status: "unavailable",
+          value: { calendarConnected: true, creation: null, active: null, closed: [], changes: [] },
+        },
+      });
+    });
+    useEnduragentStore.setState({
+      planLibrary: {
+        status: "ready",
+        value: { calendarConnected: true, creation: null, active: null, closed: [], changes: [] },
+      },
+      planLibraryActions: {
+        ...useEnduragentStore.getState().planLibraryActions,
+        refresh,
+      } as never,
+    });
+    render(<PlanCreationActivateDialog />);
+    expect(
+      await screen.findByText("Calendar updates wait until intervals.icu is connected."),
+    ).toBeVisible();
+    expect(screen.queryByText(/Dated Workouts sync/)).toBeNull();
+  });
+});

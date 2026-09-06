@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatQueueSnapshot,
+  PlanCreationAnswerInput,
   CoachEngine,
   PlanProgressEvent,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import {
   createPlanConversationRepository,
+  createPlanCreationRepository,
   createPlanReconciliationRepository,
   createPlanRepository,
   createPlanSettingsRepository,
@@ -41,6 +43,7 @@ import {
   type PlanMirrorCalendarPort,
 } from "@enduragent/engine";
 import { createPlanningOperations, type PlanDraftBuilder } from "../src/planning-operations.js";
+import { createPlanCreationOperations } from "../src/plan-creation-operations.js";
 import type { PlanRaceCourseAdapter } from "../src/planning-race-course.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
@@ -243,6 +246,91 @@ describe("Plan operations", () => {
 
   afterEach(async () => {
     await store.close();
+  });
+
+  it("reads an activated creation and its dated Workouts without legacy phases", async () => {
+    let sequence = 100;
+    const authored: AuthoredIdentity = {
+      deviceId: async () => "activation-test-device",
+      newUlid: () => `${"0".repeat(23)}${++sequence}`,
+      hlcStamp: () => ({ physicalMs: 904_780_800_000, counter: 0 }),
+    };
+    const creation = createPlanCreationOperations({
+      store,
+      repository: createPlanCreationRepository(store),
+      identity: authored,
+      crypto: globalThis.crypto,
+      eventCandidates: { read: async () => [] },
+      today: () => "1998-09-02",
+    });
+    const started = await creation["plan_creation.start"]({ commandId: "start" });
+    if (started.status !== "started") throw new Error("Expected creation");
+    let card = started.planCreation;
+    const answers: readonly PlanCreationAnswerInput[] = [
+      { kind: "goal", goal: { kind: "fitness" } },
+      { kind: "plan-length", weeks: 4 },
+      { kind: "schedule-mode", mode: "fixed" },
+      {
+        kind: "availability",
+        mode: "fixed",
+        weeklyHoursLimit: 8,
+        longestWorkoutHours: 3,
+        usableWeekdays: [2, 4, 6],
+      },
+      { kind: "start-timing", timing: { kind: "as-soon-as-possible" } },
+      { kind: "commitments", commitments: { kind: "none" } },
+      { kind: "baseline", baseline: "regular" },
+      { kind: "success", success: { kind: "fitness-choice", choice: "climb-stronger" } },
+      { kind: "restriction", restriction: { kind: "none" } },
+    ];
+    for (const answer of answers) {
+      const result = await creation["plan_creation.answer"]({
+        commandId: `answer-${++sequence}`,
+        creationId: card.creationId,
+        expectedVersion: card.version,
+        answer,
+      });
+      if (result.status !== "answered") throw new Error("Expected confirmed answer");
+      card = result.planCreation;
+    }
+    const reviewed = await creation["plan_creation.preview"]({
+      commandId: "preview",
+      creationId: card.creationId,
+      expectedVersion: card.version,
+    });
+    if (reviewed.status !== "previewed" || reviewed.planCreation.draft === null)
+      throw new Error("Expected Draft");
+    const activated = await creation["plan_creation.activate"]({
+      commandId: "activate",
+      creationId: card.creationId,
+      expectedVersion: reviewed.planCreation.version,
+    });
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { todayDateKey: () => 19980902 },
+    );
+    const result = await operations.getPlanState?.({});
+    expect(result).toMatchObject({
+      status: "ready",
+      state: {
+        projection: "active",
+        data: {
+          plan: { id: activated.planId, name: "Improve fitness" },
+          workouts: expect.any(Array),
+        },
+      },
+    });
+    if (result?.status !== "ready") throw new Error("Expected active Plan state");
+    const draftWorkouts = reviewed.planCreation.draft.weeks[0]?.workouts ?? [];
+    expect(result.state.data.workouts).toEqual(
+      draftWorkouts.map((workout) =>
+        expect.objectContaining({
+          date: workout.date,
+          name: workout.name,
+          durationS: workout.minutes * 60,
+        }),
+      ),
+    );
   });
 
   it("persists and relaunches a dedicated streamed Plan conversation", async () => {

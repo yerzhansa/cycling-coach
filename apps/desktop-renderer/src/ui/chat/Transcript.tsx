@@ -22,6 +22,10 @@ import { CoachMessage } from "./CoachMessage";
 import { HistoryControls } from "./HistoryControls";
 import { PlanReferenceCard } from "./PlanReferenceCard";
 import { StreamingMessage } from "./StreamingMessage";
+import {
+  PlanCreationConversation,
+  PlanCreationDiscardConsequence,
+} from "./PlanCreationCards";
 
 function planHandoffSummary(suggestion: PlanHandoffSuggestion): string {
   if (suggestion.kind === "plan_creation") {
@@ -320,10 +324,20 @@ export function ConversationTranscript(props: {
                 />
               ) : item.kind === "choice" ? (
                 <ChoiceRow key={`choice:${item.choice.id}`} choice={item.choice} />
-              ) : (
+              ) : item.kind === "planning-request" ? (
                 <PlanningRequestRow
                   key={`planning-request:${item.delivery.requestId}`}
                   delivery={item.delivery}
+                />
+              ) : item.kind === "plan-creation" ? (
+                <PlanCreationConversation
+                  key={`plan-creation:${item.model?.creationId ?? "active"}`}
+                  model={item.model}
+                />
+              ) : (
+                <PlanCreationDiscardConsequence
+                  key={`plan-creation-discard:${item.eventId}`}
+                  eventId={item.eventId}
                 />
               ),
             )}

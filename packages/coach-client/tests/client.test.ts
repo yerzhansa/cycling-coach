@@ -124,6 +124,34 @@ const rpcDeadlineCases = [
   ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
   ["getPlanningReadModel", {}, 30_000],
+  ["plan.list", {}, 30_000],
+  [
+    "plan.close",
+    { commandId: "close-1", planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV", expectedVersion: 1 },
+    30_000,
+  ],
+  [
+    "plan_change.preview",
+    {
+      commandId: "change-preview",
+      planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      expectedVersion: 1,
+      intent: { kind: "longest-workout", minutes: 60 },
+    },
+    30_000,
+  ],
+  [
+    "plan_change.apply",
+    {
+      commandId: "change-apply",
+      planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      changeId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      expectedVersion: 1,
+      decision: "apply",
+    },
+    30_000,
+  ],
+  ["plan.history", { planId: "01ARZ3NDEKTSV4RRFFQ69G5FAV" }, 30_000],
   [
     "getActivityAnalysis",
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
@@ -221,6 +249,44 @@ const rpcDeadlineCases = [
   ["retryPlanningRequest", { requestId: "request-1" }, 30_000],
   ["resumePlanningRequests", {}, 30_000],
   ["listPlanningRequests", { chatId: "chat-1" }, 30_000],
+  ["plan_creation.start", { commandId: "plan-start" }, 30_000],
+  [
+    "plan_creation.answer",
+    {
+      commandId: "plan-answer",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+      answer: { kind: "goal", goal: { kind: "fitness", outcome: "Build power" } },
+    },
+    30_000,
+  ],
+  [
+    "plan_creation.preview",
+    {
+      commandId: "plan-preview",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+    },
+    30_000,
+  ],
+  [
+    "plan_creation.discard",
+    {
+      commandId: "plan-discard",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+    },
+    30_000,
+  ],
+  [
+    "plan_creation.activate",
+    {
+      commandId: "plan-activate",
+      creationId: "00000000000000000000000000",
+      expectedVersion: 1,
+    },
+    30_000,
+  ],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -991,6 +1057,17 @@ describe("RPC receive and observers", () => {
           plannedWorkouts: [],
           wellness: {},
         },
+        "plan.list": {
+          calendarConnected: false,
+          creation: null,
+          active: null,
+          closed: [],
+          changes: [],
+        },
+        "plan.close": { status: "rejected", reason: "no-active-plan" },
+        "plan_change.preview": { status: "rejected", reason: "no-active-plan" },
+        "plan_change.apply": { status: "rejected", reason: "no-active-plan" },
+        "plan.history": null,
         getPlanningReadModel: {
           schemaVersion: 1,
           status: "no-plan",
@@ -1172,7 +1249,25 @@ describe("RPC receive and observers", () => {
         getPlanningRequest: { status: "missing" },
         retryPlanningRequest: { status: "missing" },
         resumePlanningRequests: { deliveries: [] },
-        listPlanningRequests: { deliveries: [] },
+        listPlanningRequests: { deliveries: [], planCreation: null },
+        "plan_creation.start": { status: "rejected", reason: "command-conflict" },
+        "plan_creation.answer": {
+          status: "rejected",
+          reason: "no-unfinished-creation",
+          planCreation: null,
+        },
+        "plan_creation.preview": {
+          status: "rejected",
+          reason: "not-ready",
+          planCreation: null,
+        },
+        "plan_creation.discard": { status: "discarded" },
+        "plan_creation.activate": {
+          creationId: "01J00000000000000000000000",
+          planId: "01J00000000000000000000001",
+          closedPlanId: null,
+          activatedAt: "1998-09-07",
+        },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
