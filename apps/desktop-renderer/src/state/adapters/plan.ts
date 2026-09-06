@@ -7,6 +7,7 @@ import {
   type ExecutePlanTransitionRpcResult,
   type GetPlanStateRpcResult,
   type PlanError,
+  type ListPlansResult,
   type PlanHydrationState,
   type PlanProgressEvent,
   type PlanReadModel,
@@ -23,6 +24,10 @@ import type { ChatSurfaceState } from "../chat-slice";
 import type { PlanSurfaceState, PlanTransitionState } from "../plan-slice";
 import { planReadModel } from "../plan-slice";
 import { createChatViewAdapter } from "./chat";
+
+export async function listPlans(clients: DesktopCoachClientProvider): Promise<ListPlansResult> {
+  return (await clients.getClient()).call("plan.list", {});
+}
 
 export interface PlanBridge {
   getPlanState(): Promise<GetPlanStateRpcResult>;

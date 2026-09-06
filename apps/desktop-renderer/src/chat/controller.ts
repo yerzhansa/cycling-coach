@@ -54,6 +54,8 @@ export type ActivePlanKnowledge =
   | { readonly kind: "none" }
   | { readonly kind: "active"; readonly name: string };
 
+export const CHAT_PLAN_CREATION_CONTINUE_MISSING_COPY =
+  "This creation is no longer unfinished. Open the Plan library for its current result.";
 export const CHAT_CONNECTION_INTERRUPTED_COPY =
   "Connection interrupted. Your partial response is preserved.";
 export const CHAT_RESPONSE_STOPPED_COPY = "Response stopped. Your partial response is preserved.";
@@ -237,6 +239,8 @@ export interface ChatController {
   refreshPlanningRequests(): void;
   focusPlanningRequest(requestId: string): void;
   clearPlanningRequestFocus(): void;
+  resumeCreation(model: PlanCreationCardModel | null): void;
+  continueCreationFromLibrary(creationId: string): Promise<void>;
   startPlanCreation(): Promise<void>;
   answerPlanCreation(answer: PlanCreationAnswerInput): Promise<void>;
   buildPlanCreationDraft(): Promise<void>;
@@ -316,6 +320,7 @@ export function createChatController(input: {
   readonly refreshTrainingContext: () => Promise<void>;
   readonly refreshSpend: () => Promise<void>;
   readonly refreshPlan?: () => Promise<void>;
+  readonly openChat?: () => void;
   readonly readTranscriptPage?: (request: {
     readonly cursor: string | null;
     readonly limit: number;
@@ -2020,6 +2025,57 @@ export function createChatController(input: {
       planningRequestFocusId = null;
       render();
     },
+    resumeCreation(model) {
+      if (disposed || planCreationBusy) return;
+      installPlanCreation(model);
+      planCreationLoaded = true;
+      planCreationEditingKey = null;
+      clearPlanCreationPause();
+      planCreationPaused = false;
+      planCreationFocusRevision += 1;
+      if (planCreation?.draft !== null && planCreation?.draft !== undefined) {
+        requestPlanCreationFocus("activate");
+      }
+      render();
+    },
+    async continueCreationFromLibrary(creationId) {
+      if (disposed || planCreationBusy) return;
+      planCreationBusy = true;
+      planCreationError = null;
+      planCreationNotice = null;
+      render();
+      try {
+        const result = await (
+          await input.clients.getClient()
+        ).call("listPlanningRequests", {
+          chatId: DESKTOP_CHAT_ID,
+        });
+        if (disposed) return;
+        if (result.planCreation?.creationId !== creationId) {
+          planCreationNotice = CHAT_PLAN_CREATION_CONTINUE_MISSING_COPY;
+          render();
+          await input.refreshPlan?.();
+          if (disposed) return;
+          installPlanCreation(result.planCreation);
+          planCreationLoaded = true;
+          return;
+        }
+        input.openChat?.();
+        installPlanCreation(result.planCreation);
+        planCreationLoaded = true;
+        planCreationEditingKey = null;
+        clearPlanCreationPause();
+        planCreationPaused = false;
+        planCreationFocusRevision += 1;
+        if (result.planCreation.draft !== null) requestPlanCreationFocus("activate");
+        render();
+      } catch {
+        planCreationError = CHAT_PLAN_CREATION_FAILURE_COPY;
+      } finally {
+        planCreationBusy = false;
+        render();
+      }
+    },
     async startPlanCreation() {
       if (
         disposed ||
@@ -2257,6 +2313,7 @@ export function createChatController(input: {
         pendingPlanCreationCommand = null;
         planCreationDiscardConfirmationOpen = false;
         if (result.status === "discarded") {
+          input.openChat?.();
           installPlanCreation(null, "start");
           if (!planCreationDiscardEvents.some((event) => event.eventId === target.creationId)) {
             planCreationDiscardEvents = [

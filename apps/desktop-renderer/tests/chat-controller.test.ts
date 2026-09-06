@@ -688,6 +688,7 @@ function subject(
   const refresh = vi.fn(refreshImplementation);
   const refreshSpend = vi.fn(spendRefreshImplementation);
   const refreshPlan = vi.fn(async () => {});
+  const openChat = vi.fn();
   const provider: DesktopCoachClientProvider = {
     getClient: vi.fn(async () => first),
     reconnect: vi.fn(async () => reconnected),
@@ -712,6 +713,7 @@ function subject(
     },
     refreshTrainingContext: refresh,
     refreshPlan,
+    openChat,
     refreshSpend,
     canChat,
     initialQueueSnapshot,
@@ -742,6 +744,7 @@ function subject(
     refresh,
     refreshSpend,
     refreshPlan,
+    openChat,
     openPlanningRequest,
   };
 }
@@ -2145,7 +2148,7 @@ describe("chat controller", () => {
         planCreation: nextCard,
       }),
     });
-    const { controller, controls } = subject(fake);
+    const { controller, controls, openChat } = subject(fake);
     await controller.start();
 
     controller.openPlanCreationDiscard();
@@ -2165,8 +2168,14 @@ describe("chat controller", () => {
       discardConfirmationOpen: true,
     });
 
+    expect(openChat).not.toHaveBeenCalled();
+    const focusRequest = controls.at(-1)?.planCreation?.focusRequest;
+    openChat.mockImplementation(() => {
+      expect(controls.at(-1)?.planCreation?.focusRequest).toEqual(focusRequest);
+    });
     finishDiscard({ status: "discarded" });
     await Promise.all([first, second]);
+    expect(openChat).toHaveBeenCalledOnce();
 
     expect(controls.at(-1)?.planCreation).toMatchObject({
       value: null,
@@ -3598,5 +3607,122 @@ describe("chat controller", () => {
     expect(
       vi.mocked(fake.call).mock.calls.filter(([method]) => method === "resetSession"),
     ).toHaveLength(1);
+  });
+});
+
+describe("Plan library Chat entry", () => {
+  const creation: PlanCreationCardModel = {
+    creationId: "library-creation",
+    version: 1,
+    status: "in-progress",
+    readiness: "incomplete",
+    answeredSummaries: [planLengthSummary(12)],
+    openQuestion: goalQuestion("Goal?"),
+    draft: null,
+    draftStale: false,
+  };
+
+  it.each([null, { ...creation, creationId: "replacement-creation" }])(
+    "keeps a stale library entry out of Chat and refreshes its result",
+    async (current) => {
+      const fake = client(replies(), {
+        listPlanningRequests: async () => ({ deliveries: [], planCreation: current }),
+      });
+      const { controller, controls, openChat, refreshPlan } = subject(fake);
+      controller.resumeCreation(creation);
+      await controller.continueCreationFromLibrary(creation.creationId);
+      expect(openChat).not.toHaveBeenCalled();
+      expect(refreshPlan).toHaveBeenCalledOnce();
+      expect(controls.at(-1)?.planCreation).toMatchObject({
+        value: current,
+        busy: false,
+        notice:
+          "This creation is no longer unfinished. Open the Plan library for its current result.",
+      });
+      controller.dispose();
+    },
+  );
+
+  it("opens Chat only after checking the unfinished creation and uses its current version", async () => {
+    let resolve!: (value: { deliveries: []; planCreation: PlanCreationCardModel }) => void;
+    const pending = new Promise<{ deliveries: []; planCreation: PlanCreationCardModel }>((done) => {
+      resolve = done;
+    });
+    const fake = client(replies(), { listPlanningRequests: () => pending });
+    const { controller, controls, openChat } = subject(fake);
+    controller.resumeCreation(creation);
+    const focusRevision = controls.at(-1)?.planCreation?.focusRevision;
+    openChat.mockImplementation(() => {
+      expect(controls.at(-1)?.planCreation?.focusRevision).toBe(focusRevision);
+    });
+    const continuing = controller.continueCreationFromLibrary(creation.creationId);
+    expect(openChat).not.toHaveBeenCalled();
+    const current = { ...creation, version: 2 };
+    resolve({ deliveries: [], planCreation: current });
+    await continuing;
+    expect(openChat).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: current,
+      paused: false,
+      busy: false,
+    });
+    controller.dispose();
+  });
+
+  it("installs a library creation before Chat hydration and focuses its open question", () => {
+    const { controller, controls } = subject(client(replies()));
+    controller.resumeCreation(creation);
+    const resumed = controls.at(-1)?.planCreation;
+    expect(resumed).toMatchObject({
+      loaded: true,
+      value: creation,
+      paused: false,
+      editingKey: null,
+    });
+    expect(resumed?.focusRevision).toBeGreaterThan(0);
+    controller.editPlanCreation("plan-length");
+    controller.pausePlanCreation();
+    controller.resumeCreation(creation);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: creation,
+      paused: false,
+      editingKey: null,
+    });
+    expect(controls.at(-1)?.planCreation?.focusRevision).toBeGreaterThan(
+      resumed?.focusRevision ?? 0,
+    );
+    controller.dispose();
+  });
+
+  it("focuses Activate when the resumed creation already has a Draft", () => {
+    const { controller, controls } = subject(client(replies()));
+    const draft = { ...creation, draft: planCreationDraft(), openQuestion: null };
+    controller.resumeCreation(draft);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      value: draft,
+      focusRequest: { target: "activate" },
+    });
+    controller.dispose();
+  });
+
+  it("prepares an empty library entry to start before Chat hydration", async () => {
+    const start = vi.fn(
+      async (): Promise<PlanCreationStartRpcResult> => ({
+        status: "started",
+        outcome: "created",
+        planCreation: creation,
+      }),
+    );
+    const fake = client(replies(), { startPlanCreation: start });
+    const { controller, controls } = subject(fake);
+    controller.resumeCreation(null);
+    expect(controls.at(-1)?.planCreation).toMatchObject({
+      loaded: true,
+      value: null,
+      paused: false,
+    });
+    await controller.startPlanCreation();
+    expect(start).toHaveBeenCalledOnce();
+    controller.dispose();
   });
 });
