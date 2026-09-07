@@ -295,6 +295,12 @@ terminal_at_ms,device_id,hlc_physical_ms,hlc_counter
               command.hlcCounter,
             ],
           );
+          await store.run(
+            `UPDATE planning_authority
+SET chat_authority_since_ms = ?, device_id = ?, hlc_physical_ms = ?, hlc_counter = ?
+WHERE singleton = 1 AND chat_authority_since_ms IS NULL`,
+            [command.nowMs, command.deviceId, command.hlcPhysicalMs, command.hlcCounter],
+          );
           snapshot = await requireUnfinished();
         }
         await recordCommand(

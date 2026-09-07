@@ -1012,72 +1012,82 @@ describe("Plan surface", () => {
     expect(planActions.retry).toHaveBeenCalledOnce();
   });
 
-  it("keeps reconciliation failures inline on the active Plan with retry and verify actions", async () => {
-    const user = userEvent.setup();
-    const planActions = actions();
-    const state = planReadModel({
-      lifecycle: "active",
-      scenarioId: "PL-S039",
-      projection: "active",
-      planId: "00000000000000000000000003",
-      attentionCount: 1,
-      reconciliation: {
-        status: "failed",
-        created: 1,
-        pending: 0,
-        failed: 1,
-        total: 2,
-        currentThrough: null,
-        error: {
-          code: "provider-failed",
-          message: "Some workouts could not be updated in Intervals.",
-          retryable: true,
+  it.each(["pending", "failed", "running", "verified"] as const)(
+    "hides the legacy calendar panel when reconciliation is %s",
+    (status) => {
+      const planActions = actions();
+      const state = planReadModel({
+        lifecycle: "active",
+        scenarioId: status === "failed" ? "PL-S039" : "PL-S010",
+        projection: "active",
+        planId: "00000000000000000000000003",
+        attentionCount: 1,
+        reconciliation: {
+          status: status === "pending" ? "not-started" : status,
+          created: 1,
+          pending: status === "pending" ? 1 : 0,
+          failed: status === "failed" ? 1 : 0,
+          total: 2,
+          currentThrough: status === "verified" ? "2026-08-18" : null,
+          error:
+            status === "failed"
+              ? {
+                  code: "provider-failed",
+                  message: "Some workouts could not be updated in Intervals.",
+                  retryable: true,
+                }
+              : null,
         },
-      },
-      data: {
+        data: {
+          plan: {
+            id: "00000000000000000000000003",
+            name: "Gran Fondo Almaty",
+            primaryGoal: "Finish in the front half",
+            startDate: "2026-07-13",
+            targetDate: "2026-10-04",
+            kind: "full-plan",
+            totalWeeks: 12,
+            weekStartDay: 1,
+            workoutCount: 20,
+            plannedDurationS: 72_000,
+          },
+          today: "2026-08-18",
+          weekIndex: 6,
+          todayWorkout: {
+            id: "00000000000000000000000004",
+            date: "2026-08-18",
+            sport: "cycling",
+            name: "Recovery spin",
+            durationS: 2_700,
+          },
+          workouts: [],
+        },
+      });
+      useEnduragentStore.setState({
         plan: {
-          id: "00000000000000000000000003",
-          name: "Gran Fondo Almaty",
-          primaryGoal: "Finish in the front half",
-          startDate: "2026-07-13",
-          targetDate: "2026-10-04",
-          kind: "full-plan",
-          totalWeeks: 12,
-          weekStartDay: 1,
-          workoutCount: 20,
-          plannedDurationS: 72_000,
+          ...EMPTY_PLAN_SURFACE,
+          hydration: { status: "ready", state },
+          lastReady: state,
         },
-        today: "2026-08-18",
-        weekIndex: 6,
-        todayWorkout: {
-          id: "00000000000000000000000004",
-          date: "2026-08-18",
-          sport: "cycling",
-          name: "Recovery spin",
-          durationS: 2_700,
-        },
-        workouts: [],
-      },
-    });
-    useEnduragentStore.setState({
-      plan: {
-        ...EMPTY_PLAN_SURFACE,
-        hydration: { status: "ready", state },
-        lastReady: state,
-      },
-      planActions,
-    });
+        planActions,
+      });
 
-    render(<PlanView />);
+      render(<PlanView />);
 
-    expect(screen.getByRole("heading", { name: "Plan active · week 6 of 12" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Today · Recovery spin" })).toBeInTheDocument();
-    expect(screen.getByText("Created 1 · Pending 0 · Failed 1 · Total 2")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    await user.click(screen.getByRole("button", { name: "Verify again" }));
-    expect(planActions.reconcilePlan).toHaveBeenCalledOnce();
-    expect(planActions.verifyReconciliation).toHaveBeenCalledOnce();
-  });
+      expect(
+        screen.getByRole("heading", { name: "Plan active · week 6 of 12" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Today · Recovery spin" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Intervals calendar update")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Update Intervals" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Verify again" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: /Intervals/u })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Created 1 · Pending/u)).not.toBeInTheDocument();
+      expect(planActions.reconcilePlan).not.toHaveBeenCalled();
+      expect(planActions.verifyReconciliation).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the normal active Plan concise and shows the prototype summary facts", () => {
     const state = planReadModel({

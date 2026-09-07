@@ -89,7 +89,6 @@ import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-no
 import {
   createLegacyPlanRepository,
   createLegacyPlanRowWriter,
-  importLegacyCurrentPlan,
   readLegacyCurrentPlanSummary,
 } from "@enduragent/kernel-node/planning";
 import {
@@ -909,16 +908,6 @@ export async function createLocalCoachComposition(
   });
   const planningRepository = createLegacyPlanRepository(input.context.store);
   const legacyWriterFence = createLegacyWriterFence(input.context.store);
-  if (!(await legacyWriterFence.fenced())) {
-    await importLegacyCurrentPlan({
-      home: input.home,
-      store: input.context.store,
-      identity: planningIdentity,
-      importDateKey: planningDateKey(),
-      importTimestampMs: now(),
-      logger: { warn: () => logger.warn("legacy_plan_import_skipped") },
-    });
-  }
   const persistPlan = await createLegacyPlanRowWriter({
     repository: planningRepository,
     identity: planningIdentity,

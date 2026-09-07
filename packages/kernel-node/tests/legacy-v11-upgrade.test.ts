@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,14 +15,14 @@ import { createLocalCoachComposition } from "../../coach/src/composition.js";
 import { createPlanCreationOperations } from "../../coach/src/plan-creation-operations.js";
 import { createAuthoredIdentity, type AthleteHome } from "../src/home/index.js";
 import { inertWriterProtocolListener } from "../src/lock/index.js";
-import { LEGACY_PLAN_IMPORT_MARKER, readLegacyCurrentPlanSummary } from "../src/planning/index.js";
+import { readLegacyCurrentPlanSummary } from "../src/planning/index.js";
 import {
   dumpLegacyV11Tables,
   legacyCurrentPlanJson,
   legacyV11Store,
 } from "./helpers/legacy-v11-store.js";
 
-describe("legacy v11 store upgrade and startup import", () => {
+describe("legacy v11 store upgrade and startup", () => {
   let root: string;
   let home: AthleteHome;
   let store: SqlStore & MigratorStore;
@@ -134,13 +134,11 @@ describe("legacy v11 store upgrade and startup import", () => {
     return tables;
   }
 
-  async function expectMarker() {
-    await expect(readFile(join(home.configDir, LEGACY_PLAN_IMPORT_MARKER), "utf8")).resolves.toBe(
-      "completed\n",
-    );
+  async function expectNoMarker() {
+    expect(await readdir(home.configDir)).not.toContain("planning-current-plan-import-v1");
   }
 
-  it("upgrades v11 without changing seeded rows and creates empty tables", async () => {
+  it("upgrades v11 without changing seeded rows and initializes planning authority", async () => {
     expect(await store.getUserVersion()).toBe(11);
     const before = await dumpLegacyV11Tables(store);
     for (const rows of Object.values(before)) expect(rows).toHaveLength(1);
@@ -149,7 +147,7 @@ describe("legacy v11 store upgrade and startup import", () => {
     const result = await runMigrations(store, MIGRATIONS);
 
     expect(result.applied).toEqual([
-      12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+      12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
     ]);
     expect(await dumpLegacyV11Tables(store)).toEqual(before);
     const newTables = (await tableNames()).filter((name) => !previousTables.has(name));
@@ -185,6 +183,7 @@ describe("legacy v11 store upgrade and startup import", () => {
       "plan_workout",
       "plan_workout_drift",
       "plan_workout_match",
+      "planning_authority",
       "planning_command",
       "planning_plan",
       "planning_request",
@@ -195,21 +194,32 @@ describe("legacy v11 store upgrade and startup import", () => {
       "training_restriction",
     ]);
     const counts = await rowCounts();
-    for (const table of newTables) expect(counts[table], table).toBe(0);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 31 });
+    for (const table of newTables) {
+      expect(counts[table], table).toBe(table === "planning_authority" ? 1 : 0);
+    }
+    expect(await store.all("SELECT * FROM planning_authority")).toEqual([
+      {
+        singleton: 1,
+        chat_authority_since_ms: null,
+        device_id: null,
+        hlc_physical_ms: null,
+        hlc_counter: null,
+      },
+    ]);
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 32 });
   });
 
-  it("writes the startup marker without a Plan when the legacy JSON is absent", async () => {
+  it("creates no Plan or startup marker when the legacy JSON is absent", async () => {
     await runMigrations(store, MIGRATIONS);
 
     await startCompositionUntilReferenceBootstrap();
 
     expect(await createPlanRepository(store).count()).toBe(0);
-    await expectMarker();
+    await expectNoMarker();
   });
 
   it.each(["draft", "active", "with-workouts"] as const)(
-    "imports %s once, preserves its source and workout ids, and lists it as read-only legacy history",
+    "leaves %s unimported, preserves its source, and lists it as read-only legacy history",
     async (variant) => {
       await runMigrations(store, MIGRATIONS);
       const source = legacyCurrentPlanJson(variant);
@@ -222,62 +232,16 @@ describe("legacy v11 store upgrade and startup import", () => {
 
       const counts = await rowCounts();
       expect(counts).toMatchObject({
-        plan: 1,
-        plan_workout: source.workouts.length,
-        plan_settings: 1,
+        plan: 0,
+        plan_workout: 0,
+        plan_settings: 0,
         planning_plan: 0,
         plan_revision: 0,
         plan_reconciliation_job: 0,
       });
-      const plan = await store.get("SELECT * FROM plan");
-      expect(plan).toMatchObject({
-        id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
-        origin_id: source.id,
-        name: source.name,
-        primary_goal: source.primaryGoal,
-        start_date_key: Number(source.startDate.replaceAll("-", "")),
-        target_date_key: Number(source.targetDate.slice(0, 10).replaceAll("-", "")),
-        created_at_ms: Date.parse(source.createdAt),
-        updated_at_ms: Date.parse(source.updatedAt),
-        kind: "short_race_preparation",
-        week_start_day: 1,
-        total_weeks: source.totalWeeks,
-        status: source.status,
-      });
-      if (typeof plan?.structure_json !== "string") throw new Error("Expected Plan structure JSON");
-      expect(JSON.parse(plan.structure_json)).toEqual(source);
-      expect(await store.all("SELECT * FROM plan_settings")).toEqual([
-        {
-          plan_id: plan.id,
-          auto_apply: 0,
-          weekly_review: 1,
-          updated_at_ms: plan.updated_at_ms,
-          device_id: plan.device_id,
-          hlc_physical_ms: plan.hlc_physical_ms,
-          hlc_counter: plan.hlc_counter,
-        },
-      ]);
       expect(await readFile(sourcePath)).toEqual(sourceBytes);
       expect((await stat(sourcePath)).mtimeMs).toBe(sourceStat.mtimeMs);
-      await expectMarker();
-      expect(
-        await store.all(
-          "SELECT id, plan_id, date_key, sport, name, duration_s, origin, structure_json FROM plan_workout ORDER BY date_key",
-        ),
-      ).toEqual(
-        source.workouts
-          .map((workout) => ({
-            id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
-            plan_id: plan.id,
-            date_key: workout.dateKey ?? Number(workout.date.replaceAll("-", "")),
-            sport: workout.sport,
-            name: workout.name,
-            duration_s: workout.durationS ?? workout.totalDuration,
-            origin: workout.origin,
-            structure_json: JSON.stringify(workout),
-          }))
-          .sort((left, right) => left.date_key - right.date_key),
-      );
+      await expectNoMarker();
       const beforeSecondLaunch = await logicalDump();
 
       await startCompositionUntilReferenceBootstrap();
@@ -285,7 +249,7 @@ describe("legacy v11 store upgrade and startup import", () => {
       expect(await logicalDump()).toEqual(beforeSecondLaunch);
       expect(await readFile(sourcePath)).toEqual(sourceBytes);
       expect((await stat(sourcePath)).mtimeMs).toBe(sourceStat.mtimeMs);
-      await expectMarker();
+      await expectNoMarker();
 
       const operations = createPlanCreationOperations({
         legacyPlan: () => readLegacyCurrentPlanSummary({ home, logger: { warn: vi.fn() } }),
@@ -316,7 +280,7 @@ describe("legacy v11 store upgrade and startup import", () => {
     },
   );
 
-  it("imports on the next launch once the creation fence lifts", async () => {
+  it("keeps the fence durable after discard and a later creation", async () => {
     await runMigrations(store, MIGRATIONS);
     await writeFile(
       join(root, "plans", "current-plan.json"),
@@ -339,13 +303,14 @@ describe("legacy v11 store upgrade and startup import", () => {
     expect(started.outcome).toBe("created");
     const fence = createLegacyWriterFence(store);
     expect(await fence.fenced()).toBe(true);
+    expect(await store.get("SELECT chat_authority_since_ms FROM planning_authority")).toEqual({
+      chat_authority_since_ms: command.nowMs,
+    });
 
     await startCompositionUntilReferenceBootstrap();
 
     expect(await createPlanRepository(store).count()).toBe(0);
-    await expect(readFile(join(home.configDir, LEGACY_PLAN_IMPORT_MARKER))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectNoMarker();
     await expect(
       repository.discard({
         creationId: started.snapshot.id,
@@ -358,12 +323,37 @@ describe("legacy v11 store upgrade and startup import", () => {
         },
       }),
     ).resolves.toEqual({ outcome: "discarded" });
-    expect(await fence.fenced()).toBe(false);
+    expect(await fence.fenced()).toBe(true);
+    expect(await store.get("SELECT chat_authority_since_ms FROM planning_authority")).toEqual({
+      chat_authority_since_ms: command.nowMs,
+    });
+    await expect(
+      store.run("UPDATE planning_authority SET chat_authority_since_ms = NULL WHERE singleton = 1"),
+    ).rejects.toThrow();
+    await expect(store.run("DELETE FROM planning_authority WHERE singleton = 1")).rejects.toThrow();
+
+    const laterStart = await repository.start({
+      creationId: "00000000000000000000000002",
+      seed: { schemaVersion: 1, eventCandidates: [] },
+      command: {
+        ...command,
+        commandId: "start-later-creation",
+        requestDigest: "c".repeat(64),
+        nowMs: command.nowMs + 1000,
+        hlcPhysicalMs: command.hlcPhysicalMs + 1000,
+        hlcCounter: 2,
+      },
+    });
+    expect(laterStart.outcome).toBe("created");
+    expect(await store.get("SELECT chat_authority_since_ms FROM planning_authority")).toEqual({
+      chat_authority_since_ms: command.nowMs,
+    });
+    expect(await fence.fenced()).toBe(true);
 
     await startCompositionUntilReferenceBootstrap();
 
-    expect(await createPlanRepository(store).count()).toBe(1);
-    expect(await store.get("SELECT COUNT(*) AS count FROM plan_workout")).toEqual({ count: 2 });
-    await expectMarker();
+    expect(await createPlanRepository(store).count()).toBe(0);
+    expect(await store.get("SELECT COUNT(*) AS count FROM plan_workout")).toEqual({ count: 0 });
+    await expectNoMarker();
   });
 });

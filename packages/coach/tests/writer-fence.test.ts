@@ -202,7 +202,7 @@ function commands(planId: string): ExecutePlanTransitionRpcParams[] {
 }
 
 describe("legacy writer fence", () => {
-  it.each(["in-progress", "review"] as const)(
+  it.each(["in-progress", "review", "discarded"] as const)(
     "rejects with %s creation without engine reads or store writes",
     async (status) => {
       const test = await fixture(status);
@@ -290,7 +290,7 @@ describe("legacy writer fence", () => {
     expect(await dumpStore(test.store)).toBe(before);
   });
 
-  it.each(["in-progress", "review", "active"] as const)(
+  it.each(["in-progress", "review", "active", "closed", "discarded"] as const)(
     "reads %s ownership without writes",
     async (status) => {
       const test = await fixture(status);
@@ -298,14 +298,15 @@ describe("legacy writer fence", () => {
       const before = await dumpStore(test.store);
       expect(await fence.read()).toEqual({
         activePlanId: status === "active" ? test.planId : null,
-        creationId: status === "active" ? null : test.creationId,
+        creationId: status === "in-progress" || status === "review" ? test.creationId : null,
+        chatAuthoritySinceMs: 904_694_400_000,
       });
       expect(await fence.fenced()).toBe(true);
       expect(await dumpStore(test.store)).toBe(before);
     },
   );
 
-  it.each(["in-progress", "review", "active"] as const)(
+  it.each(["in-progress", "review", "active", "closed", "discarded"] as const)(
     "rejects authoring families with %s ownership and preserves the entire store",
     async (status) => {
       const test = await fixture(status);
@@ -347,22 +348,36 @@ describe("legacy writer fence", () => {
     },
   );
 
-  it.each(["empty", "closed", "discarded"] as const)(
-    "permits legacy authoring with %s ownership",
-    async (status) => {
-      const test = await fixture(status);
-      const fence = createLegacyWriterFence(test.store);
-      const before = await dumpStore(test.store);
-      expect(await fence.read()).toEqual({ activePlanId: null, creationId: null });
-      expect(await fence.fenced()).toBe(false);
-      expect(await dumpStore(test.store)).toBe(before);
-      await expect(
-        test.operations.executePlanTransition?.({
-          transitionId: "PL-T01",
-          commandId: "legacy-start",
-          sourceConversationId: null,
-        }),
-      ).resolves.toMatchObject({ status: "completed" });
+  it("permits legacy authoring when no Chat creation has ever started", async () => {
+    const test = await fixture("empty");
+    const fence = createLegacyWriterFence(test.store);
+    const before = await dumpStore(test.store);
+    expect(await fence.read()).toEqual({
+      activePlanId: null,
+      creationId: null,
+      chatAuthoritySinceMs: null,
+    });
+    expect(await fence.fenced()).toBe(false);
+    expect(await dumpStore(test.store)).toBe(before);
+    await expect(
+      test.operations.executePlanTransition?.({
+        transitionId: "PL-T01",
+        commandId: "legacy-start",
+        sourceConversationId: null,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it.each(commands(CONVERSATION_ID))(
+    "does not fence $transitionId when no Chat creation has ever started",
+    async (command) => {
+      const test = await fixture("empty");
+      const result = await test.operations.executePlanTransition?.(command);
+      expect(result).toBeDefined();
+      expect(result).not.toMatchObject({
+        status: "rejected",
+        error: { code: "conflict", message: MESSAGE },
+      });
     },
   );
 
