@@ -215,6 +215,7 @@ const operations: CoachOperations &
   }),
   "plan.list": async () => ({
     calendarConnected: false,
+    legacy: null,
     creation: null,
     active: null,
     closed: [],
@@ -867,6 +868,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
           calls.push("plan.list");
           return {
             calendarConnected: false,
+            legacy: null,
             creation: null,
             active: null,
             closed: [],
@@ -2469,6 +2471,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     };
     const listPlans = vi.fn(async () => ({
       calendarConnected: false,
+      legacy: null,
       creation: startedCard,
       active: null,
       closed: [],
@@ -2583,6 +2586,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         params: {},
         result: {
           calendarConnected: false,
+          legacy: null,
           creation: startedCard,
           active: null,
           closed: [],

@@ -172,11 +172,26 @@ export const PlanSummarySchema = z
   .strict();
 export type PlanSummary = z.infer<typeof PlanSummarySchema>;
 
+export const LegacyPlanSummarySchema = z
+  .object({
+    name: z.string().min(1),
+    goal: z.string().nullable(),
+    weeks: z.number().int().positive().nullable(),
+    sourceStatus: z.string().nullable(),
+    createdAt: z.iso.date().nullable(),
+    targetDate: z.iso.date().nullable(),
+    readOnly: z.literal(true),
+    source: z.literal("current-plan.json"),
+  })
+  .strict();
+export type LegacyPlanSummary = z.infer<typeof LegacyPlanSummarySchema>;
+
 export const ListPlansParamsSchema = z.object({}).strict();
 export type ListPlansParams = z.infer<typeof ListPlansParamsSchema>;
 export const ListPlansResultSchema = z
   .object({
     calendarConnected: z.boolean(),
+    legacy: LegacyPlanSummarySchema.nullable(),
     creation: PlanCreationCardModelSchema.nullable(),
     active: PlanSummarySchema.extend({ status: z.literal("active") }).nullable(),
     closed: z.array(PlanSummarySchema.extend({ status: z.literal("closed") })),

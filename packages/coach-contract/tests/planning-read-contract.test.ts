@@ -5,6 +5,7 @@ import {
   ListPlansParamsSchema,
   ListPlansResultSchema,
   PlanSummarySchema,
+  LegacyPlanSummarySchema,
 } from "../src/index.js";
 
 describe("Planning read contract", () => {
@@ -78,6 +79,7 @@ describe("Plan library contract", () => {
   it("accepts the empty library and strict empty params", () => {
     const empty = {
       calendarConnected: false,
+      legacy: null,
       creation: null,
       active: null,
       closed: [],
@@ -89,8 +91,42 @@ describe("Plan library contract", () => {
     expect(ListPlansResultSchema.safeParse({ ...empty, extra: true }).success).toBe(false);
   });
 
+  it("accepts a read-only legacy summary and rejects invented or invalid fields", () => {
+    const legacy = {
+      name: "8-Week Plan",
+      goal: "Gran Fondo",
+      weeks: 8,
+      sourceStatus: "draft",
+      createdAt: "1998-07-04",
+      targetDate: "1998-08-30",
+      readOnly: true,
+      source: "current-plan.json",
+    };
+    const library = {
+      calendarConnected: false,
+      legacy,
+      creation: null,
+      active: null,
+      closed: [],
+      changes: [],
+    };
+    expect(LegacyPlanSummarySchema.parse(legacy)).toEqual(legacy);
+    expect(ListPlansResultSchema.parse(library)).toEqual(library);
+    for (const invalid of [{ version: 1 }, { readOnly: false }, { weeks: 0 }]) {
+      expect(
+        ListPlansResultSchema.safeParse({
+          ...library,
+          legacy: { ...legacy, ...invalid },
+        }).success,
+      ).toBe(false);
+    }
+    const { legacy: omitted, ...withoutLegacy } = library;
+    expect(omitted).toEqual(legacy);
+    expect(ListPlansResultSchema.safeParse(withoutLegacy).success).toBe(false);
+  });
+
   it("requires an explicit boolean calendar connection independently of library contents", () => {
-    const library = { creation: null, active: null, closed: [], changes: [] };
+    const library = { legacy: null, creation: null, active: null, closed: [], changes: [] };
     expect(ListPlansResultSchema.safeParse(library).success).toBe(false);
     expect(ListPlansResultSchema.safeParse({ ...library, calendarConnected: "true" }).success).toBe(
       false,
@@ -117,6 +153,7 @@ describe("Plan library contract", () => {
       };
       const library = {
         calendarConnected: false,
+        legacy: null,
         creation: null,
         active,
         closed: [closed],

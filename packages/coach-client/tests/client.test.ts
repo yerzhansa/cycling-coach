@@ -1059,6 +1059,7 @@ describe("RPC receive and observers", () => {
         },
         "plan.list": {
           calendarConnected: false,
+          legacy: null,
           creation: null,
           active: null,
           closed: [],

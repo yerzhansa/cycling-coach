@@ -127,6 +127,7 @@ describe("Plan Change contract", () => {
   it("requires explicit changes in the Plan list", () => {
     const empty = {
       calendarConnected: false,
+      legacy: null,
       creation: null,
       active: null,
       closed: [],
@@ -136,6 +137,7 @@ describe("Plan Change contract", () => {
     expect(
       ListPlansResultSchema.safeParse({
         calendarConnected: false,
+        legacy: null,
         creation: null,
         active: null,
         closed: [],

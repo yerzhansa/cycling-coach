@@ -1,4 +1,5 @@
 import type {
+  LegacyPlanSummary,
   ListPlansResult,
   PlanCreationCardModel,
   PlanSummary,
@@ -130,6 +131,15 @@ function spanLabel(plan: PlanSummary): string {
   return `${dateLabel(plan.start)} to ${dateLabel(plan.end)} · ${plan.weeks} weeks`;
 }
 
+function legacySummary(legacy: LegacyPlanSummary): string {
+  const parts: string[] = [];
+  if (legacy.targetDate !== null) parts.push(`Target ${dateLabel(legacy.targetDate)}`);
+  if (legacy.weeks !== null) parts.push(`${legacy.weeks} ${legacy.weeks === 1 ? "week" : "weeks"}`);
+  if (legacy.goal !== null) parts.push(`Goal: ${legacy.goal}`);
+  parts.push("Unknown reason");
+  return parts.join(" · ");
+}
+
 export function PlanLibrary(props: {
   readonly library: ListPlansResult;
   readonly readDetails: () => void;
@@ -194,7 +204,7 @@ export function PlanLibrary(props: {
     props.readFinalDetails(result.planId, true);
     void actions.refresh();
   };
-  const { creation, active, closed } = props.library;
+  const { creation, active, closed, legacy } = props.library;
   const total =
     creation?.openQuestion?.step.total ??
     creation?.answeredSummaries[0]?.question.step.total ??
@@ -361,6 +371,18 @@ export function PlanLibrary(props: {
           </div>
         </LibraryCard>
       ))}
+      {legacy === null ? null : (
+        <LibraryCard
+          eyebrow="Closed Plan"
+          title={legacy.name}
+          status="Closed"
+          summary={legacySummary(legacy)}
+        >
+          <p className="m-0 text-sm leading-5 text-ink-2">
+            Read only · Saved before Plans moved to Chat
+          </p>
+        </LibraryCard>
+      )}
     </section>
   );
 }

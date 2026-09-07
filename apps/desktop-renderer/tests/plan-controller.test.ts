@@ -17,6 +17,7 @@ describe("Plan controller", () => {
     const controller = createPlanController({
       listPlans: async () => ({
         calendarConnected: false,
+        legacy: null,
         creation: null,
         active: null,
         closed: [],
@@ -43,6 +44,7 @@ describe("Plan controller", () => {
     const controller = createPlanController({
       listPlans: async () => ({
         calendarConnected: false,
+        legacy: null,
         creation: null,
         active: null,
         closed: [],
@@ -79,6 +81,7 @@ function deferredLibrary() {
 describe("Plan library refresh", () => {
   const library: ListPlansResult = {
     calendarConnected: false,
+    legacy: null,
     creation: null,
     active: null,
     closed: [],

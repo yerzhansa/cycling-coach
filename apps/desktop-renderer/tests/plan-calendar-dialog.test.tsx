@@ -57,6 +57,7 @@ describe("activation calendar consequence", () => {
           status: "ready",
           value: {
             calendarConnected: true,
+            legacy: null,
             creation: null,
             active: closing ? summary : null,
             closed: closing ? [] : [{ ...summary, status: "closed" }],
@@ -89,6 +90,7 @@ describe("activation calendar consequence", () => {
             status: "ready",
             value: {
               calendarConnected: false,
+              legacy: null,
               creation: null,
               active:
                 kind === "empty"
@@ -129,7 +131,14 @@ describe("activation calendar consequence", () => {
       useEnduragentStore.setState({
         planLibrary: {
           status: "ready",
-          value: { calendarConnected, creation: null, active: null, closed: [], changes: [] },
+          value: {
+            calendarConnected,
+            legacy: null,
+            creation: null,
+            active: null,
+            closed: [],
+            changes: [],
+          },
         },
       });
       render(<PlanCreationActivateDialog />);
@@ -154,7 +163,14 @@ describe("activation calendar consequence", () => {
     useEnduragentStore.setState({
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: true, creation: null, active: null, closed: [], changes: [] },
+        value: {
+          calendarConnected: true,
+          legacy: null,
+          creation: null,
+          active: null,
+          closed: [],
+          changes: [],
+        },
       },
       planLibraryActions: {
         ...useEnduragentStore.getState().planLibraryActions,
@@ -168,7 +184,14 @@ describe("activation calendar consequence", () => {
     useEnduragentStore.setState({
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation: null, active: null, closed: [], changes: [] },
+        value: {
+          calendarConnected: false,
+          legacy: null,
+          creation: null,
+          active: null,
+          closed: [],
+          changes: [],
+        },
       },
     });
     finish();
@@ -183,14 +206,28 @@ describe("activation calendar consequence", () => {
       useEnduragentStore.setState({
         planLibrary: {
           status: "unavailable",
-          value: { calendarConnected: true, creation: null, active: null, closed: [], changes: [] },
+          value: {
+            calendarConnected: true,
+            legacy: null,
+            creation: null,
+            active: null,
+            closed: [],
+            changes: [],
+          },
         },
       });
     });
     useEnduragentStore.setState({
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: true, creation: null, active: null, closed: [], changes: [] },
+        value: {
+          calendarConnected: true,
+          legacy: null,
+          creation: null,
+          active: null,
+          closed: [],
+          changes: [],
+        },
       },
       planLibraryActions: {
         ...useEnduragentStore.getState().planLibraryActions,
