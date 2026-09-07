@@ -3535,39 +3535,6 @@ function ActiveProjection(): ReactElement {
   if (model.scenarioId === "PL-S026" || model.scenarioId === "PL-S027") {
     return <HistoryResultProjection scenarioId={model.scenarioId} entry={selectedHistoryEntry} />;
   }
-  const reconciling =
-    (transition.status === "submitting" || transition.status === "running") &&
-    transition.transitionId === "PL-T12";
-  const failed = model.reconciliation.status === "failed";
-  const verified = model.reconciliation.status === "verified";
-  const retrying = reconciling && failed;
-  const running = reconciling || model.reconciliation.status === "running";
-  const completed = model.reconciliation.created;
-  const total = model.reconciliation.total;
-  const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
-  const showReconciliation = [
-    "PL-S010",
-    "PL-S037",
-    "PL-S038",
-    "PL-S039",
-    "PL-S040",
-    "PL-S041",
-    "PL-S042",
-    "PL-S043",
-  ].includes(model.scenarioId);
-  const calendarTitle = verified
-    ? `Intervals · current through ${formatCivilDate(model.reconciliation.currentThrough!)}`
-    : retrying
-      ? "Retrying Intervals update"
-      : running
-        ? model.scenarioId === "PL-S042"
-          ? "Resuming Intervals update"
-          : "Updating Intervals"
-        : failed
-          ? model.scenarioId === "PL-S041"
-            ? "Intervals still needs attention"
-            : "Intervals update needs attention"
-          : "Update Intervals for the next seven days";
   const selectedWorkout =
     data.selectedWorkoutId === undefined || data.selectedWorkoutId === null
       ? null
@@ -3670,78 +3637,6 @@ function ActiveProjection(): ReactElement {
       </section>
 
       <PredictionsSummary readiness={data.readiness} />
-
-      {showReconciliation ? (
-        <section
-          className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
-          aria-live="polite"
-        >
-          <div className="flex items-start gap-row">
-            {failed && !retrying ? (
-              <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
-            ) : verified ? (
-              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
-            ) : running ? (
-              <LoaderCircle
-                className="mt-0.5 size-5 shrink-0 animate-spin text-primary"
-                aria-hidden="true"
-              />
-            ) : (
-              <CalendarDays className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
-            )}
-            <div className={`${SUPPORT_PAIR} min-w-0 flex-1`}>
-              <h2 className="m-0 text-base font-semibold">{calendarTitle}</h2>
-              <p className="m-0 text-ink-2">
-                {total > 0
-                  ? `Created ${completed} · Pending ${model.reconciliation.pending} · Failed ${model.reconciliation.failed} · Total ${total}`
-                  : "Only today plus the next six civil dates will be written."}
-              </p>
-            </div>
-            {verified ? (
-              <span className="rounded-full border border-ok px-3 py-1 text-sm text-ok">
-                Verified
-              </span>
-            ) : null}
-          </div>
-          {total > 0 ? (
-            <div
-              className="h-2 overflow-hidden rounded-full bg-sunk"
-              role="progressbar"
-              aria-label="Intervals calendar update"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-            >
-              <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
-            </div>
-          ) : null}
-          {!running && !verified ? (
-            <div className="flex flex-wrap justify-end gap-inset">
-              {failed ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={actions === null}
-                  onClick={() => actions?.verifyReconciliation()}
-                >
-                  Verify again
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                disabled={actions === null}
-                onClick={() => actions?.reconcilePlan()}
-              >
-                {failed
-                  ? "Retry"
-                  : model.scenarioId === "PL-S037"
-                    ? "View calendar progress"
-                    : "Update Intervals"}
-              </Button>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
 
       <section className="overflow-hidden rounded-card bg-surface shadow-elev-1">
         <div className="flex items-start justify-between gap-row px-5 py-row">
