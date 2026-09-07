@@ -15,7 +15,7 @@ import { createLocalCoachComposition } from "../../coach/src/composition.js";
 import { createPlanCreationOperations } from "../../coach/src/plan-creation-operations.js";
 import { createAuthoredIdentity, type AthleteHome } from "../src/home/index.js";
 import { inertWriterProtocolListener } from "../src/lock/index.js";
-import { LEGACY_PLAN_IMPORT_MARKER } from "../src/planning/index.js";
+import { LEGACY_PLAN_IMPORT_MARKER, readLegacyCurrentPlanSummary } from "../src/planning/index.js";
 import {
   dumpLegacyV11Tables,
   legacyCurrentPlanJson,
@@ -209,7 +209,7 @@ describe("legacy v11 store upgrade and startup import", () => {
   });
 
   it.each(["draft", "active", "with-workouts"] as const)(
-    "imports %s once, preserves its source and workout ids, and excludes it from plan.list",
+    "imports %s once, preserves its source and workout ids, and lists it as read-only legacy history",
     async (variant) => {
       await runMigrations(store, MIGRATIONS);
       const source = legacyCurrentPlanJson(variant);
@@ -288,6 +288,7 @@ describe("legacy v11 store upgrade and startup import", () => {
       await expectMarker();
 
       const operations = createPlanCreationOperations({
+        legacyPlan: () => readLegacyCurrentPlanSummary({ home, logger: { warn: vi.fn() } }),
         store,
         repository: createPlanCreationRepository(store),
         identity: createAuthoredIdentity(home.configDir, { now: () => Date.UTC(1998, 6, 7, 12) }),
@@ -296,7 +297,18 @@ describe("legacy v11 store upgrade and startup import", () => {
         today: () => "1998-07-07",
         now: () => Date.UTC(1998, 6, 7, 12),
       });
-      await expect(operations["plan.list"]({})).resolves.toMatchObject({
+      const library = await operations["plan.list"]({});
+      expect(library.legacy).toEqual({
+        name: source.name,
+        goal: source.primaryGoal,
+        weeks: 8,
+        sourceStatus: source.status,
+        createdAt: "1998-07-04",
+        targetDate: "1998-08-30",
+        readOnly: true,
+        source: "current-plan.json",
+      });
+      expect(library).toMatchObject({
         active: null,
         closed: [],
         creation: null,

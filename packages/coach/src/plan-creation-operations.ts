@@ -14,6 +14,7 @@ import {
   ListPlansResultSchema,
   type ListPlansParams,
   type ListPlansResult,
+  type LegacyPlanSummary,
   PlanCreationActivateRpcParamsSchema,
   PlanCreationActivateRpcResultSchema,
   PlanCreationAnswerRpcParamsSchema,
@@ -102,6 +103,7 @@ export function createPlanCreationOperations(input: {
   eventCandidates: GoalEventCandidateSource;
   baselineEvidence?: BaselineEvidenceSource;
   calendarConnected?: () => boolean;
+  legacyPlan?: () => Promise<LegacyPlanSummary | null>;
   today?: () => string;
   todayDateKey?: () => number;
   now?: () => number;
@@ -115,6 +117,7 @@ export function createPlanCreationOperations(input: {
   const todayDateKey = input.todayDateKey ?? (() => dateKeyFromText(today()));
   const now = input.now ?? Date.now;
   const calendarConnected = input.calendarConnected ?? (() => false);
+  const legacyPlan = input.legacyPlan ?? (async () => null);
   const stamp = async (commandId: string, digest: string) => {
     const clock = input.identity.hlcStamp();
     return {
@@ -230,6 +233,7 @@ export function createPlanCreationOperations(input: {
   return {
     async "plan.list"(request) {
       ListPlansParamsSchema.parse(request);
+      const legacy = await legacyPlan();
       return input.store.transaction(async () => {
         const transactionStore = {
           exec: (sql: string) => input.store.exec(sql),
@@ -271,6 +275,7 @@ export function createPlanCreationOperations(input: {
         const active = summaries.find((plan) => plan.status === "active") ?? null;
         return ListPlansResultSchema.parse({
           calendarConnected: calendarConnected(),
+          legacy,
           creation:
             creation === undefined ? null : projectPlanCreationCard(creation, { today: today() }),
           active,

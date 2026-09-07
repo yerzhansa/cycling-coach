@@ -150,6 +150,7 @@ const creation: PlanCreationCardModel = {
 function library(planId: string, pending = false): ListPlansResult {
   return {
     calendarConnected: false,
+    legacy: null,
     active: {
       planId,
       version: 2,

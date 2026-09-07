@@ -1,4 +1,5 @@
 import type {
+  LegacyPlanSummary,
   ListPlansResult,
   PlanCreationCardModel,
   PlanHistoryResult,
@@ -241,6 +242,97 @@ beforeEach(() => {
 });
 
 describe("Plan library", () => {
+  it("renders no extra card when the legacy summary is absent", () => {
+    render(
+      <PlanLibrary
+        library={{
+          calendarConnected: false,
+          legacy: null,
+          creation: null,
+          active,
+          closed,
+          changes: [],
+        }}
+        readDetails={vi.fn()}
+        readFinalDetails={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole("region", { name: "Closed Plan" })).toHaveLength(closed.length);
+    expect(screen.queryByText("Read only · Saved before Plans moved to Chat")).toBeNull();
+  });
+
+  it.each([1, 8])("renders the full legacy summary with %i weeks after closed Plans", (weeks) => {
+    const legacy: LegacyPlanSummary = {
+      name: "Earlier endurance training",
+      goal: "Ride comfortably for four hours",
+      weeks,
+      sourceStatus: "active",
+      createdAt: "1998-07-06",
+      targetDate: "1998-08-30",
+      readOnly: true,
+      source: "current-plan.json",
+    };
+    render(
+      <PlanLibrary
+        library={{ calendarConnected: false, legacy, creation, active, closed, changes: [] }}
+        readDetails={vi.fn()}
+        readFinalDetails={vi.fn()}
+      />,
+    );
+    const cards = screen.getAllByRole("region", { name: "Closed Plan" });
+    expect(cards).toHaveLength(closed.length + 1);
+    const card = cards[cards.length - 1];
+    if (card === undefined) throw new Error("Legacy card is missing");
+    expect(within(card).getByText("Closed Plan", { exact: true })).toBeVisible();
+    expect(within(card).getByRole("heading", { name: legacy.name })).toBeVisible();
+    expect(within(card).getByText("Closed", { exact: true })).toBeVisible();
+    expect(
+      within(card).getByText(
+        `Target 30 Aug 1998 · ${weeks} ${weeks === 1 ? "week" : "weeks"} · Goal: Ride comfortably for four hours · Unknown reason`,
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(
+      within(card).getByText("Read only · Saved before Plans moved to Chat", { exact: true }),
+    ).toBeVisible();
+    expect(within(card).queryByRole("button")).toBeNull();
+    expect(within(card).queryByRole("link")).toBeNull();
+    expect(card).not.toHaveTextContent("6 Jul 1998");
+  });
+
+  it("renders only Unknown reason in the summary when only the legacy name is known", () => {
+    render(
+      <PlanLibrary
+        library={{
+          calendarConnected: false,
+          legacy: {
+            name: "Earlier training",
+            goal: null,
+            weeks: null,
+            sourceStatus: null,
+            createdAt: null,
+            targetDate: null,
+            readOnly: true,
+            source: "current-plan.json",
+          },
+          creation: null,
+          active: null,
+          closed: [],
+          changes: [],
+        }}
+        readDetails={vi.fn()}
+        readFinalDetails={vi.fn()}
+      />,
+    );
+    const card = screen.getByRole("region", { name: "Closed Plan" });
+    expect(within(card).getByRole("heading", { name: "Earlier training" })).toBeVisible();
+    expect(within(card).getByText("Unknown reason", { exact: true })).toBeVisible();
+    expect(
+      within(card).getByText("Read only · Saved before Plans moved to Chat", { exact: true }),
+    ).toBeVisible();
+    expect(within(card).queryByRole("button")).toBeNull();
+  });
+
   it.each([
     [
       {
@@ -306,6 +398,7 @@ describe("Plan library", () => {
         <PlanLibrary
           library={{
             calendarConnected: false,
+            legacy: null,
             creation: null,
             active: { ...active, calendar },
             closed,
@@ -338,7 +431,14 @@ describe("Plan library", () => {
       chat: { ...EMPTY_CHAT_SURFACE, notice },
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation: null, active, closed, changes: [] },
+        value: {
+          calendarConnected: false,
+          legacy: null,
+          creation: null,
+          active,
+          closed,
+          changes: [],
+        },
       },
     });
     render(<PlanView />);
@@ -352,6 +452,7 @@ describe("Plan library", () => {
     ({ hasCreation, hasActive, hasClosed }) => {
       const library: ListPlansResult = {
         calendarConnected: false,
+        legacy: null,
         creation: hasCreation ? creation : null,
         active: hasActive ? active : null,
         closed: hasClosed ? closed : [],
@@ -426,7 +527,7 @@ describe("Plan library", () => {
     render(
       <PlanLibrary
         readFinalDetails={vi.fn()}
-        library={{ calendarConnected: false, creation, active, closed, changes: [] }}
+        library={{ calendarConnected: false, legacy: null, creation, active, closed, changes: [] }}
         readDetails={readDetails}
       />,
     );
@@ -451,7 +552,14 @@ describe("Plan library", () => {
     const view = render(
       <PlanLibrary
         readFinalDetails={vi.fn()}
-        library={{ calendarConnected: false, creation, active: null, closed: [], changes: [] }}
+        library={{
+          calendarConnected: false,
+          legacy: null,
+          creation,
+          active: null,
+          closed: [],
+          changes: [],
+        }}
         readDetails={vi.fn()}
       />,
     );
@@ -461,6 +569,7 @@ describe("Plan library", () => {
         readFinalDetails={vi.fn()}
         library={{
           calendarConnected: false,
+          legacy: null,
           creation: { ...creation, draft: planCreationDraft() },
           active: null,
           closed: [],
@@ -477,6 +586,7 @@ describe("Plan library", () => {
     const refresh = vi.fn();
     const library: ListPlansResult = {
       calendarConnected: false,
+      legacy: null,
       creation: null,
       active,
       closed,
@@ -510,6 +620,7 @@ describe("Plan library", () => {
       const listPlans = vi.fn(
         async (): Promise<ListPlansResult> => ({
           calendarConnected: false,
+          legacy: null,
           creation,
           active,
           closed,
@@ -603,7 +714,7 @@ describe("Plan library refresh subscription", () => {
       activeView: "plan",
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation, active, closed, changes: [] },
+        value: { calendarConnected: false, legacy: null, creation, active, closed, changes: [] },
       },
     });
     const refresh = vi.fn(async () => {
@@ -611,6 +722,7 @@ describe("Plan library refresh subscription", () => {
         status: "ready",
         value: {
           calendarConnected: false,
+          legacy: null,
           creation,
           active: { ...active, calendar: { ...active.calendar, status: "running" } },
           closed,
@@ -646,7 +758,7 @@ describe("Plan library refresh subscription", () => {
       activeView: "plan",
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation, active, closed, changes: [] },
+        value: { calendarConnected: false, legacy: null, creation, active, closed, changes: [] },
       },
     });
     const { refresh, unsubscribe } = watchRefresh();
@@ -659,6 +771,7 @@ describe("Plan library refresh subscription", () => {
           status: "ready",
           value: {
             calendarConnected: false,
+            legacy: null,
             creation,
             active: {
               ...active,
@@ -687,6 +800,7 @@ describe("Plan library refresh subscription", () => {
     vi.useFakeTimers();
     const failed: ListPlansResult = {
       calendarConnected: true,
+      legacy: null,
       creation: null,
       closed: [],
       changes: [],
@@ -769,6 +883,7 @@ describe("Plan library refresh subscription", () => {
     vi.useFakeTimers();
     const running: ListPlansResult = {
       calendarConnected: true,
+      legacy: null,
       creation: null,
       closed: [],
       changes: [],
@@ -845,6 +960,7 @@ describe("Plan library refresh subscription", () => {
         status: "ready",
         value: {
           calendarConnected: false,
+          legacy: null,
           creation: null,
           closed: [],
           changes: [],
@@ -878,6 +994,7 @@ describe("Plan library refresh subscription", () => {
       vi.useFakeTimers();
       const library: ListPlansResult = {
         calendarConnected: false,
+        legacy: null,
         creation: null,
         active,
         closed: [],
@@ -945,7 +1062,7 @@ describe("Plan library refresh subscription", () => {
       chat: { ...EMPTY_CHAT_SURFACE, planCreation: null },
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation, active, closed, changes: [] },
+        value: { calendarConnected: false, legacy: null, creation, active, closed, changes: [] },
       },
     });
     const { refresh, unsubscribe } = watchRefresh();
@@ -986,7 +1103,7 @@ describe("Plan library refresh subscription", () => {
       chat: { ...EMPTY_CHAT_SURFACE, planCreation: creation, planCreationLoaded: true },
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation, active, closed, changes: [] },
+        value: { calendarConnected: false, legacy: null, creation, active, closed, changes: [] },
       },
     });
     const { refresh, unsubscribe } = watchRefresh();
@@ -1005,7 +1122,7 @@ describe("Plan library refresh subscription", () => {
     useEnduragentStore.setState({
       planLibrary: {
         status: "ready",
-        value: { calendarConnected: false, creation, active, closed, changes: [] },
+        value: { calendarConnected: false, legacy: null, creation, active, closed, changes: [] },
       },
     });
     const { refresh, unsubscribe } = watchRefresh();
@@ -1072,13 +1189,20 @@ describe("Plan library refresh subscription", () => {
         },
       });
       expect(refresh).toHaveBeenCalledExactlyOnceWith(false);
-      result.resolve({ calendarConnected: false, creation, active, closed, changes: [] });
+      result.resolve({
+        calendarConnected: false,
+        legacy: null,
+        creation,
+        active,
+        closed,
+        changes: [],
+      });
       await started;
       await Promise.all(refresh.mock.results.map((call) => call.value));
       expect(listPlans).toHaveBeenCalledOnce();
       expect(store.getState().planLibrary).toEqual({
         status: "ready",
-        value: { calendarConnected: false, creation, active, closed, changes: [] },
+        value: { calendarConnected: false, legacy: null, creation, active, closed, changes: [] },
       });
     } finally {
       unsubscribe();
@@ -1125,6 +1249,7 @@ describe("Plan creation title", () => {
           readFinalDetails={vi.fn()}
           library={{
             calendarConnected: false,
+            legacy: null,
             creation: answered,
             active: null,
             closed: [],
@@ -1174,7 +1299,7 @@ it("keeps Plan history below the library while a creation occupies the header", 
     planActions,
     planLibrary: {
       status: "ready",
-      value: { calendarConnected: false, creation, active, closed: [], changes: [] },
+      value: { calendarConnected: false, legacy: null, creation, active, closed: [], changes: [] },
     },
   });
   render(<PlanView />);
@@ -1192,7 +1317,14 @@ describe("Stop Plan", () => {
     const readFinalDetails = vi.fn();
     render(
       <PlanLibrary
-        library={{ calendarConnected: false, creation: null, active, closed, changes: [] }}
+        library={{
+          calendarConnected: false,
+          legacy: null,
+          creation: null,
+          active,
+          closed,
+          changes: [],
+        }}
         readDetails={vi.fn()}
         readFinalDetails={readFinalDetails}
       />,
@@ -1315,6 +1447,7 @@ describe("Stop Plan", () => {
             status: "ready",
             value: {
               calendarConnected: false,
+              legacy: null,
               creation: null,
               active: null,
               closed: [{ ...history.plan, status: "closed" }],
@@ -1326,7 +1459,14 @@ describe("Stop Plan", () => {
       useEnduragentStore.setState({
         planLibrary: {
           status: "ready",
-          value: { calendarConnected: false, creation: null, active, closed, changes: [] },
+          value: {
+            calendarConnected: false,
+            legacy: null,
+            creation: null,
+            active,
+            closed,
+            changes: [],
+          },
         },
       });
       render(<PlanView />);
@@ -1358,10 +1498,13 @@ describe("Stop Plan", () => {
     const initial = new Promise<ListPlansResult>((resolve) => {
       finishRead = resolve;
     });
-    const listPlans = vi
-      .fn()
-      .mockReturnValueOnce(initial)
-      .mockResolvedValue({ calendarConnected: false, creation: null, active: null, closed });
+    const listPlans = vi.fn().mockReturnValueOnce(initial).mockResolvedValue({
+      calendarConnected: false,
+      legacy: null,
+      creation: null,
+      active: null,
+      closed,
+    });
     const controller = createPlanController({
       listPlans,
       read: async () => ({
@@ -1379,7 +1522,14 @@ describe("Stop Plan", () => {
     try {
       const started = controller.start();
       store.getState().setActiveView("plan");
-      finishRead({ calendarConnected: false, creation: null, active, closed, changes: [] });
+      finishRead({
+        calendarConnected: false,
+        legacy: null,
+        creation: null,
+        active,
+        closed,
+        changes: [],
+      });
       await started;
       await vi.waitFor(() => expect(listPlans).toHaveBeenCalledTimes(2));
       expect(store.getState().planLibrary.value?.active).toBeNull();

@@ -90,6 +90,7 @@ import {
   createLegacyPlanRepository,
   createLegacyPlanRowWriter,
   importLegacyCurrentPlan,
+  readLegacyCurrentPlanSummary,
 } from "@enduragent/kernel-node/planning";
 import {
   createLegacyWriterFence,
@@ -890,6 +891,11 @@ export async function createLocalCoachComposition(
     eventCandidates: { read: async () => [] },
     baselineEvidence: { read: async () => undefined },
     calendarConnected: () => approvedConfig().intervals.apiKey.length > 0,
+    legacyPlan: () =>
+      readLegacyCurrentPlanSummary({
+        home: input.home,
+        logger: { warn: () => logger.warn("legacy_plan_summary_skipped") },
+      }),
     today: () => todayInTZ(planningTimezone, new Date(now())),
     todayDateKey: planningDateKey,
     now,

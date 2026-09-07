@@ -13,6 +13,7 @@ import {
   PlanCreationActivateRpcParamsSchema,
   PlanCreationPreviewRpcParamsSchema,
   type CoachEngine,
+  type LegacyPlanSummary,
   type PlanningOperations,
   type PlanCreationCardModel,
 } from "@enduragent/coach-contract";
@@ -153,6 +154,7 @@ export class PlanCreationBackend {
     private readonly options: {
       readonly calendar?: PlanMirrorCalendarPort;
       readonly calendarConnected?: boolean;
+      readonly legacy?: LegacyPlanSummary | null;
     } = {},
   ) {
     const base = coexistence ? createPlanInspectionFixtureScript() : createPlanQaFixtureScript();
@@ -369,6 +371,7 @@ BEGIN SELECT RAISE(ABORT, 'Synthetic close ledger failure'); END`);
       identity,
       crypto: globalThis.crypto,
       eventCandidates: { read: async () => [] },
+      legacyPlan: async () => this.options.legacy ?? null,
       calendarConnected,
       today: () => this.civilDate,
       todayDateKey: () => Number(this.civilDate.replaceAll("-", "")),

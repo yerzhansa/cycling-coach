@@ -1,3 +1,4 @@
+import type { LegacyPlanSummary } from "@enduragent/coach-contract";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@enduragent/kernel/archive";
 import { describe, expect, it, vi, onTestFinished } from "vitest";
@@ -856,7 +857,7 @@ describe("Plan Creation operations", () => {
   });
 });
 
-async function previewHarness() {
+async function previewHarness(legacyPlan?: () => Promise<LegacyPlanSummary | null>) {
   let currentToday = today;
   let connected = false;
   const store = openSqliteStorage(":memory:");
@@ -875,6 +876,7 @@ async function previewHarness() {
     crypto: globalThis.crypto,
     eventCandidates: { read: async () => [candidateSource] },
     calendarConnected: () => connected,
+    legacyPlan,
     today: () => currentToday,
     todayDateKey: () => Number(currentToday.replaceAll("-", "")),
     now: () => Date.parse(`${currentToday}T12:00:00Z`),
@@ -1107,6 +1109,35 @@ describe("Plan Creation activation", () => {
     };
   };
 
+  it("reads the injected legacy summary before opening the list transaction", async () => {
+    const legacy = {
+      name: "8-Week Plan",
+      goal: "Gran Fondo",
+      weeks: 8,
+      sourceStatus: "draft",
+      createdAt: "1998-07-04",
+      targetDate: "1998-08-30",
+      readOnly: true,
+      source: "current-plan.json",
+    } satisfies LegacyPlanSummary;
+    let resolveLegacy: (value: LegacyPlanSummary | null) => void = () => {};
+    const pending = new Promise<LegacyPlanSummary | null>((resolve) => {
+      resolveLegacy = resolve;
+    });
+    const legacyPlan = vi.fn(() => pending);
+    const test = await previewHarness(legacyPlan);
+    const transaction = vi.spyOn(test.store, "transaction");
+    const reading = test.host["plan.list"]({});
+    expect(legacyPlan).toHaveBeenCalledTimes(1);
+    expect(transaction).not.toHaveBeenCalled();
+    resolveLegacy(legacy);
+    expect((await reading).legacy).toEqual(legacy);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    legacyPlan.mockResolvedValueOnce(null);
+    expect((await test.host["plan.list"]({})).legacy).toBeNull();
+    expect(legacyPlan).toHaveBeenCalledTimes(2);
+  });
+
   it("reads the current calendar connection with an empty library", async () => {
     const test = await previewHarness();
     const card = test.card();
@@ -1117,6 +1148,7 @@ describe("Plan Creation activation", () => {
     });
     await expect(test.host["plan.list"]({})).resolves.toMatchObject({
       calendarConnected: false,
+      legacy: null,
       creation: null,
       active: null,
       closed: [],
@@ -1124,6 +1156,7 @@ describe("Plan Creation activation", () => {
     test.setConnected(true);
     await expect(test.host["plan.list"]({})).resolves.toMatchObject({
       calendarConnected: true,
+      legacy: null,
       creation: null,
       active: null,
       closed: [],
@@ -1414,6 +1447,7 @@ VALUES (?,'active',1,1,882748800000,882748800000,'test-device',882748800000,0)`,
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(after).toEqual({
       calendarConnected: false,
+      legacy: null,
       creation: null,
       changes: [],
       active: {

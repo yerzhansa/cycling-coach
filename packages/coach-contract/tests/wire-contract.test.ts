@@ -1327,6 +1327,7 @@ describe("coach request and event projection", () => {
       }),
       "plan.list": async () => ({
         calendarConnected: false,
+        legacy: null,
         creation: null,
         active: null,
         closed: [],
