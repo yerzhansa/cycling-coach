@@ -36,12 +36,17 @@ describe("CI cost contract", () => {
     expect(ci).not.toMatch(/^  s8a:/mu);
   });
 
-  it("runs one scoped macOS job and preserves required status names", () => {
+  it("runs one scoped macOS package and native UI job and preserves required status names", () => {
     const native = job(ci, "desktop-packaged-native");
     const packagedStatus = job(ci, "desktop-packaged-self-test");
     const secretsStatus = job(ci, "secrets-macos");
-    expect(ci.match(/runs-on: macos-latest/gu)).toHaveLength(1);
+    expect(ci.match(/runs-on: macos-[^\r\n]+/gu)).toEqual(["runs-on: macos-26"]);
+    expect(native).toContain("runs-on: macos-26");
     expect(native).toContain("needs: desktop-scope");
+    expect(native).toContain("if: needs.desktop-scope.outputs.native == 'true'");
+    expect(native).toContain("Verify native application UI states");
+    expect(native).toContain("run: pnpm check:ui-states");
+    expect(job(ci, "check")).not.toContain("pnpm check:ui-states");
     expect(native).toContain("package:dir");
     expect(native).toContain("--prepared-package");
     expect(native).not.toContain("-- --prepared-package");
@@ -65,20 +70,20 @@ describe("CI cost contract", () => {
     expect(ci).not.toContain("desktop-e2e-macos:");
   });
 
-  it("gates browser installation and screenshot checks with the verified preview scope", () => {
+  it("detects native scope before installing workspace dependencies", () => {
     const scope = job(ci, "desktop-scope");
-    const native = job(ci, "desktop-packaged-native");
-    expect(scope).toContain("previews: ${{ steps.scope.outputs.previews }}");
-    expect(scope).toContain("run: node tools/ui-verification/preview-scope.ts");
+    expect(scope).toContain("native: ${{ steps.scope.outputs.native }}");
+    expect(scope).toContain("fetch-depth: 0");
+    expect(scope).toContain("node-version: 24");
+    expect(scope).toContain("run: node tools/ui-verification/desktop-scope.ts");
+    expect(scope.indexOf("actions/setup-node@")).toBeLessThan(scope.indexOf("- id: scope"));
     expect(scope).toContain(
       "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}",
     );
-    expect(native).toContain(
-      "name: Install pinned UI preview browser\n        if: needs.desktop-scope.outputs.previews == 'true'",
-    );
-    expect(native).toContain(
-      "name: Verify production component previews\n        if: needs.desktop-scope.outputs.previews == 'true'",
-    );
+    expect(scope).not.toContain("pnpm install");
+    expect(ci).not.toContain("preview-scope");
+    expect(ci).not.toContain("outputs.previews");
+    expect(ci).not.toContain("playwright install chromium");
   });
 
   it("scopes Windows packaging and leaves synthetic contracts on Linux", () => {
