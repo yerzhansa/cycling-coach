@@ -9,6 +9,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,8 @@ import {
   loadStoredProfileSnapshot,
   recoverAndSaveStoredProfile,
   saveStoredProfile,
+  resetDesktopOAuthProfiles,
+  DESKTOP_OAUTH_OWNERSHIP_FILE,
 } from "../src/auth/profile-store.js";
 import { InterprocessFileLockTimeoutError } from "../src/io/interprocess-file-lock-sync.js";
 
@@ -728,4 +731,67 @@ describe("profile store", () => {
     expect(statSync(`${profilesPath}.corrupt`).mode & 0o777).toBe(0o600);
     expect(statSync(profilesPath).mode & 0o777).toBe(0o600);
   });
+});
+
+describe("confirmed desktop OAuth profile reset", () => {
+  it("discards invalid UTF-8 without creating a plaintext backup", async () => {
+    const path = freshProfilesPath();
+    writeFileSync(path, invalidUtf8ProfilesBytes("openai-codex"));
+    await resetDesktopOAuthProfiles(path, ["openai-codex"]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({});
+    expect(readdirSync(join(path, "..")).sort()).toEqual(
+      [DESKTOP_OAUTH_OWNERSHIP_FILE, "auth-profiles.json"].sort(),
+    );
+  });
+
+  it("preserves valid unrelated profiles and existing plaintext backups", async () => {
+    const path = freshProfilesPath();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        "openai-codex": profile("synthetic-old"),
+        custom: profile("synthetic-custom"),
+        other: profile("synthetic-other"),
+        broken: null,
+      }),
+    );
+    writeFileSync(`${path}.corrupt`, "historical synthetic backup");
+    await resetDesktopOAuthProfiles(path, ["openai-codex", "custom"]);
+    await resetDesktopOAuthProfiles(path, ["openai-codex", "custom"]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ other: profile("synthetic-other") });
+    expect(readFileSync(`${path}.corrupt`, "utf8")).toBe("historical synthetic backup");
+    expect(() => saveStoredProfile(path, "openai-codex", profile("synthetic-stale-cli"))).toThrow(
+      "separate CLI home",
+    );
+  });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "preserves unreadable legacy credentials and does not claim ownership",
+    async () => {
+      const path = freshProfilesPath();
+      writeFileSync(path, "synthetic-malformed");
+      chmodSync(path, 0o000);
+      try {
+        await expect(resetDesktopOAuthProfiles(path, ["openai-codex"])).rejects.toThrow();
+        expect(existsSync(join(path, "..", DESKTOP_OAUTH_OWNERSHIP_FILE))).toBe(false);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+      expect(readFileSync(path, "utf8")).toBe("synthetic-malformed");
+    },
+  );
+
+  it.each(["symlink", "directory"])(
+    "refuses a %s legacy path without claiming ownership",
+    async (kind) => {
+      const path = freshProfilesPath();
+      const target = `${path}.target`;
+      writeFileSync(target, '{"synthetic":"malformed');
+      if (kind === "symlink") symlinkSync(target, path);
+      else mkdirSync(path);
+      await expect(resetDesktopOAuthProfiles(path, ["openai-codex"])).rejects.toThrow();
+      expect(readFileSync(target, "utf8")).toBe('{"synthetic":"malformed');
+      expect(existsSync(join(path, "..", DESKTOP_OAUTH_OWNERSHIP_FILE))).toBe(false);
+    },
+  );
 });

@@ -46,6 +46,27 @@ afterEach(async () => {
 });
 
 describe("encrypted credential reset", () => {
+  it("retains encrypted storage and its key when legacy OAuth reset fails", async () => {
+    const storage = await fixture();
+    const envelope = join(storage.credentialRoot, "oauth.bin");
+    await writeFile(envelope, "synthetic-encrypted-credential");
+    const deleteKey = vi.fn(async () => ({ status: "deleted" as const }));
+    const resetLegacyOAuthProfiles = vi.fn(async () => {
+      throw new Error("synthetic legacy storage failure");
+    });
+    await expect(
+      resetEncryptedCredentialStorage({
+        ...storage,
+        serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+        resetLegacyOAuthProfiles,
+        deleteKey,
+      }),
+    ).resolves.toEqual({ status: "failed" });
+    expect(resetLegacyOAuthProfiles).toHaveBeenCalledOnce();
+    expect(deleteKey).not.toHaveBeenCalled();
+    expect(await readFile(envelope, "utf8")).toBe("synthetic-encrypted-credential");
+  });
+
   it("removes every envelope under one shared lock and preserves known Telegram state", async () => {
     const storage = await fixture();
     for (const target of credentialEnvelopeTargets(storage)) {
@@ -78,9 +99,7 @@ describe("encrypted credential reset", () => {
     expect(result).toEqual({ status: "reset", keyCleanupPending: false });
     expect(deleteKey).toHaveBeenCalledOnce();
     await expect(readFile(desiredState, "utf8")).resolves.toBe("desired-state");
-    await expect(readFile(desiredStateTemporary, "utf8")).resolves.toBe(
-      "desired-state-transient",
-    );
+    await expect(readFile(desiredStateTemporary, "utf8")).resolves.toBe("desired-state-transient");
     await expect(readFile(credentialTemporary)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(telegramTombstone)).rejects.toMatchObject({ code: "ENOENT" });
     for (const target of credentialEnvelopeTargets(storage)) {

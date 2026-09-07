@@ -194,6 +194,11 @@ export {
 } from "./auth/profiles.js";
 export type { OAuthCredential } from "./auth/profiles.js";
 export {
+  assertCliOAuthHome,
+  DesktopOwnedOAuthHomeError,
+  DESKTOP_OAUTH_OWNERSHIP_FILE,
+  migrateDesktopOAuthProfiles,
+  resetDesktopOAuthProfiles,
   compareAndSaveStoredProfile,
   deleteStoredProfile,
   loadStoredProfileSnapshot,
@@ -380,3 +385,4 @@ export type {
   ReleaseNotesResult,
   RepoInfo,
 } from "./release-notes.js";
+export type { OAuthCredentialOwner } from "./auth/oauth-owner.js";

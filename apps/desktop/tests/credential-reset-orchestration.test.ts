@@ -79,9 +79,7 @@ function harness(
     events.push("telegram-reset");
     return true;
   });
-  const deleteChatGptProfile = vi.fn(() => {
-    events.push("chatgpt-profile-delete");
-  });
+  const resetLegacyOAuthProfiles = vi.fn(async () => {});
   const deleteKeyForCredentialReset = vi.fn(async (): Promise<KeychainKeyDeletion> => {
     events.push("key-delete");
     return { status: "deleted" };
@@ -113,12 +111,11 @@ function harness(
     lifecycleSnapshot: () => lifecycle,
     managedModelCredentials: new Set(["anthropic", "openai"]),
     resetTelegramRuntime,
-    configDir: "/synthetic/config",
-    deleteChatGptProfile,
     credentialRoot: "/synthetic/credentials",
     telegramRoot: "/synthetic/telegram",
     serializeEnvelopeMutation,
     deleteKeyForCredentialReset,
+    resetLegacyOAuthProfiles,
     credentialRuntimeState,
     onRuntimeStateChange,
     resetEncryptedCredentialStorage,
@@ -130,8 +127,8 @@ function harness(
     getRuntimeConfig,
     clearCredential,
     resetTelegramRuntime,
-    deleteChatGptProfile,
     deleteKeyForCredentialReset,
+    resetLegacyOAuthProfiles,
     serializeEnvelopeMutation,
     resetEncryptedCredentialStorage,
     credentialRuntimeState,
@@ -159,7 +156,6 @@ describe("desktop credential reset orchestration", () => {
     expect(subject.getRuntimeConfig).not.toHaveBeenCalled();
     expect(subject.clearCredential).not.toHaveBeenCalled();
     expect(subject.resetTelegramRuntime).not.toHaveBeenCalled();
-    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
     expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
     expect(subject.deleteKeyForCredentialReset).not.toHaveBeenCalled();
     expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
@@ -177,7 +173,6 @@ describe("desktop credential reset orchestration", () => {
       "clear:anthropic",
       "clear:intervals-icu",
       "telegram-reset",
-      "chatgpt-profile-delete",
       "storage-reset",
       "envelope-mutation",
       "key-delete",
@@ -214,15 +209,11 @@ describe("desktop credential reset orchestration", () => {
         reason: "runtime-unavailable",
       });
 
-      expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
       expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
       expect(subject.deleteKeyForCredentialReset).not.toHaveBeenCalled();
       expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
       expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
-      expect(subject.onRuntimeStateChange.mock.calls).toEqual([
-        ["anthropic"],
-        ["intervals-icu"],
-      ]);
+      expect(subject.onRuntimeStateChange.mock.calls).toEqual([["anthropic"], ["intervals-icu"]]);
     },
   );
 
@@ -245,7 +236,6 @@ describe("desktop credential reset orchestration", () => {
         reason: "runtime-unavailable",
       });
 
-      expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
       expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
       expect(subject.deleteKeyForCredentialReset).not.toHaveBeenCalled();
       expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
@@ -275,7 +265,6 @@ describe("desktop credential reset orchestration", () => {
     expect(subject.onRuntimeStateChange).toHaveBeenCalledOnce();
     expect(subject.onRuntimeStateChange).toHaveBeenCalledWith("anthropic");
     expect(subject.resetTelegramRuntime).not.toHaveBeenCalled();
-    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
     expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
   });
 
@@ -303,7 +292,6 @@ describe("desktop credential reset orchestration", () => {
     expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
     expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
     expect(subject.onRuntimeStateChange.mock.calls).toEqual([["intervals-icu"]]);
-    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
     expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
   });
 
@@ -332,7 +320,6 @@ describe("desktop credential reset orchestration", () => {
     expect(subject.clearCredential).toHaveBeenCalledOnce();
     expect(subject.clearCredential).toHaveBeenCalledWith("anthropic");
     expect(subject.onRuntimeStateChange).not.toHaveBeenCalled();
-    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
     expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
   });
 
@@ -345,7 +332,6 @@ describe("desktop credential reset orchestration", () => {
       reason: "storage-failed",
     });
 
-    expect(subject.deleteChatGptProfile).toHaveBeenCalledOnce();
     expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
     expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
   });
@@ -369,6 +355,9 @@ describe("desktop credential reset orchestration", () => {
     expect(
       subject.resetEncryptedCredentialStorage.mock.calls[0]![0].serializeEnvelopeMutation,
     ).toBe(subject.serializeEnvelopeMutation);
+    expect(subject.resetEncryptedCredentialStorage.mock.calls[0]![0].resetLegacyOAuthProfiles).toBe(
+      subject.resetLegacyOAuthProfiles,
+    );
     expect(subject.deleteKeyForCredentialReset).toHaveBeenCalledWith(subject.proof);
   });
 
