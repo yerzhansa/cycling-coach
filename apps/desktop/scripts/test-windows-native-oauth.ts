@@ -50,6 +50,61 @@ export function nativeOAuthEnvironment(
   };
 }
 
+export function summarizeNativeOAuthFailure(error: unknown) {
+  const metadata = {
+    exitCode: null as number | null,
+    processFailure: null as string | null,
+    exceptionType: null as string | null,
+    hresult: null as number | null,
+  };
+  if (error === null || typeof error !== "object") return metadata;
+  if ("code" in error) {
+    if (typeof error.code === "number" && Number.isSafeInteger(error.code))
+      metadata.exitCode = error.code;
+    if (
+      typeof error.code === "string" &&
+      ["ENOENT", "EACCES", "ETIMEDOUT", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"].includes(error.code)
+    )
+      metadata.processFailure = error.code;
+  }
+  if (!("stderr" in error) || typeof error.stderr !== "string") return metadata;
+  const prefix = "ENDURAGENT_NATIVE_FAILURE ";
+  const line = error.stderr.split(/\r?\n/u).find((value) => value.startsWith(prefix));
+  if (line === undefined || line.length > 512) return metadata;
+  try {
+    const detail: unknown = JSON.parse(line.slice(prefix.length));
+    if (detail === null || typeof detail !== "object") return metadata;
+    if (
+      "exceptionType" in detail &&
+      typeof detail.exceptionType === "string" &&
+      detail.exceptionType.length <= 160 &&
+      /^System\.(?:[A-Za-z][A-Za-z0-9]*\.)*[A-Za-z][A-Za-z0-9]*Exception$/u.test(
+        detail.exceptionType,
+      )
+    )
+      metadata.exceptionType = detail.exceptionType;
+    if (
+      "hresult" in detail &&
+      typeof detail.hresult === "number" &&
+      Number.isInteger(detail.hresult) &&
+      detail.hresult >= -2_147_483_648 &&
+      detail.hresult <= 2_147_483_647
+    )
+      metadata.hresult = detail.hresult;
+  } catch {}
+  return metadata;
+}
+
+export async function requestNativeOAuthExit(
+  cdp: Pick<Awaited<ReturnType<typeof connectCdp>>, "call"> | undefined,
+  terminal: Promise<{ code: number | null; signal: NodeJS.Signals | null }>,
+) {
+  if (cdp !== undefined) void cdp.call("Browser.close").catch(() => {});
+  return await withAcceptanceDeadline("native OAuth application shutdown", terminal, {
+    timeoutMs: 15_000,
+  });
+}
+
 async function main(): Promise<void> {
   assertNativeOAuthHost(process.platform, process.arch, process.env);
   assert.equal(process.argv.length, 4);
@@ -71,14 +126,7 @@ async function main(): Promise<void> {
   const credential = syntheticOAuthCredential();
   const markers = [credential.access, credential.refresh, credential.accountId];
   const runFile = promisify(execFile);
-  const powershell = join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  let stage = "private scratch preparation";
+  let stage = "private scratch ACL";
   let active:
     | {
         child: ChildProcess;
@@ -102,6 +150,7 @@ async function main(): Promise<void> {
       .digest("hex"),
     checks: [] as string[],
     failureStage: null as string | null,
+    failureDetails: null as ReturnType<typeof summarizeNativeOAuthFailure> | null,
   };
 
   function markerFree(value: string | Buffer): void {
@@ -111,8 +160,13 @@ async function main(): Promise<void> {
 
   async function native(command: string): Promise<string> {
     const result = await runFile(
-      powershell,
-      ["-NoProfile", "-NonInteractive", "-Command", command],
+      "pwsh.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$ErrorActionPreference='Stop'; try { ${command} } catch { $exception=$_.Exception.GetBaseException(); [Console]::Error.WriteLine('ENDURAGENT_NATIVE_FAILURE '+(@{exceptionType=$exception.GetType().FullName;hresult=$exception.HResult}|ConvertTo-Json -Compress)); exit 1 }`,
+      ],
       {
         env: {
           ...process.env,
@@ -205,18 +259,7 @@ async function main(): Promise<void> {
     const current = active;
     if (current === undefined) return;
     try {
-      if (current.cdp !== undefined) {
-        await withAcceptanceDeadline(
-          "native OAuth close request",
-          current.cdp.call("Browser.close").catch(() => ({})),
-          { timeoutMs: 5_000 },
-        );
-      }
-      const result = await withAcceptanceDeadline(
-        "native OAuth application shutdown",
-        current.terminal,
-        { timeoutMs: 15_000 },
-      );
+      const result = await requestNativeOAuthExit(current.cdp, current.terminal);
       assert.deepEqual(result, { code: 0, signal: null });
       assert(!current.outputExceeded);
       markerFree(current.output);
@@ -262,10 +305,12 @@ async function main(): Promise<void> {
     await native(
       "$ErrorActionPreference='Stop'; $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetAccessRuleProtection($true,$false); foreach($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')){$identity=New-Object Security.Principal.SecurityIdentifier($sid); $rule=New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule)}; Set-Acl -LiteralPath $env:ENDURAGENT_NATIVE_OAUTH_SCRATCH -AclObject $acl",
     );
+    stage = "native host architecture";
     report.hostArchitecture = await native(
       "[Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()",
     );
     assert.equal(report.hostArchitecture, "X64", "native OAuth acceptance refuses host emulation");
+    stage = "isolated profile preparation";
     for (const path of [
       configDirectory,
       userData,
@@ -330,8 +375,9 @@ async function main(): Promise<void> {
     );
     report.nativeDpapiVerified = true;
     report.ok = true;
-  } catch {
+  } catch (error) {
     report.failureStage = stage;
+    report.failureDetails = summarizeNativeOAuthFailure(error);
     process.exitCode = 1;
   } finally {
     try {

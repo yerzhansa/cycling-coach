@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertNativeOAuthHost,
   nativeOAuthEnvironment,
+  summarizeNativeOAuthFailure,
+  requestNativeOAuthExit,
 } from "../scripts/test-windows-native-oauth.js";
 
 const hosted = { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted" };
@@ -50,5 +52,76 @@ describe("native OAuth acceptance boundaries", () => {
       "OPENAI_API_KEY",
     ])
       expect(isolated).not.toHaveProperty(key);
+  });
+});
+
+describe("native OAuth failure evidence", () => {
+  it("retains native exception identity without exposing command arguments or raw output", () => {
+    const error = Object.assign(new Error("command contains synthetic-secret"), {
+      code: 1,
+      stdout: "synthetic-secret",
+      stderr:
+        'arbitrary synthetic-secret output\nENDURAGENT_NATIVE_FAILURE {"exceptionType":"System.UnauthorizedAccessException","hresult":-2147024891,"message":"synthetic-secret"}\r\n',
+    });
+    expect(summarizeNativeOAuthFailure(error)).toEqual({
+      exitCode: 1,
+      processFailure: null,
+      exceptionType: "System.UnauthorizedAccessException",
+      hresult: -2147024891,
+    });
+    expect(JSON.stringify(summarizeNativeOAuthFailure(error))).not.toContain("synthetic-secret");
+  });
+
+  it("rejects malformed native diagnostics while preserving a missing executable error", () => {
+    expect(
+      summarizeNativeOAuthFailure({
+        code: "ENOENT",
+        stderr: "ENDURAGENT_NATIVE_FAILURE malformed",
+      }),
+    ).toEqual({
+      exitCode: null,
+      processFailure: "ENOENT",
+      exceptionType: null,
+      hresult: null,
+    });
+    expect(
+      summarizeNativeOAuthFailure({
+        code: "synthetic-secret",
+        stderr:
+          'ENDURAGENT_NATIVE_FAILURE {"exceptionType":"C:\\personal-path","hresult":"synthetic-secret"}',
+      }),
+    ).toEqual({
+      exitCode: null,
+      processFailure: null,
+      exceptionType: null,
+      hresult: null,
+    });
+  });
+});
+
+describe("native OAuth process shutdown", () => {
+  it("uses observed process exit when Electron never replies to Browser.close", async () => {
+    const commands: string[] = [];
+    const cdp = {
+      call: (method: string): Promise<Record<string, unknown>> => {
+        commands.push(method);
+        return new Promise(() => {});
+      },
+    };
+    await expect(
+      requestNativeOAuthExit(cdp, Promise.resolve({ code: 0, signal: null })),
+    ).resolves.toEqual({ code: 0, signal: null });
+    expect(commands).toEqual(["Browser.close"]);
+  });
+
+  it("retains a failed process exit even when debugger disconnection is expected", async () => {
+    const cdp = {
+      call: async (): Promise<Record<string, unknown>> => {
+        throw new Error("debugger disconnected");
+      },
+    };
+    await expect(
+      requestNativeOAuthExit(cdp, Promise.resolve({ code: 1, signal: null })),
+    ).resolves.toEqual({ code: 1, signal: null });
   });
 });
